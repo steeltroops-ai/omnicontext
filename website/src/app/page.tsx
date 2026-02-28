@@ -97,16 +97,16 @@ export default function Home() {
         id="main-scroll"
         className="flex-1 overflow-y-scroll custom-scrollbar flex flex-col pt-0"
       >
-        <section className="relative w-full shrink-0 flex items-center min-h-[90vh] pt-[80px] pb-32 overflow-hidden">
+        <section className="relative w-full flex items-center min-h-screen pt-14 pb-16 overflow-hidden">
           <DottedSurface className="absolute inset-0 z-0 opacity-50" />
 
           {/* Subtle background glow */}
           <div className="absolute top-[30%] left-[-10%] w-[600px] h-[500px] bg-primary/10 blur-[130px] rounded-full pointer-events-none" />
           <div className="absolute bottom-[-10%] right-[-10%] w-[800px] h-[600px] bg-emerald-500/5 blur-[150px] rounded-full pointer-events-none" />
 
-          <div className="relative z-10 flex flex-col lg:flex-row items-center justify-between px-8 md:px-16 w-full max-w-[1400px] mx-auto gap-16">
+          <div className="relative z-10 flex flex-col lg:flex-row items-center justify-between px-8 md:px-16 w-full max-w-[1400px] mx-auto gap-12 xl:gap-20">
             {/* Left Content */}
-            <div className="flex-1 flex flex-col items-start text-left max-w-[650px] mt-10 lg:mt-0">
+            <div className="flex-1 flex flex-col items-start text-left max-w-[600px]">
               <motion.div
                 initial={{ opacity: 0, y: 15 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -169,9 +169,9 @@ export default function Home() {
               </motion.div>
             </div>
 
-            {/* Right Hero Visual (Liquid Glass Terminal Mockup) */}
+            {/* Right Hero Visual (Elegant Dark-Glass Terminal) */}
             <motion.div
-              className="flex-[1.1] w-full relative z-10 perspective-[2000px] hidden md:block"
+              className="flex-[1.1] w-full relative z-10 hidden md:flex flex-col"
               initial={{ opacity: 0, x: 40 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{
@@ -180,39 +180,47 @@ export default function Home() {
                 delay: 0.4,
               }}
             >
-              {/* Liquid Glass Container — fully transparent */}
+              {/* Elegant Dark-Glass Terminal */}
               <div
-                className="w-full relative rounded-2xl border border-white/[0.08] shadow-[0_8px_80px_rgba(0,0,0,0.6)] overflow-hidden flex flex-col backdrop-blur-[40px] group transform-gpu"
-                style={{ background: "rgba(255,255,255,0.03)" }}
+                className="w-full relative rounded-2xl overflow-hidden flex flex-col group transform-gpu"
+                style={{
+                  background: "rgba(6, 8, 10, 0.72)",
+                  border: "1px solid rgba(255,255,255,0.07)",
+                  boxShadow:
+                    "0 20px 60px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.06)",
+                  backdropFilter: "blur(12px) saturate(120%)",
+                  WebkitBackdropFilter: "blur(12px) saturate(120%)",
+                }}
               >
-                {/* Internal Glows */}
-                <div className="absolute top-[-30%] left-[-10%] w-[60%] h-[60%] bg-emerald-500/15 blur-[120px] pointer-events-none rounded-full transition-opacity duration-700 opacity-70 group-hover:opacity-100" />
-                <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] bg-indigo-500/10 blur-[100px] pointer-events-none rounded-full transition-opacity duration-700 opacity-50 group-hover:opacity-80" />
+                {/* Subtle internal ambient glows only */}
+                <div className="absolute top-0 left-[10%] w-[40%] h-[60%] bg-emerald-500/[0.06] blur-[80px] pointer-events-none rounded-full" />
+                <div className="absolute bottom-0 right-[5%] w-[40%] h-[50%] bg-indigo-500/[0.06] blur-[80px] pointer-events-none rounded-full" />
 
-                {/* Top shine edge */}
-                <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-white/30 to-transparent pointer-events-none" />
-                {/* Side shine */}
-                <div className="absolute top-0 left-0 w-[1px] h-full bg-gradient-to-b from-white/20 to-transparent pointer-events-none" />
+                {/* Top specular highlight */}
+                <div className="absolute top-0 left-0 w-full h-px bg-gradient-to-r from-transparent via-white/[0.12] to-transparent pointer-events-none" />
 
-                {/* Window Chrome — transparent with frost */}
+                {/* Window Chrome */}
                 <div
-                  className="w-full h-11 flex items-center justify-between px-5 relative z-20 border-b border-white/[0.06]"
-                  style={{ background: "rgba(255,255,255,0.04)" }}
+                  className="w-full h-10 flex items-center justify-between px-5 relative z-20 border-b"
+                  style={{
+                    borderColor: "rgba(255,255,255,0.05)",
+                    background: "rgba(255,255,255,0.025)",
+                  }}
                 >
-                  <div className="flex gap-2.5">
-                    <div className="w-2.5 h-2.5 rounded-full bg-[#FF5F56] border border-white/10 shadow-[0_0_10px_rgba(255,95,86,0.3)]" />
-                    <div className="w-2.5 h-2.5 rounded-full bg-[#FFBD2E] border border-white/10 shadow-[0_0_10px_rgba(255,189,46,0.3)]" />
-                    <div className="w-2.5 h-2.5 rounded-full bg-[#27C93F] border border-white/10 shadow-[0_0_10px_rgba(39,201,63,0.3)]" />
+                  <div className="flex gap-2">
+                    <div className="w-2.5 h-2.5 rounded-full bg-[#FF5F56]/80 shadow-[0_0_6px_rgba(255,95,86,0.25)]" />
+                    <div className="w-2.5 h-2.5 rounded-full bg-[#FFBD2E]/80 shadow-[0_0_6px_rgba(255,189,46,0.25)]" />
+                    <div className="w-2.5 h-2.5 rounded-full bg-[#27C93F]/80 shadow-[0_0_6px_rgba(39,201,63,0.25)]" />
                   </div>
-                  <div className="flex items-center gap-2 text-[10px] font-mono font-medium text-zinc-400 uppercase tracking-widest opacity-70">
-                    <Terminal size={10} />
-                    <span>Local Daemon</span>
+                  <div className="flex items-center gap-1.5 text-[10px] font-mono font-medium text-zinc-500 uppercase tracking-widest">
+                    <Terminal size={9} />
+                    <span>omni — daemon</span>
                   </div>
-                  <div className="w-[60px]" /> {/* Balance spacer */}
+                  <div className="w-[60px]" />
                 </div>
 
                 {/* Window Content */}
-                <div className="w-full p-6 md:p-8 text-left relative z-10 font-mono text-[13px] leading-[1.8] text-zinc-300 tracking-tight overflow-x-auto min-h-[420px]">
+                <div className="w-full p-6 md:p-8 text-left relative z-10 font-mono text-[13px] leading-[1.9] text-zinc-300 tracking-tight overflow-x-auto">
                   {/* Command 1 */}
                   <div className="flex items-center gap-3 mb-4 font-semibold text-zinc-200">
                     <span className="text-emerald-500 shrink-0">❯</span>
@@ -285,8 +293,8 @@ export default function Home() {
           </div>
         </section>
 
-        {/* Massive Graph Architecture Banner */}
-        <section className="py-[160px] px-8 md:px-16 w-full max-w-[1200px] mx-auto border-t border-white/5 relative flex flex-col items-center">
+        {/* Architecture Banner */}
+        <section className="py-[140px] px-8 md:px-16 w-full max-w-[1400px] mx-auto border-t border-white/5 relative flex flex-col items-center">
           <h2 className="text-4xl md:text-[52px] font-semibold tracking-tighter text-white mb-6 text-center">
             The Context Engine Platform
           </h2>
@@ -405,7 +413,7 @@ export default function Home() {
         </section>
 
         {/* Feature Sections - Alternating Interactive Blocks */}
-        <section className="py-[160px] w-full max-w-[1200px] mx-auto flex flex-col gap-[200px] px-8 md:px-16 mb-20">
+        <section className="py-[140px] w-full max-w-[1400px] mx-auto flex flex-col gap-[180px] px-8 md:px-16 mb-20">
           {/* Block 1: Hybrid Retrieval */}
           <div className="flex flex-col md:flex-row items-stretch gap-16">
             <div className="flex-1 flex flex-col justify-center py-2">
@@ -762,7 +770,7 @@ export default function Home() {
 
         {/* Footer - Enterprise Grade */}
         <footer className="py-16 px-8 md:px-16 bg-[#09090B] border-t border-white/5">
-          <div className="max-w-[1200px] mx-auto">
+          <div className="max-w-[1400px] mx-auto">
             <div className="grid grid-cols-2 md:grid-cols-5 gap-12 mb-16">
               <div className="col-span-2 md:col-span-1">
                 <Link
