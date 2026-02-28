@@ -27,3 +27,4 @@ Thumbs.db
 # Internal Planning & Agent Workspaces
 .agents/
 docs/local/
+log/local/\n.agents/\n

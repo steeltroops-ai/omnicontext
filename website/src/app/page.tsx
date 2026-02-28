@@ -8,15 +8,16 @@ import {
   SearchCode,
   ChevronRight,
   Zap,
+  ArrowUpRight,
 } from "lucide-react";
 import Link from "next/link";
 
 export default function Home() {
   return (
-    <main className="flex flex-col min-h-screen bg-black font-sans selection:bg-primary/30">
+    <main className="flex flex-col min-h-screen bg-[#09090B] font-sans selection:bg-primary/30">
       {/* Navigation - Apple Style Ultra-Minimal */}
-      <nav className="fixed top-0 w-full h-14 flex items-center justify-center z-50 border-b border-white/5 bg-black/50 backdrop-blur-xl">
-        <div className="flex items-center justify-between w-full max-w-[1000px] px-6">
+      <nav className="fixed top-0 w-full h-14 flex items-center justify-center z-50 border-b border-white/5 bg-[#09090B]/50 backdrop-blur-xl">
+        <div className="flex items-center justify-between w-full max-w-[1200px] px-8 md:px-16">
           <Link
             href="/"
             className="flex items-center gap-2 font-semibold text-sm text-zinc-100 transition-opacity hover:opacity-80"
@@ -53,15 +54,20 @@ export default function Home() {
           </div>
 
           <div className="flex items-center gap-4">
-            <Link
-              href="/login"
-              className="text-[13px] font-medium text-zinc-400 hover:text-zinc-100 transition-colors hidden sm:block"
+            <a
+              href="https://github.com/steeltroops-ai/omnicontext"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[13px] font-medium text-zinc-400 hover:text-zinc-100 transition-colors hidden sm:flex items-center gap-1"
             >
-              Sign In
-            </Link>
-            <button className="px-3 py-1.5 text-[13px] font-medium rounded-full bg-zinc-100 text-black hover:bg-white transition-colors">
+              GitHub <ArrowUpRight size={12} />
+            </a>
+            <Link
+              href="/docs/quickstart"
+              className="px-3 py-1.5 text-[13px] font-medium rounded-full bg-zinc-100 text-black hover:bg-white transition-colors"
+            >
               Get Started
-            </button>
+            </Link>
           </div>
         </div>
       </nav>
@@ -127,7 +133,7 @@ export default function Home() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 1.2, ease: [0.16, 1, 0.3, 1], delay: 0.4 }}
         >
-          <div className="w-full rounded-[20px] bg-[#050505] border border-white/10 shadow-[0_30px_100px_rgba(0,0,0,0.9)] overflow-hidden flex flex-col items-center">
+          <div className="w-full rounded-[20px] bg-[#0E0E11] border border-white/10 shadow-[0_30px_100px_rgba(0,0,0,0.9)] overflow-hidden flex flex-col items-center">
             {/* Window Chrome */}
             <div className="w-full h-12 bg-[#0d0d0d] border-b border-white/5 flex items-center px-5 justify-between relative">
               <div className="flex gap-2 relative z-10">
@@ -187,7 +193,7 @@ export default function Home() {
         </p>
 
         {/* Graph Mockup Container */}
-        <div className="w-full relative bg-[#050505] border border-white/10 rounded-2xl p-8 md:p-12 overflow-hidden flex flex-col md:flex-row justify-between items-center text-zinc-500 font-mono text-[11px] uppercase tracking-widest min-h-[500px]">
+        <div className="w-full relative bg-[#0E0E11] border border-white/10 rounded-2xl p-8 md:p-12 overflow-hidden flex flex-col md:flex-row justify-between items-center text-zinc-500 font-mono text-[11px] uppercase tracking-widest min-h-[500px]">
           {/* Subtle connecting lines overlay */}
           <div className="absolute inset-0 opacity-20 bg-[radial-gradient(circle_at_center,rgba(34,197,94,0.3)_1px,transparent_1px)] bg-[size:30px_30px]"></div>
 
@@ -242,7 +248,7 @@ export default function Home() {
               <div className="w-[180px] h-[180px] rounded-full border border-white/5 flex items-center justify-center relative">
                 <div className="absolute inset-0 bg-primary/5 rounded-full blur-xl animate-pulse" />
                 {/* Center Node */}
-                <div className="w-8 h-8 rounded-full bg-black border border-primary/50 shadow-[0_0_20px_rgba(34,197,94,0.4)] flex items-center justify-center z-10">
+                <div className="w-8 h-8 rounded-full bg-[#09090B] border border-primary/50 shadow-[0_0_20px_rgba(34,197,94,0.4)] flex items-center justify-center z-10">
                   <div className="w-2 h-2 rounded-full bg-primary" />
                 </div>
 
@@ -333,7 +339,7 @@ export default function Home() {
           </div>
           <div className="flex-[1.2] w-full relative">
             {/* Interactive Mockup */}
-            <div className="w-full bg-[#0a0a0a] border border-white/10 rounded-[16px] p-6 shadow-2xl relative overflow-hidden group">
+            <div className="w-full bg-[#141418] border border-white/10 rounded-[16px] p-6 shadow-2xl relative overflow-hidden group">
               <div className="absolute top-0 right-1/4 w-32 h-32 bg-emerald-500/10 blur-[50px] pointer-events-none transition-opacity duration-700 opacity-50 group-hover:opacity-100" />
               <div className="flex items-center gap-2 mb-6 border-b border-white/5 pb-4">
                 <SearchCode size={16} className="text-zinc-500" />
@@ -530,43 +536,138 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Footer */}
-      <footer className="py-16 px-6 flex flex-col items-center text-center bg-black w-full border-t border-white/5">
-        <div className="mb-8">
-          <SearchCode className="text-zinc-700" size={32} strokeWidth={1.5} />
+      {/* Footer - Enterprise Grade */}
+      <footer className="py-16 px-8 md:px-16 bg-[#09090B] border-t border-white/5">
+        <div className="max-w-[1200px] mx-auto">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-12 mb-16">
+            <div className="col-span-2 md:col-span-1">
+              <Link
+                href="/"
+                className="flex items-center gap-2 font-semibold text-sm text-zinc-100 mb-4"
+              >
+                <SearchCode className="text-primary" size={16} />
+                <span>OmniContext</span>
+              </Link>
+              <p className="text-[12px] text-zinc-600 leading-relaxed">
+                High-performance code context engine. Open-source core. Built in
+                Rust.
+              </p>
+            </div>
+            <div>
+              <div className="text-[11px] uppercase tracking-widest text-emerald-500 font-semibold mb-4">
+                Product
+              </div>
+              <div className="flex flex-col gap-2 text-[13px] text-zinc-500">
+                <Link
+                  href="/docs"
+                  className="hover:text-zinc-200 transition-colors"
+                >
+                  Documentation
+                </Link>
+                <Link
+                  href="/docs/quickstart"
+                  className="hover:text-zinc-200 transition-colors"
+                >
+                  Quickstart
+                </Link>
+                <Link
+                  href="/docs/pricing"
+                  className="hover:text-zinc-200 transition-colors"
+                >
+                  Pricing
+                </Link>
+                <Link
+                  href="/enterprise"
+                  className="hover:text-zinc-200 transition-colors"
+                >
+                  Enterprise
+                </Link>
+              </div>
+            </div>
+            <div>
+              <div className="text-[11px] uppercase tracking-widest text-emerald-500 font-semibold mb-4">
+                Resources
+              </div>
+              <div className="flex flex-col gap-2 text-[13px] text-zinc-500">
+                <Link
+                  href="/blog"
+                  className="hover:text-zinc-200 transition-colors"
+                >
+                  Blog
+                </Link>
+                <Link
+                  href="/docs/architecture"
+                  className="hover:text-zinc-200 transition-colors"
+                >
+                  Architecture
+                </Link>
+                <Link
+                  href="/docs/supported-languages"
+                  className="hover:text-zinc-200 transition-colors"
+                >
+                  Supported Languages
+                </Link>
+              </div>
+            </div>
+            <div>
+              <div className="text-[11px] uppercase tracking-widest text-emerald-500 font-semibold mb-4">
+                Company
+              </div>
+              <div className="flex flex-col gap-2 text-[13px] text-zinc-500">
+                <Link
+                  href="/support"
+                  className="hover:text-zinc-200 transition-colors"
+                >
+                  Support
+                </Link>
+                <Link
+                  href="mailto:steeltroops.ai@gmail.com"
+                  className="hover:text-zinc-200 transition-colors"
+                >
+                  Contact
+                </Link>
+                <a
+                  href="https://github.com/steeltroops-ai/omnicontext"
+                  className="hover:text-zinc-200 transition-colors"
+                >
+                  GitHub
+                </a>
+              </div>
+            </div>
+            <div>
+              <div className="text-[11px] uppercase tracking-widest text-emerald-500 font-semibold mb-4">
+                Legal
+              </div>
+              <div className="flex flex-col gap-2 text-[13px] text-zinc-500">
+                <Link
+                  href="/privacy"
+                  className="hover:text-zinc-200 transition-colors"
+                >
+                  Privacy Policy
+                </Link>
+                <Link
+                  href="/terms"
+                  className="hover:text-zinc-200 transition-colors"
+                >
+                  Terms of Service
+                </Link>
+              </div>
+            </div>
+          </div>
+          <div className="border-t border-white/5 pt-8 flex flex-col md:flex-row items-center justify-between gap-4">
+            <p className="text-[12px] text-zinc-600">
+              (c) 2026 OmniContext. All rights reserved. Apache-2.0 License.
+            </p>
+            <div className="flex items-center gap-4">
+              <a
+                href="https://github.com/steeltroops-ai/omnicontext"
+                className="text-zinc-600 hover:text-zinc-300 transition-colors"
+              >
+                <Github size={18} />
+              </a>
+            </div>
+          </div>
         </div>
-        <div className="flex gap-8 mb-8 text-[13px] font-medium text-zinc-500">
-          <Link href="/docs" className="hover:text-zinc-200 transition-colors">
-            Docs
-          </Link>
-          <Link
-            href="/pricing"
-            className="hover:text-zinc-200 transition-colors"
-          >
-            Pricing
-          </Link>
-          <Link
-            href="/privacy"
-            className="hover:text-zinc-200 transition-colors"
-          >
-            Privacy Policy
-          </Link>
-          <Link href="/terms" className="hover:text-zinc-200 transition-colors">
-            Terms of Use
-          </Link>
-        </div>
-        <div className="flex items-center gap-6 mb-8">
-          <a
-            href="https://github.com/steeltroops-ai/omnicontext"
-            className="text-zinc-600 hover:text-zinc-300 transition-colors"
-          >
-            <Github size={20} strokeWidth={1.5} />
-          </a>
-        </div>
-        <p className="text-[12px] text-zinc-600">
-          Copyright © 2026 OmniContext. All rights reserved. Built with Next.js
-          and Bun.
-        </p>
       </footer>
     </main>
   );
