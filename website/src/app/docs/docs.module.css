@@ -1,0 +1,374 @@
+.layout {
+  display: flex;
+  height: 100vh;
+  background-color: var(--color-bg);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  overflow: hidden;
+}
+
+/* Sidebar (Left) */
+.sidebar {
+  width: 280px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  background-color: #070707; /* slight contrast from main bg */
+  overflow-y: auto;
+}
+
+.sidebarHeader {
+  height: 64px;
+  display: flex;
+  align-items: center;
+  padding: 0 1.5rem;
+  font-weight: 700;
+  font-size: 1.1rem;
+  color: #fff;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.sidebarIcon {
+  color: var(--color-accent);
+  margin-right: 0.5rem;
+}
+
+.sidebarContent {
+  padding: 1.5rem 1rem;
+}
+
+.sidebarGroup {
+  margin-bottom: 2rem;
+}
+
+.sidebarGroupTitle {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-secondary);
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+  padding-left: 0.5rem;
+}
+
+.sidebarLink {
+  display: flex;
+  align-items: center;
+  padding: 0.4rem 0.6rem;
+  margin-bottom: 0.2rem;
+  border-radius: 6px;
+  color: #a1a1aa;
+  font-size: 0.85rem;
+  transition: all var(--transition-fast);
+  cursor: pointer;
+}
+
+.sidebarLink:hover {
+  color: #fff;
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+.sidebarLinkActive {
+  color: #fff;
+  background-color: rgba(255, 255, 255, 0.08);
+  font-weight: 500;
+}
+
+.sidebarLinkIcon {
+  margin-right: 0.5rem;
+  opacity: 0.7;
+}
+
+/* Main Area */
+.mainWrapper {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Topbar */
+.topbar {
+  height: 64px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 1.5rem;
+  border-bottom: 1px solid var(--color-border);
+  background: rgba(10, 10, 10, 0.5);
+  backdrop-filter: blur(12px);
+}
+
+.searchBar {
+  display: flex;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 0.4rem 0.8rem;
+  border-radius: 6px;
+  width: 400px;
+  gap: 0.5rem;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.searchBar:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.searchPlaceholder {
+  flex: 1;
+  font-size: 0.85rem;
+}
+
+.searchShortcut {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  background: rgba(255, 255, 255, 0.1);
+  padding: 0.1rem 0.4rem;
+  border-radius: 4px;
+  color: #fff;
+}
+
+.askAiBtn {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.8rem;
+  color: var(--color-accent);
+  background: rgba(0, 208, 107, 0.1);
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  border: 1px solid rgba(0, 208, 107, 0.2);
+}
+
+.topLinks {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+}
+
+.topLink {
+  color: var(--color-text-secondary);
+  font-size: 0.85rem;
+  font-weight: 500;
+  transition: color var(--transition-fast);
+}
+
+.topLink:hover {
+  color: #fff;
+}
+
+.iconBtn {
+  color: var(--color-text-secondary);
+  background: transparent;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: color var(--transition-fast);
+}
+
+.iconBtn:hover {
+  color: #fff;
+}
+
+/* Content Area */
+.contentLayout {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+.contentScroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 3rem 4rem 5rem;
+  display: flex;
+  justify-content: center;
+}
+
+.article {
+  max-width: 800px;
+  width: 100%;
+}
+
+.breadcrumbs {
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+  margin-bottom: 1rem;
+}
+
+.pageTitle {
+  font-size: 2.5rem;
+  font-weight: 700;
+  color: #fff;
+  margin-bottom: 1.5rem;
+  letter-spacing: -0.02em;
+}
+
+.pageDescription {
+  font-size: 1.1rem;
+  color: var(--color-text-secondary);
+  line-height: 1.6;
+  margin-bottom: 2.5rem;
+}
+
+/* Mock Image / Interface */
+.mockUiImage {
+  width: 100%;
+  background: #111;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  aspect-ratio: 16/9;
+  margin-bottom: 3rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #555;
+  font-family: var(--font-mono);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.mockUiImage img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.8;
+}
+
+/* Sections */
+h2 {
+  font-size: 1.5rem;
+  color: #fff;
+  margin: 2.5rem 0 1rem;
+}
+
+p {
+  color: #d4d4d8;
+  line-height: 1.7;
+  margin-bottom: 1.5rem;
+}
+
+/* Ask Component */
+.askInputBox {
+  display: flex;
+  align-items: center;
+  background: #111;
+  border: 1px solid #333;
+  padding: 0.8rem 1rem;
+  border-radius: 8px;
+  margin-bottom: 2rem;
+  transition: border-color 0.2s;
+}
+
+.askInputBox:focus-within {
+  border-color: var(--color-accent);
+}
+
+.askInput {
+  flex: 1;
+  background: transparent;
+  border: none;
+  color: #fff;
+  font-size: 0.95rem;
+  outline: none;
+}
+
+.askInput::placeholder {
+  color: #666;
+}
+
+/* Grids */
+.cardGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+  margin-bottom: 3rem;
+}
+
+.card {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--color-border);
+  padding: 1.5rem;
+  border-radius: 8px;
+  transition: all 0.2s;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.card:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.cardIcon {
+  margin-bottom: 1rem;
+  color: #fff;
+  opacity: 0.8;
+}
+
+.cardTitle {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #fff;
+  margin-bottom: 0.5rem;
+}
+
+.cardDesc {
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+  margin: 0;
+  flex: 1;
+}
+
+/* Right Sidebar (TOC) */
+.tocSidebar {
+  width: 250px;
+  flex-shrink: 0;
+  padding: 3rem 2rem;
+  overflow-y: auto;
+  border-left: 1px solid var(--color-border);
+}
+
+.tocTitle {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #fff;
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.tocList {
+  list-style: none;
+}
+
+.tocItem {
+  margin-bottom: 0.6rem;
+}
+
+.tocLink {
+  color: var(--color-text-secondary);
+  font-size: 0.85rem;
+  transition: color 0.1s;
+}
+
+.tocLink:hover {
+  color: #fff;
+}
+
+.tocLinkActive {
+  color: var(--color-accent);
+}
