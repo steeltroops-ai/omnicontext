@@ -84,13 +84,15 @@ export function Logo({ size = 24, className, ...props }: LogoProps) {
 export function SiteIdentity({
   className,
   withText = true,
+  size,
 }: {
   className?: string;
   withText?: boolean;
+  size?: number;
 }) {
   return (
     <div className={`flex items-center gap-2.5 ${className || ""}`}>
-      <Logo size={22} />
+      <Logo size={size || siteConfig.branding.sizes.header} />
       {withText && (
         <span className="font-semibold text-[15px] tracking-tight">
           {siteConfig.name}

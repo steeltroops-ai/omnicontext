@@ -11,12 +11,15 @@ export default function Home() {
     <div className="flex flex-col h-screen overflow-hidden bg-[#09090B] selection:bg-primary/30">
       {/* Navigation - Apple Style Ultra-Minimal */}
       <nav className="shrink-0 w-full h-14 flex items-center justify-center z-50 border-b border-white/5 bg-[#09090B]/50 backdrop-blur-xl">
-        <div className="flex items-center justify-between w-full max-w-[1200px] px-8 md:px-16">
+        <div className="flex items-center justify-between w-full max-w-[1400px] px-8 md:px-16">
           <Link
             href="/"
             className="flex items-center gap-2.5 font-semibold text-[15px] text-zinc-100 transition-opacity hover:opacity-80"
           >
-            <Logo className="text-primary" size={22} />
+            <Logo
+              className="text-primary"
+              size={siteConfig.branding.sizes.header}
+            />
             <span>{siteConfig.name}</span>
           </Link>
 
@@ -145,7 +148,10 @@ export default function Home() {
                   ease: "easeInOut",
                 }}
               >
-                <Logo className="text-primary" size={36} />
+                <Logo
+                  className="text-primary"
+                  size={siteConfig.branding.sizes.feature}
+                />
               </motion.div>
 
               {/* Orbital Rings representing the Web */}
@@ -386,7 +392,7 @@ export default function Home() {
         </section>
 
         {/* Feature Sections - Alternating Interactive Blocks */}
-        <section className="py-[160px] w-full max-w-[1280px] mx-auto flex flex-col gap-[200px] px-8 md:px-16 mb-20">
+        <section className="py-[160px] w-full max-w-[1400px] mx-auto flex flex-col gap-[200px] px-8 md:px-16 mb-20">
           {/* Block 1: Hybrid Retrieval */}
           <div className="flex flex-col md:flex-row items-stretch gap-16">
             <div className="flex-1 flex flex-col justify-center py-2">
@@ -425,7 +431,7 @@ export default function Home() {
               </Link>
             </div>
             <div className="flex-[1.2] w-full relative flex flex-col py-4">
-              <div className="w-full h-full min-h-[300px] bg-gradient-to-b from-white/[0.03] to-transparent border border-white/10 rounded-2xl shadow-2xl overflow-hidden flex flex-col backdrop-blur-3xl group">
+              <div className="w-full h-full min-h-[340px] bg-gradient-to-b from-white/[0.03] to-transparent border border-white/10 rounded-2xl shadow-2xl overflow-hidden flex flex-col backdrop-blur-3xl group">
                 {/* Refined MacOS Header */}
                 <div className="flex items-center px-5 h-11 border-b border-white/5 bg-white/[0.02] relative">
                   <div className="flex gap-2">
@@ -495,40 +501,40 @@ export default function Home() {
           <div className="flex flex-col md:flex-row-reverse items-stretch gap-16">
             <div className="flex-1 flex flex-col justify-center py-2">
               <div className="text-[11px] uppercase tracking-widest text-emerald-500 font-semibold mb-4">
-                Structural Understanding
+                Local-First Performance
               </div>
               <h3 className="text-3xl md:text-4xl font-semibold text-white tracking-tight mb-5 leading-tight">
-                A deeply connected dependency web.
+                Your code never leaves your hardware.
               </h3>
               <p className="text-[16px] text-zinc-400 leading-relaxed mb-8">
-                Code is not text; it is deeply structural. OmniContext uses
-                Tree-sitter to parse your entire workspace, extracting
-                functions, classes, and cross-file imports into an in-memory
-                `petgraph` network.
+                OmniContext is a zero-latency, local-first engine. By executing
+                entirely on your machine with a highly parallel Rust backend and
+                local ONNX embeddings, we ensure your code stays private and
+                your agents stay fast—no cloud dependencies required.
               </p>
               <ul className="flex flex-col gap-3">
                 <li className="flex items-center gap-3 text-[14px] text-zinc-300 tracking-tight">
-                  <div className="w-1 h-1 rounded-full bg-emerald-500" />{" "}
-                  Tree-sitter AST extraction
+                  <div className="w-1 h-1 rounded-full bg-emerald-500" /> 100%
+                  local ONNX model inference
                 </li>
                 <li className="flex items-center gap-3 text-[14px] text-zinc-300 tracking-tight">
                   <div className="w-1 h-1 rounded-full bg-emerald-500" />{" "}
-                  In-memory Petgraph traversal
+                  Parallelized indexing (10k files &lt; 60s)
                 </li>
                 <li className="flex items-center gap-3 text-[14px] text-zinc-300 tracking-tight">
                   <div className="w-1 h-1 rounded-full bg-emerald-500" />{" "}
-                  Instantly resolve caller/callee graphs
+                  Encrypted SQLite index with WAL concurrency
                 </li>
               </ul>
               <Link
                 href="/docs"
                 className="inline-flex items-center gap-2 mt-8 text-[14px] text-emerald-500 hover:text-emerald-400 font-medium transition-colors"
               >
-                Explore the Graph API <ChevronRight size={14} />
+                Performance Benchmarks <ChevronRight size={14} />
               </Link>
             </div>
             <div className="flex-[1.2] w-full relative flex flex-col py-4">
-              <div className="w-full h-full min-h-[300px] bg-gradient-to-b from-[#0e0c15] to-[#07050a] border border-indigo-500/20 rounded-2xl shadow-2xl overflow-hidden flex flex-col backdrop-blur-3xl group">
+              <div className="w-full h-full min-h-[340px] bg-gradient-to-b from-[#0e0c15] to-[#07050a] border border-emerald-500/10 rounded-2xl shadow-2xl overflow-hidden flex flex-col backdrop-blur-3xl group">
                 {/* Refined MacOS Header */}
                 <div className="flex flex-row items-center px-5 h-11 border-b border-indigo-500/10 bg-white/[0.01] relative">
                   <div className="flex gap-2">
@@ -536,56 +542,56 @@ export default function Home() {
                     <div className="w-2.5 h-2.5 rounded-full bg-[#FFBD2E] opacity-80" />
                     <div className="w-2.5 h-2.5 rounded-full bg-[#27C93F] opacity-80" />
                   </div>
-                  <div className="absolute left-1/2 -translate-x-1/2 text-[11px] font-medium text-indigo-400/40 font-mono tracking-tight opacity-70">
-                    petgraph-trace
+                  <div className="absolute left-1/2 -translate-x-1/2 text-[11px] font-medium text-emerald-400/40 font-mono tracking-tight opacity-70">
+                    omnicontext-engine — status
                   </div>
                 </div>
 
                 {/* Terminal Content */}
                 <div className="flex-1 p-6 pt-5 font-mono text-[13px] leading-[1.8] flex flex-col relative overflow-hidden">
-                  <div className="absolute top-0 left-0 w-full h-32 bg-indigo-500/10 blur-[100px] pointer-events-none" />
-                  <div className="text-indigo-400 font-bold text-[14px] mb-5 tracking-tight flex items-center gap-2 relative z-10">
-                    <span className="text-indigo-500 opacity-60">❯</span> omni
-                    trace{" "}
-                    <span className="text-zinc-500 font-normal">
-                      UserService::validate()
-                    </span>
+                  <div className="absolute top-0 left-0 w-full h-32 bg-emerald-500/10 blur-[100px] pointer-events-none" />
+                  <div className="text-emerald-400 font-bold text-[14px] mb-5 tracking-tight flex items-center gap-2 relative z-10">
+                    <span className="text-emerald-500 opacity-60">❯</span> omni
+                    status --verbose
                   </div>
-                  <div className="relative z-10 mb-6 flex flex-col gap-1.5">
+
+                  <div className="relative z-10 mb-6 flex flex-col gap-2.5">
                     <div className="text-[10px] text-zinc-500 uppercase tracking-widest font-sans font-bold">
-                      Semantic Dependencies
+                      System Telemetry
                     </div>
-                    <div className="h-[1px] w-6 bg-indigo-500/40" />
+                    <div className="flex flex-col gap-1.5 border-l-2 border-emerald-500/20 pl-4">
+                      <div className="flex justify-between items-center text-zinc-400">
+                        <span>Binary Runtime</span>
+                        <span className="text-zinc-200">Rust / Static</span>
+                      </div>
+                      <div className="flex justify-between items-center text-zinc-400">
+                        <span>Memory RSS</span>
+                        <span className="text-zinc-200">84 MB</span>
+                      </div>
+                      <div className="flex justify-between items-center text-zinc-400">
+                        <span>Model Latency</span>
+                        <span className="text-zinc-200">14ms (CPU)</span>
+                      </div>
+                    </div>
                   </div>
-                  <div className="pl-4 border-l-2 border-indigo-500/20 text-zinc-300 flex flex-col gap-4 text-[12px] relative z-10">
-                    <div className="flex items-center gap-3">
-                      <span className="text-indigo-400/80 mr-1 opacity-50">
-                        ↳
-                      </span>
-                      <span className="text-zinc-600 text-[9px] font-bold border border-zinc-800 px-1 py-0.5 rounded text-center tracking-tighter uppercase">
-                        Call
-                      </span>
-                      <span className="text-zinc-200">auth::verify_token</span>
+
+                  <div className="relative z-10 flex flex-col gap-2.5">
+                    <div className="text-[10px] text-zinc-500 uppercase tracking-widest font-sans font-bold">
+                      Index Integrity
                     </div>
-                    <div className="flex items-center gap-3 pl-6">
-                      <span className="text-indigo-400/80 mr-1 opacity-50">
-                        ↳
-                      </span>
-                      <span className="text-zinc-600 text-[9px] font-bold border border-zinc-800 px-1 py-0.5 rounded text-center tracking-tighter uppercase">
-                        Import
-                      </span>
-                      <span className="text-orange-400/70">
-                        jsonwebtoken::decode
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className="text-indigo-400/80 mr-1 opacity-50">
-                        ↳
-                      </span>
-                      <span className="text-zinc-600 text-[9px] font-bold border border-zinc-800 px-1 py-0.5 rounded text-center tracking-tighter uppercase">
-                        Call
-                      </span>
-                      <span className="text-zinc-200">db::fetch_user</span>
+                    <div className="flex flex-col gap-1.5 border-l-2 border-primary/20 pl-4">
+                      <div className="flex items-center gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]" />
+                        <span className="text-zinc-300">
+                          SQLite FTS5 (Fossilized)
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]" />
+                        <span className="text-zinc-300">
+                          HNSW Vector Index (MMAP)
+                        </span>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -630,7 +636,7 @@ export default function Home() {
             </div>
             <div className="flex-[1.2] w-full relative flex flex-col py-4">
               {/* VS Code / IDE Editor Mockup */}
-              <div className="w-full h-full min-h-[300px] bg-[#121214] border border-white/10 rounded-2xl shadow-2xl overflow-hidden font-sans flex flex-col backdrop-blur-3xl group">
+              <div className="w-full h-full min-h-[340px] bg-[#121214] border border-white/10 rounded-2xl shadow-2xl overflow-hidden font-sans flex flex-col backdrop-blur-3xl group">
                 {/* Editor Tabs & Controls */}
                 <div className="flex items-center h-11 bg-[#1A1A1C] border-b border-black/50 select-none">
                   <div className="flex items-center gap-2 px-5 h-full border-r border-black/50">
@@ -743,14 +749,17 @@ export default function Home() {
 
         {/* Footer - Enterprise Grade */}
         <footer className="py-16 px-8 md:px-16 bg-[#09090B] border-t border-white/5">
-          <div className="max-w-[1200px] mx-auto">
+          <div className="max-w-[1400px] mx-auto">
             <div className="grid grid-cols-2 md:grid-cols-5 gap-12 mb-16">
               <div className="col-span-2 md:col-span-1">
                 <Link
                   href="/"
                   className="flex items-center gap-2 font-semibold text-sm text-zinc-100 mb-4"
                 >
-                  <Logo className="text-primary" size={16} />
+                  <Logo
+                    className="text-primary"
+                    size={siteConfig.branding.sizes.footer}
+                  />
                   <span>{siteConfig.name}</span>
                 </Link>
                 <p className="text-[12px] text-zinc-600 leading-relaxed">

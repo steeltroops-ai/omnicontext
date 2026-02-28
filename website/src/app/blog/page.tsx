@@ -116,6 +116,16 @@ export default function BlogPage() {
         {/* Footer */}
         <footer className="py-12 px-8 md:px-16 border-t border-white/5 bg-[#09090B] mt-auto">
           <div className="max-w-[1200px] mx-auto flex flex-col md:flex-row items-center justify-between gap-6">
+            <Link
+              href="/"
+              className="flex items-center gap-2 font-semibold text-sm text-zinc-100"
+            >
+              <Logo
+                className="text-primary"
+                size={siteConfig.branding.sizes.footer}
+              />
+              <span>{siteConfig.name}</span>
+            </Link>
             <div className="flex items-center gap-6 text-[13px] text-zinc-500">
               <Link
                 href="/docs"

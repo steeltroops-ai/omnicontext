@@ -29,7 +29,10 @@ export default function DocsLayout({
             href="/"
             className="flex items-center gap-2.5 hover:opacity-80 transition-opacity"
           >
-            <Logo className="text-primary" size={22} />
+            <Logo
+              className="text-primary"
+              size={siteConfig.branding.sizes.header}
+            />
             <span>{siteConfig.name}</span>
           </Link>
         </div>
