@@ -15,7 +15,7 @@
 
 use crate::config::Config;
 use crate::parser::StructuralElement;
-use crate::types::{Chunk, ChunkKind};
+use crate::types::{Chunk, ChunkKind, FileInfo, ImportStatement};
 
 /// Chunk structural elements into embedding-sized pieces.
 ///
@@ -23,6 +23,8 @@ use crate::types::{Chunk, ChunkKind};
 /// symbol path, kind, visibility, line range, weight.
 pub fn chunk_elements(
     elements: &[StructuralElement],
+    file_info: &FileInfo,
+    imports: &[ImportStatement],
     file_id: i64,
     config: &Config,
 ) -> Vec<Chunk> {
@@ -32,13 +34,17 @@ pub fn chunk_elements(
 
     for elem in elements {
         let estimated_tokens = estimate_tokens(&elem.content);
+        let context_header = build_context_header(elem, file_info, imports);
 
-        if estimated_tokens <= max_tokens {
-            // Element fits in a single chunk -- most common case
-            chunks.push(element_to_chunk(elem, file_id, estimated_tokens));
+        // A chunk's real tokens now include the context header's tokens
+        let total_tokens = estimated_tokens + estimate_tokens(&context_header);
+
+        if total_tokens <= max_tokens {
+            // Element fits in a single chunk
+            chunks.push(element_to_chunk(elem, file_id, total_tokens, &context_header));
         } else {
             // Element is too large -- apply splitting strategy
-            let split_chunks = split_element(elem, file_id, max_tokens, overlap_fraction);
+            let split_chunks = split_element(elem, file_id, max_tokens, overlap_fraction, &context_header);
             chunks.extend(split_chunks);
         }
     }
@@ -46,8 +52,46 @@ pub fn chunk_elements(
     chunks
 }
 
+/// Build a contextual header for a chunk, enriching it with surrounding logic.
+fn build_context_header(
+    elem: &StructuralElement,
+    file_info: &FileInfo,
+    imports: &[ImportStatement],
+) -> String {
+    let mut header = String::new();
+    header.push_str(&format!("[{}] {}\n", file_info.language.as_str(), elem.symbol_path));
+    header.push_str(&format!("Kind: {:?} | Visibility: {:?} | File: {}\n", elem.kind, elem.visibility, file_info.path.display()));
+    
+    // Parent extraction
+    if let Some(parent) = elem.symbol_path.rsplit_once("::").map(|x| x.0).or_else(|| elem.symbol_path.rsplit_once('.').map(|x| x.0)) {
+        if !parent.is_empty() {
+            header.push_str(&format!("Parent: {}\n", parent));
+        }
+    }
+    
+    if !imports.is_empty() {
+        let import_list: Vec<&str> = imports.iter().take(5).map(|i| i.import_path.as_str()).collect();
+        let mut import_str = import_list.join(", ");
+        if imports.len() > 5 {
+            import_str.push_str(", ...");
+        }
+        header.push_str(&format!("Imports: {}\n", import_str));
+    }
+    if !elem.references.is_empty() {
+        let refs: Vec<&str> = elem.references.iter().take(10).map(|r| r.as_str()).collect();
+        let mut ref_str = refs.join(", ");
+        if elem.references.len() > 10 {
+            ref_str.push_str(", ...");
+        }
+        header.push_str(&format!("References: {}\n", ref_str));
+    }
+    header.push_str("---\n");
+    header
+}
+
 /// Convert an element that fits within the token budget to a Chunk.
-fn element_to_chunk(elem: &StructuralElement, file_id: i64, token_count: u32) -> Chunk {
+fn element_to_chunk(elem: &StructuralElement, file_id: i64, token_count: u32, context_header: &str) -> Chunk {
+    let content = format!("{}{}", context_header, elem.content);
     Chunk {
         id: 0,
         file_id,
@@ -56,7 +100,7 @@ fn element_to_chunk(elem: &StructuralElement, file_id: i64, token_count: u32) ->
         visibility: elem.visibility,
         line_start: elem.line_start,
         line_end: elem.line_end,
-        content: elem.content.clone(),
+        content,
         doc_comment: elem.doc_comment.clone(),
         token_count,
         weight: compute_weight(elem),
@@ -83,6 +127,7 @@ fn split_element(
     file_id: i64,
     max_tokens: u32,
     overlap_fraction: f64,
+    context_header: &str,
 ) -> Vec<Chunk> {
     let lines: Vec<&str> = elem.content.lines().collect();
 
@@ -106,7 +151,7 @@ fn split_element(
         }
     };
 
-    create_chunks_from_splits(elem, file_id, &lines, &split_points, &header, max_tokens, overlap_fraction)
+    create_chunks_from_splits(elem, file_id, &lines, &split_points, &header, max_tokens, overlap_fraction, context_header)
 }
 
 /// Extract a header line for context when splitting.
@@ -271,6 +316,7 @@ fn create_chunks_from_splits(
     header: &str,
     max_tokens: u32,
     overlap_fraction: f64,
+    context_header: &str,
 ) -> Vec<Chunk> {
     let mut chunks = Vec::new();
 
@@ -291,7 +337,10 @@ fn create_chunks_from_splits(
 
     // If we only got one segment, just truncate
     if boundaries.len() <= 1 {
-        let content = truncate_to_tokens(&elem.content, max_tokens);
+        let mut content = format!("{}{}", context_header, elem.content);
+        if estimate_tokens(&content) > max_tokens {
+            content = truncate_to_tokens(&content, max_tokens);
+        }
         let tokens = estimate_tokens(&content);
         chunks.push(Chunk {
             id: 0,
@@ -329,8 +378,11 @@ fn create_chunks_from_splits(
 
         // Build chunk content
         let mut content_parts = Vec::new();
+        
+        // Add the cross-chunk contextual header FIRST
+        content_parts.push(context_header.trim_end().to_string());
 
-        // Add header for non-first chunks (provides context)
+        // Add code header for non-first chunks (provides context)
         if i > 0 && !header.is_empty() {
             content_parts.push(format!("// ... continued from {}", elem.name));
             content_parts.push(header.to_string());
@@ -463,6 +515,16 @@ mod tests {
         Config::defaults(Path::new("/tmp/test-repo"))
     }
 
+    fn dummy_file_info() -> FileInfo {
+        FileInfo {
+            id: 1,
+            path: std::path::PathBuf::from("test.py"),
+            language: crate::types::Language::Python,
+            content_hash: "dummyhash".to_string(),
+            size_bytes: 100,
+        }
+    }
+
     #[test]
     fn test_estimate_tokens() {
         assert_eq!(estimate_tokens(""), 1); // minimum 1
@@ -489,10 +551,11 @@ mod tests {
         let content = "def hello():\n    return 'world'\n";
         let elem = make_element(content, ChunkKind::Function);
         let config = default_config();
+        let file_info = dummy_file_info();
 
-        let chunks = chunk_elements(&[elem], 1, &config);
+        let chunks = chunk_elements(&[elem], &file_info, &[], 1, &config);
         assert_eq!(chunks.len(), 1);
-        assert_eq!(chunks[0].content, content);
+        assert!(chunks[0].content.contains(content)); // includes context header now
         assert!(chunks[0].doc_comment.is_some());
     }
 
@@ -526,8 +589,9 @@ mod tests {
         let elem = make_element(&content, ChunkKind::Class);
         let mut config = default_config();
         config.indexing.max_chunk_tokens = 50; // force splitting
+        let file_info = dummy_file_info();
 
-        let chunks = chunk_elements(&[elem], 1, &config);
+        let chunks = chunk_elements(&[elem], &file_info, &[], 1, &config);
         assert!(
             chunks.len() > 1,
             "large element should be split into multiple chunks, got {}",
@@ -557,8 +621,9 @@ mod tests {
         let elem = make_element(&content, ChunkKind::Function);
         let mut config = default_config();
         config.indexing.max_chunk_tokens = 40;
+        let file_info = dummy_file_info();
 
-        let chunks = chunk_elements(&[elem], 1, &config);
+        let chunks = chunk_elements(&[elem], &file_info, &[], 1, &config);
         // All chunks should have content
         for chunk in &chunks {
             assert!(!chunk.content.is_empty(), "no chunk should be empty");
@@ -604,20 +669,22 @@ mod tests {
     #[test]
     fn test_empty_elements() {
         let config = default_config();
-        let chunks = chunk_elements(&[], 1, &config);
+        let file_info = dummy_file_info();
+        let chunks = chunk_elements(&[], &file_info, &[], 1, &config);
         assert!(chunks.is_empty());
     }
 
     #[test]
     fn test_multiple_elements() {
         let config = default_config();
+        let file_info = dummy_file_info();
         let elements = vec![
             make_element("def a():\n    pass\n", ChunkKind::Function),
             make_element("def b():\n    pass\n", ChunkKind::Function),
             make_element("class C:\n    pass\n", ChunkKind::Class),
         ];
 
-        let chunks = chunk_elements(&elements, 1, &config);
+        let chunks = chunk_elements(&elements, &file_info, &[], 1, &config);
         assert_eq!(chunks.len(), 3);
         assert_eq!(chunks[0].kind, ChunkKind::Function);
         assert_eq!(chunks[2].kind, ChunkKind::Class);

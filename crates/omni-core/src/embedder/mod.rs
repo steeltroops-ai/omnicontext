@@ -427,17 +427,18 @@ impl Embedder {
     }
 }
 
-/// Format a chunk for embedding with metadata prefix.
+/// Format a chunk for embedding.
 ///
-/// This prepends language and symbol information so the embedding
-/// captures structural context, not just raw code.
+/// Under OmniContext v2, chunks are enriched at chunking time (the context header
+/// is directly included in `chunk.content`). This method serves as a no-op 
+/// wrapper, kept only for backwards compatibility or future dynamic formatting.
 pub fn format_chunk_for_embedding(
-    language: &str,
-    symbol_path: &str,
-    kind: &str,
+    _language: &str,
+    _symbol_path: &str,
+    _kind: &str,
     content: &str,
 ) -> String {
-    format!("[{language}] {symbol_path}: {kind}\n{content}")
+    content.to_string()
 }
 
 #[cfg(test)]
@@ -445,15 +446,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_format_chunk_for_embedding() {
+    fn test_format_chunk_for_embedding_pass_through() {
         let result = format_chunk_for_embedding(
             "python",
             "app.routes.login",
             "function",
             "def login(request):\n    pass",
         );
-        assert!(result.starts_with("[python] app.routes.login: function"));
-        assert!(result.contains("def login"));
+        assert_eq!(result, "def login(request):\n    pass");
     }
 
     #[test]
@@ -502,9 +502,9 @@ mod tests {
     #[test]
     fn test_format_multiple_languages() {
         let rust = format_chunk_for_embedding("rust", "lib::Config::new", "function", "pub fn new() {}");
-        assert!(rust.starts_with("[rust]"));
+        assert_eq!(rust, "pub fn new() {}");
 
         let ts = format_chunk_for_embedding("typescript", "UserService.getUser", "function", "getUser() {}");
-        assert!(ts.starts_with("[typescript]"));
+        assert_eq!(ts, "getUser() {}");
     }
 }

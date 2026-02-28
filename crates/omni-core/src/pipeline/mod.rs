@@ -243,8 +243,12 @@ impl Engine {
         // Upsert the file first to get a file_id
         let file_id = self.index.upsert_file(&file_info)?;
 
+        // Parse imports early so we can enrich chunks with them
+        let imports = parser::parse_imports(path, content.as_bytes(), language)
+            .unwrap_or_default();
+
         // Chunk the elements (returns Vec<Chunk>)
-        let chunks = chunker::chunk_elements(&elements, file_id, &self.config);
+        let chunks = chunker::chunk_elements(&elements, &file_info, &imports, file_id, &self.config);
 
         // Build Symbol records from the chunks
         let symbols: Vec<Symbol> = chunks
@@ -360,9 +364,6 @@ impl Engine {
         // ---------------------------------------------------------------
         // Step 6: Build dependency edges from import statements
         // ---------------------------------------------------------------
-        let imports = parser::parse_imports(path, content.as_bytes(), language)
-            .unwrap_or_default();
-
         if !imports.is_empty() {
             // Use the first symbol of the file (or the file_id-based ID) as source
             let file_source_id = self.index.get_first_symbol_for_file(file_id)
