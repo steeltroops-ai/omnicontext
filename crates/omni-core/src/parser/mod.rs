@@ -149,6 +149,50 @@ pub fn parse_imports(
     Ok(analyzer.extract_imports(&tree, source, file_path))
 }
 
+/// Convert a relative file path (from repo root) into a module-like FQN prefix.
+/// Strips `src`, `lib`, `test`, `tests` prefixes and uses remaining path components.
+/// E.g., `src/auth/user.rs` -> `auth/user` (lang-specific delimiters applied by callers)
+pub fn build_module_name_from_path(path: &Path) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+
+    for comp in path.components() {
+        if let std::path::Component::Normal(os_str) = comp {
+            if let Some(s) = os_str.to_str() {
+                parts.push(s);
+            }
+        }
+    }
+
+    if parts.is_empty() {
+        return "unknown".to_string();
+    }
+
+    // Strip common directory prefixes
+    if !parts.is_empty() && matches!(parts[0], "src" | "lib" | "test" | "tests") {
+        parts.remove(0);
+    }
+
+    if parts.is_empty() {
+        return "unknown".to_string();
+    }
+
+    // Process the filename/stem
+    let last_idx = parts.len() - 1;
+    let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    parts[last_idx] = file_stem;
+
+    // Remove `mod` or `index` if it's the specific file
+    if parts.len() > 1 && (parts[last_idx] == "mod" || parts[last_idx] == "index") {
+        parts.pop();
+    } else if parts.len() == 1 && (parts[last_idx] == "mod" || parts[last_idx] == "index") {
+        // Keep it if it's the only thing left, but maybe replace
+        parts[last_idx] = "root";
+    }
+
+    parts.join("/") // Callers will `.replace("/", delimiter)` if needed
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;

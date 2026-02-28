@@ -283,10 +283,8 @@ impl LanguageAnalyzer for DocumentAnalyzer {
         file_path: &Path,
     ) -> Vec<StructuralElement> {
         let source_str = std::str::from_utf8(source).unwrap_or("");
-        let module_name = file_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("document");
+        let module_name_str = crate::parser::build_module_name_from_path(file_path);
+        let module_name = &module_name_str;
 
         match self.lang {
             Language::Markdown => Self::parse_markdown(source_str, module_name),

@@ -39,13 +39,10 @@ impl LanguageAnalyzer for RustAnalyzer {
         file_path: &Path,
     ) -> Vec<StructuralElement> {
         let mut elements = Vec::new();
-        let module_name = file_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("mod");
+        let module_name = crate::parser::build_module_name_from_path(file_path).replace("/", "::");
 
         let root = tree.root_node();
-        self.walk_node(root, source, module_name, &[], &mut elements, false);
+        self.walk_node(root, source, &module_name, &[], &mut elements, false);
         elements
     }
 

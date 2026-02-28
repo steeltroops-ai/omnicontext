@@ -27,10 +27,8 @@ impl LanguageAnalyzer for TypeScriptAnalyzer {
         file_path: &Path,
     ) -> Vec<StructuralElement> {
         let mut elements = Vec::new();
-        let module_name = file_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("module");
+        let module_name_str = crate::parser::build_module_name_from_path(file_path);
+        let module_name = &module_name_str;
 
         let root = tree.root_node();
         walk_ts_node(root, source, module_name, &[], &mut elements);
