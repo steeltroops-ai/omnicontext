@@ -177,7 +177,7 @@ export default function Home() {
       </section>
 
       {/* Massive Graph Architecture Banner */}
-      <section className="py-[120px] px-6 w-full max-w-[1200px] mx-auto border-t border-white/5 relative flex flex-col items-center">
+      <section className="py-[160px] px-8 md:px-16 w-full max-w-[1400px] mx-auto border-t border-white/5 relative flex flex-col items-center">
         <h2 className="text-4xl md:text-[52px] font-semibold tracking-tighter text-white mb-6 text-center">
           The Context Engine Platform
         </h2>
@@ -295,7 +295,7 @@ export default function Home() {
       </section>
 
       {/* Feature Sections - Alternating Interactive Blocks */}
-      <section className="py-[120px] w-full max-w-[1100px] mx-auto flex flex-col gap-[160px] px-6 mb-20">
+      <section className="py-[160px] w-full max-w-[1280px] mx-auto flex flex-col gap-[200px] px-8 md:px-16 mb-20">
         {/* Block 1: Left Text, Right Interactive */}
         <div className="flex flex-col md:flex-row items-center gap-16">
           <div className="flex-1">
