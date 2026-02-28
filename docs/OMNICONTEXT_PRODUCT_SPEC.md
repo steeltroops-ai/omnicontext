@@ -1211,6 +1211,6 @@ Enterprise tier (hosted):
 ---
 
 **Document Status**: Design specification -- ready for implementation  
-**Owner**: Steeltroops AI  
+**Owner**: Mayank  
 **Last Updated**: 2026-02-28  
 **License**: Document is proprietary. Product core is Apache 2.0.

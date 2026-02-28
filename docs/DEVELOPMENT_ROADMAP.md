@@ -197,7 +197,7 @@ You can replace the vector index without changing anything else.
 
 ---
 
-## Phase 4: MCP Server
+## Phase 4: MCP Server [COMPLETE]
 
 **Goal**: Expose the engine to AI agents via MCP.
 **Duration**: ~2 weeks
@@ -311,8 +311,8 @@ Phase 0  [DONE]     Scaffold, CI, docs
 Phase 1  [DONE]     Parser + Chunker (Python, TS/JS, Rust, Go)
 Phase 2  [DONE]     Embedder + Index + Vector + Search
 Phase 3  [DONE]     Pipeline + CLI (end-to-end demo)
-Phase 4  [NEXT]     MCP Server (AI agent integration)
-Phase 5             Dependency Graph (smarter search)
+Phase 4  [DONE]     MCP Server (AI agent integration)
+Phase 5  [NEXT]     Dependency Graph (smarter search)
 Phase 6             Distribution (package managers, VS Code)
 Phase 7             Pro Features
 Phase 8             Enterprise

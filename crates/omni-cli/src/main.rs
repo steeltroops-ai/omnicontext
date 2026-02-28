@@ -213,18 +213,42 @@ fn cmd_status(path: &str) -> Result<()> {
     Ok(())
 }
 
-/// Start the MCP server.
-async fn cmd_mcp(repo: &str, transport: &str, port: u16) -> Result<()> {
-    println!("OmniContext MCP Server");
-    println!("  Repository: {}", repo);
-    println!("  Transport:  {}", transport);
-    if transport == "sse" {
-        println!("  Port:       {}", port);
+/// Start the MCP server by launching the dedicated omnicontext-mcp binary.
+async fn cmd_mcp(repo: &str, _transport: &str, _port: u16) -> Result<()> {
+    let repo_path = std::path::PathBuf::from(repo)
+        .canonicalize()
+        .unwrap_or_else(|_| std::path::PathBuf::from(repo));
+
+    eprintln!("OmniContext MCP Server starting...");
+    eprintln!("  Repository: {}", repo_path.display());
+
+    // Try to find the MCP binary next to the current executable
+    let current_exe = std::env::current_exe()?;
+    let mcp_binary = current_exe
+        .parent()
+        .map(|p| p.join("omnicontext-mcp"))
+        .unwrap_or_else(|| std::path::PathBuf::from("omnicontext-mcp"));
+
+    let status = tokio::process::Command::new(&mcp_binary)
+        .arg("--repo")
+        .arg(&repo_path)
+        .stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .status()
+        .await;
+
+    match status {
+        Ok(s) if s.success() => Ok(()),
+        Ok(s) => anyhow::bail!("MCP server exited with code: {}", s),
+        Err(e) => {
+            eprintln!("Failed to launch MCP server binary: {}", e);
+            eprintln!();
+            eprintln!("The MCP server is shipped as a separate binary: omnicontext-mcp");
+            eprintln!("Install it with: cargo install --path crates/omni-mcp");
+            anyhow::bail!("MCP binary not found: {}", mcp_binary.display());
+        }
     }
-    println!();
-    println!("  [MCP server implementation pending -- Phase 4]");
-    // TODO: Wire up omni-mcp crate
-    Ok(())
 }
 
 /// Manage configuration.
