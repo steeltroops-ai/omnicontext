@@ -104,9 +104,9 @@ export default function Home() {
           <div className="absolute top-[30%] left-[-10%] w-[600px] h-[500px] bg-primary/10 blur-[130px] rounded-full pointer-events-none" />
           <div className="absolute bottom-[-10%] right-[-10%] w-[800px] h-[600px] bg-emerald-500/5 blur-[150px] rounded-full pointer-events-none" />
 
-          <div className="relative z-10 flex flex-col lg:flex-row items-center justify-between px-8 md:px-16 w-full max-w-[1400px] mx-auto gap-12 xl:gap-20">
+          <div className="relative z-10 flex flex-col lg:flex-row items-center lg:items-center justify-between px-6 sm:px-8 md:px-16 w-full max-w-[1400px] mx-auto gap-10 lg:gap-16 xl:gap-24 py-12 lg:py-0">
             {/* Left Content */}
-            <div className="flex-1 flex flex-col items-start text-left max-w-[600px]">
+            <div className="flex-1 flex flex-col items-center lg:items-start text-center lg:text-left w-full max-w-[640px] mx-auto lg:mx-0">
               <motion.div
                 initial={{ opacity: 0, y: 15 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -119,7 +119,7 @@ export default function Home() {
               </motion.div>
 
               <motion.h1
-                className="text-5xl md:text-7xl lg:text-[84px] font-semibold tracking-tighter text-transparent bg-clip-text bg-gradient-to-b from-white to-white/70 mb-8 leading-[1.05]"
+                className="text-4xl sm:text-5xl md:text-6xl lg:text-7xl xl:text-[84px] font-semibold tracking-tighter text-transparent bg-clip-text bg-gradient-to-b from-white to-white/70 mb-6 leading-[1.05]"
                 initial={{ opacity: 0, scale: 0.96, filter: "blur(10px)" }}
                 animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
                 transition={{
@@ -133,7 +133,7 @@ export default function Home() {
               </motion.h1>
 
               <motion.p
-                className="text-[20px] md:text-[22px] text-zinc-400 max-w-lg mb-12 leading-snug tracking-tight"
+                className="text-[17px] sm:text-[19px] md:text-[21px] text-zinc-400 max-w-lg mb-10 leading-snug tracking-tight"
                 initial={{ opacity: 0, y: 15 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{
@@ -148,7 +148,7 @@ export default function Home() {
               </motion.p>
 
               <motion.div
-                className="flex flex-col sm:flex-row gap-4 w-full sm:w-auto"
+                className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto justify-center lg:justify-start"
                 initial={{ opacity: 0, y: 15 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{
@@ -157,21 +157,21 @@ export default function Home() {
                   delay: 0.3,
                 }}
               >
-                <button className="w-full sm:w-auto px-6 py-3 text-[15px] font-medium rounded-full bg-zinc-100 text-black hover:scale-105 active:scale-95 transition-all duration-300 shadow-[0_0_40px_rgba(255,255,255,0.1)]">
+                <button className="w-full sm:w-auto px-7 py-3.5 text-[15px] font-medium rounded-full bg-zinc-100 text-black hover:scale-105 active:scale-95 transition-all duration-300 shadow-[0_0_40px_rgba(255,255,255,0.1)]">
                   Install {siteConfig.name} CLI
                 </button>
                 <Link
                   href="/docs"
-                  className="w-full sm:w-auto px-6 py-3 text-[15px] font-medium rounded-full bg-zinc-900 text-white border border-white/10 hover:bg-zinc-800 transition-colors duration-300 flex items-center justify-center"
+                  className="w-full sm:w-auto px-7 py-3.5 text-[15px] font-medium rounded-full bg-zinc-900 text-white border border-white/10 hover:bg-zinc-800 transition-colors duration-300 flex items-center justify-center"
                 >
-                  Read Documentation
+                  Read Docs
                 </Link>
               </motion.div>
             </div>
 
             {/* Right Hero Visual (Elegant Dark-Glass Terminal) */}
             <motion.div
-              className="flex-[1.1] w-full relative z-10 hidden md:flex flex-col"
+              className="flex-[1.1] w-full relative z-10 hidden lg:flex flex-col max-w-[580px]"
               initial={{ opacity: 0, x: 40 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{
@@ -768,11 +768,11 @@ export default function Home() {
           </div>
         </section>
 
-        {/* Footer - Enterprise Grade */}
-        <footer className="py-16 px-8 md:px-16 bg-[#09090B] border-t border-white/5">
+        {/* Footer */}
+        <footer className="py-16 px-6 sm:px-8 md:px-16 bg-[#09090B] border-t border-white/5">
           <div className="max-w-[1400px] mx-auto">
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-12 mb-16">
-              <div className="col-span-2 md:col-span-1">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-[1.5fr_1fr_1fr_1fr_1fr] gap-x-8 gap-y-10 mb-16">
+              <div className="col-span-1 sm:col-span-2 lg:col-span-1">
                 <Link
                   href="/"
                   className="flex items-center gap-2 font-semibold text-sm text-zinc-100 mb-4"
@@ -889,7 +889,7 @@ export default function Home() {
                 </div>
               </div>
             </div>
-            <div className="border-t border-white/5 pt-8 flex flex-col md:flex-row items-center justify-between gap-4">
+            <div className="border-t border-white/5 pt-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-center sm:text-left">
               <p className="text-[12px] text-zinc-600">
                 (c) 2026 {siteConfig.name}. All rights reserved. Apache-2.0
                 License.
