@@ -35,6 +35,7 @@ tree-sitter-go = { workspace = true }
 
 # Embedding
 ort = { workspace = true }
+tokenizers = { workspace = true }
 
 # Vector index (deferred to Phase 1 evaluation)
 # usearch = { workspace = true }
