@@ -3,7 +3,9 @@
 import React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Search, Layers, Github } from "lucide-react";
+import { Search, Github } from "lucide-react";
+import { siteConfig } from "@/config/site";
+import { Logo } from "@/components/icons";
 
 export default function DocsLayout({
   children,
@@ -21,16 +23,14 @@ export default function DocsLayout({
   return (
     <div className="flex flex-col md:flex-row h-screen bg-[#09090B] text-zinc-100 font-sans overflow-hidden selection:bg-primary/30">
       {/* Left Sidebar */}
-      <aside className="w-[280px] shrink-0 border-r border-white/5 flex flex-col bg-[#0E0E11] overflow-y-auto">
+      <aside className="w-[280px] shrink-0 border-r border-white/5 flex flex-col bg-[#0E0E11] overflow-y-auto custom-scrollbar">
         <div className="h-14 flex items-center px-8 font-semibold text-[14px] text-zinc-100 border-b border-white/5 shrink-0 bg-[#09090B]/50 backdrop-blur-xl sticky top-0 z-10">
           <Link
             href="/"
-            className="flex items-center gap-2 hover:opacity-80 transition-opacity"
+            className="flex items-center gap-2.5 hover:opacity-80 transition-opacity"
           >
-            <div className="text-primary">
-              <Layers size={18} strokeWidth={2} />
-            </div>
-            <span>OmniContext</span>
+            <Logo className="text-primary" size={22} />
+            <span>{siteConfig.name}</span>
           </Link>
         </div>
 
@@ -165,7 +165,7 @@ export default function DocsLayout({
         {/* Sidebar Footer */}
         <div className="p-6 border-t border-white/5 mt-auto">
           <a
-            href="https://github.com/steeltroops-ai/omnicontext"
+            href={siteConfig.links.github}
             target="_blank"
             rel="noopener noreferrer"
             className="flex items-center gap-2 text-[12px] text-zinc-500 hover:text-zinc-300 transition-colors"
@@ -206,7 +206,7 @@ export default function DocsLayout({
               Blog
             </Link>
             <a
-              href="https://github.com/steeltroops-ai/omnicontext"
+              href={siteConfig.links.github}
               target="_blank"
               rel="noopener noreferrer"
               className="text-[13px] font-medium text-zinc-500 hover:text-zinc-200 transition-colors duration-200 tracking-tight"

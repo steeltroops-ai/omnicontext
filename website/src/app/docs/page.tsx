@@ -1,14 +1,16 @@
 "use client";
 
 import React from "react";
-import { Cpu, ChevronRight, Search, GitBranch, Layers } from "lucide-react";
+import { Cpu, ChevronRight, Search, GitBranch } from "lucide-react";
+import { Logo } from "@/components/icons";
+import { siteConfig } from "@/config/site";
 import Link from "next/link";
 
 export default function DocsPage() {
   return (
     <div className="flex-1 flex overflow-hidden h-full">
       {/* Article Content */}
-      <div className="flex-1 overflow-y-auto px-10 md:px-20 py-16 flex justify-center bg-[#09090B]">
+      <div className="flex-1 overflow-y-auto custom-scrollbar px-10 md:px-20 py-16 flex justify-center bg-[#09090B]">
         <article className="max-w-[760px] w-full">
           <div className="text-[12px] font-semibold tracking-wider uppercase text-zinc-600 mb-6">
             Getting Started
@@ -18,8 +20,8 @@ export default function DocsPage() {
             Introduction
           </h1>
           <p className="text-[18px] text-zinc-400 leading-[1.6] mb-6 tracking-tight">
-            OmniContext is a high-performance, locally-runnable code context
-            engine that gives AI coding agents deep understanding of any
+            {siteConfig.name} is a high-performance, locally-runnable code
+            context engine that gives AI coding agents deep understanding of any
             codebase. It is{" "}
             <span className="text-zinc-200 font-medium">not</span> an AI
             assistant. It is the intelligence infrastructure that makes AI
@@ -29,8 +31,8 @@ export default function DocsPage() {
             Every AI coding agent today (Claude Code, Cursor, Copilot, Windsurf,
             Codex) struggles with the same problem -- they do not understand
             your codebase. They see files as text, not as an interconnected
-            system. OmniContext solves this by building a live, semantic index
-            of the entire codebase and exposing it via the Model Context
+            system. {siteConfig.name} solves this by building a live, semantic
+            index of the entire codebase and exposing it via the Model Context
             Protocol (MCP).
           </p>
 
@@ -87,11 +89,11 @@ export default function DocsPage() {
             How it works
           </h2>
           <p className="text-[16px] text-zinc-400 leading-relaxed mb-8 tracking-tight">
-            OmniContext runs as a local process on your machine. It indexes your
-            codebase using Tree-sitter for AST parsing, generates embeddings via
-            a local ONNX model, and stores everything in an embedded SQLite
-            database with HNSW vector search. AI agents connect to it via MCP to
-            get rich, ranked context.
+            {siteConfig.name} runs as a local process on your machine. It
+            indexes your codebase using Tree-sitter for AST parsing, generates
+            embeddings via a local ONNX model, and stores everything in an
+            embedded SQLite database with HNSW vector search. AI agents connect
+            to it via MCP to get rich, ranked context.
           </p>
 
           {/* Architecture Flow */}
@@ -151,8 +153,8 @@ export default function DocsPage() {
             Key capabilities
           </h2>
           <p className="text-[16px] text-zinc-400 leading-relaxed mb-8 tracking-tight">
-            OmniContext exposes 8 MCP tools that any compatible agent can call.
-            These tools provide semantic search, symbol lookup, dependency
+            {siteConfig.name} exposes 8 MCP tools that any compatible agent can
+            call. These tools provide semantic search, symbol lookup, dependency
             traversal, architecture summaries, and more.
           </p>
 
@@ -184,7 +186,7 @@ export default function DocsPage() {
             </div>
             <div className="bg-[#0E0E11] border border-white/5 p-6 rounded-[20px] transition-all duration-300 hover:bg-[#141418] hover:border-white/10 group cursor-pointer flex flex-col">
               <div className="w-9 h-9 rounded-full bg-white/5 flex items-center justify-center mb-4 group-hover:bg-emerald-500/10 group-hover:text-emerald-400 text-zinc-500 transition-colors">
-                <Layers size={16} strokeWidth={1.5} />
+                <Logo size={16} />
               </div>
               <div className="text-[15px] font-semibold text-zinc-100 mb-2 tracking-tight group-hover:text-white transition-colors">
                 get_architecture
@@ -297,8 +299,9 @@ export default function DocsPage() {
             Open-core model
           </h2>
           <p className="text-[16px] text-zinc-400 leading-relaxed mb-8 tracking-tight">
-            OmniContext follows an open-core business model. The core engine is
-            free and open-source. Advanced features are available on paid tiers.
+            {siteConfig.name} follows an open-core business model. The core
+            engine is free and open-source. Advanced features are available on
+            paid tiers.
           </p>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 mb-16">
@@ -397,7 +400,7 @@ export default function DocsPage() {
       </div>
 
       {/* Right TOC Sidebar */}
-      <aside className="w-[240px] shrink-0 p-10 overflow-y-auto border-l border-white/5 hidden xl:block bg-[#09090B]">
+      <aside className="w-[240px] shrink-0 p-10 overflow-y-auto custom-scrollbar border-l border-white/5 hidden xl:block bg-[#09090B]">
         <div className="text-[12px] font-semibold uppercase tracking-wider text-zinc-600 mb-6">
           On this page
         </div>

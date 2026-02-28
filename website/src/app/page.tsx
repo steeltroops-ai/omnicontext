@@ -656,7 +656,7 @@ export default function Home() {
                 {/* Editor Content Area */}
                 <div className="flex-1 p-6 flex flex-row relative">
                   {/* Line Numbers */}
-                  <div className="flex flex-col text-[13px] font-mono text-zinc-700 pr-5 select-none border-r border-white/5 text-right font-medium">
+                  <div className="flex flex-col text-[13px] font-mono text-zinc-700 pr-5 select-none border-r border-white/5 text-right font-medium leading-[1.7]">
                     <span>1</span>
                     <span>2</span>
                     <span>3</span>
@@ -669,12 +669,7 @@ export default function Home() {
                   </div>
 
                   {/* Code Body */}
-                  <div className="font-mono text-[13px] leading-[1.7] pl-5 flex flex-col w-full overflow-x-auto pt-4">
-                    <div className="flex items-center gap-2 mb-4 text-zinc-600 border-b border-white/5 pb-2">
-                      <span className="text-[10px] font-sans font-bold uppercase tracking-widest opacity-60">
-                        claude_desktop_config.json
-                      </span>
-                    </div>
+                  <div className="font-mono text-[13px] leading-[1.7] pl-5 flex flex-col w-full overflow-x-auto">
                     <div>
                       <span className="text-zinc-500">{"{"}</span>
                     </div>

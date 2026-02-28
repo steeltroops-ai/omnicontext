@@ -2,6 +2,7 @@
 
 import React from "react";
 import { ChevronRight, Copy, Check } from "lucide-react";
+import { siteConfig } from "@/config/site";
 import Link from "next/link";
 
 function CodeBlock({
@@ -46,7 +47,7 @@ export default function QuickstartPage() {
 
   return (
     <div className="flex-1 flex overflow-hidden h-full">
-      <div className="flex-1 overflow-y-auto px-10 md:px-20 py-16 flex justify-center bg-[#09090B]">
+      <div className="flex-1 overflow-y-auto custom-scrollbar px-10 md:px-20 py-16 flex justify-center bg-[#09090B]">
         <article className="max-w-[760px] w-full">
           <div className="text-[12px] font-semibold tracking-wider uppercase text-zinc-600 mb-6">
             Getting Started
@@ -56,24 +57,25 @@ export default function QuickstartPage() {
             Quickstart
           </h1>
           <p className="text-[18px] text-zinc-400 leading-[1.6] mb-14 tracking-tight">
-            Get OmniContext running on your machine in under two minutes. Index
-            your codebase and start serving context to your AI agents.
+            Get {siteConfig.name} running on your machine in under two minutes.
+            Index your codebase and start serving context to your AI agents.
           </p>
 
           <h2 className="text-[22px] text-white mt-12 mb-4 font-semibold tracking-tight">
             1. Install from source
           </h2>
           <p className="text-[15px] text-zinc-400 leading-relaxed mb-4 tracking-tight">
-            OmniContext requires Rust 1.80+ and a C compiler for Tree-sitter
-            grammar compilation. Clone the repository and build the workspace:
+            {siteConfig.name} requires Rust 1.80+ and a C compiler for
+            Tree-sitter grammar compilation. Clone the repository and build the
+            workspace:
           </p>
 
           <CodeBlock
             id="install"
             copied={copied}
             onCopy={copyToClipboard}
-            code={`git clone https://github.com/steeltroops-ai/omnicontext.git
-cd omnicontext
+            code={`git clone ${siteConfig.links.github}.git
+cd ${siteConfig.name.toLowerCase()}
 cargo build --release`}
           />
 
@@ -97,9 +99,9 @@ cargo build --release`}
             2. Index your codebase
           </h2>
           <p className="text-[15px] text-zinc-400 leading-relaxed mb-4 tracking-tight">
-            Point the CLI at any directory. OmniContext will detect languages,
-            parse ASTs, generate embeddings, and build the dependency graph
-            automatically.
+            Point the CLI at any directory. {siteConfig.name} will detect
+            languages, parse ASTs, generate embeddings, and build the dependency
+            graph automatically.
           </p>
 
           <CodeBlock
@@ -139,8 +141,8 @@ omnicontext-mcp --transport sse --port 8080`}
             4. Connect your agent
           </h2>
           <p className="text-[15px] text-zinc-400 leading-relaxed mb-4 tracking-tight">
-            Configure your AI agent to use OmniContext as an MCP server. For
-            Claude Code, add the following to your MCP configuration:
+            Configure your AI agent to use {siteConfig.name} as an MCP server.
+            For Claude Code, add the following to your MCP configuration:
           </p>
 
           <CodeBlock
@@ -150,8 +152,8 @@ omnicontext-mcp --transport sse --port 8080`}
             onCopy={copyToClipboard}
             code={`{
   "mcpServers": {
-    "omnicontext": {
-      "command": "omnicontext-mcp",
+    "${siteConfig.name.toLowerCase()}": {
+      "command": "${siteConfig.name.toLowerCase()}-mcp",
       "args": ["--transport", "stdio", "--repo", "."],
       "env": {}
     }
@@ -204,7 +206,7 @@ omnicontext-mcp --transport sse --port 8080`}
         </article>
       </div>
 
-      <aside className="w-[240px] shrink-0 p-10 overflow-y-auto border-l border-white/5 hidden xl:block bg-[#09090B]">
+      <aside className="w-[240px] shrink-0 p-10 overflow-y-auto custom-scrollbar border-l border-white/5 hidden xl:block bg-[#09090B]">
         <div className="text-[12px] font-semibold uppercase tracking-wider text-zinc-600 mb-6">
           On this page
         </div>
