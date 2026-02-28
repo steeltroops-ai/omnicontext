@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { siteConfig } from "@/config/site";
+import { Logo } from "@/components/icons";
 import {
-  SearchCode,
   Shield,
   Users,
   Server,
@@ -23,8 +24,8 @@ export default function EnterprisePage() {
             href="/"
             className="flex items-center gap-2 font-semibold text-sm text-zinc-100 transition-opacity hover:opacity-80"
           >
-            <SearchCode className="text-primary" size={18} strokeWidth={2} />
-            <span>OmniContext</span>
+            <Logo className="text-primary" size={18} />
+            <span>{siteConfig.name}</span>
           </Link>
           <div className="hidden md:flex items-center gap-8">
             <Link
@@ -46,7 +47,7 @@ export default function EnterprisePage() {
               Enterprise
             </Link>
             <a
-              href="https://github.com/steeltroops-ai/omnicontext"
+              href={siteConfig.links.github}
               target="_blank"
               rel="noopener noreferrer"
               className="text-[13px] font-medium text-zinc-400 hover:text-zinc-100 transition-colors flex items-center gap-1"
@@ -74,7 +75,7 @@ export default function EnterprisePage() {
         </p>
         <div className="flex flex-col sm:flex-row gap-4 justify-center items-center relative z-10">
           <Link
-            href="mailto:steeltroops.ai@gmail.com"
+            href={`mailto:${siteConfig.links.email}`}
             className="px-6 py-3 text-[15px] font-medium rounded-full bg-zinc-100 text-black hover:scale-105 active:scale-95 transition-all duration-300"
           >
             Contact Sales
@@ -194,7 +195,7 @@ export default function EnterprisePage() {
               Install OmniContext <ChevronRight size={16} />
             </Link>
             <Link
-              href="mailto:steeltroops.ai@gmail.com"
+              href={`mailto:${siteConfig.links.email}`}
               className="px-6 py-3 text-[15px] font-medium rounded-full bg-zinc-900 text-white border border-white/10 hover:bg-zinc-800 transition-colors"
             >
               Contact Sales
@@ -212,8 +213,8 @@ export default function EnterprisePage() {
                 href="/"
                 className="flex items-center gap-2 font-semibold text-sm text-zinc-100 mb-4"
               >
-                <SearchCode className="text-primary" size={16} />
-                <span>OmniContext</span>
+                <Logo className="text-primary" size={16} />
+                <span>{siteConfig.name}</span>
               </Link>
               <p className="text-[12px] text-zinc-600 leading-relaxed">
                 High-performance code context engine. Open-source core. Built in
@@ -288,13 +289,13 @@ export default function EnterprisePage() {
                   Support
                 </Link>
                 <Link
-                  href="mailto:steeltroops.ai@gmail.com"
+                  href={`mailto:${siteConfig.links.email}`}
                   className="hover:text-zinc-200 transition-colors"
                 >
                   Contact
                 </Link>
                 <a
-                  href="https://github.com/steeltroops-ai/omnicontext"
+                  href={siteConfig.links.github}
                   className="hover:text-zinc-200 transition-colors"
                 >
                   GitHub
@@ -323,11 +324,12 @@ export default function EnterprisePage() {
           </div>
           <div className="border-t border-white/5 pt-8 flex flex-col md:flex-row items-center justify-between gap-4">
             <p className="text-[12px] text-zinc-600">
-              (c) 2026 OmniContext. All rights reserved. Apache-2.0 License.
+              (c) 2026 {siteConfig.name}. All rights reserved. Apache-2.0
+              License.
             </p>
             <div className="flex items-center gap-4">
               <a
-                href="https://github.com/steeltroops-ai/omnicontext"
+                href={siteConfig.links.github}
                 className="text-zinc-600 hover:text-zinc-300 transition-colors"
               >
                 <Github size={18} />

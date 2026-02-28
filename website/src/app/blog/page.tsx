@@ -1,31 +1,30 @@
 "use client";
 
 import Link from "next/link";
-import { SearchCode, ChevronRight, Github, ArrowUpRight } from "lucide-react";
+import { ChevronRight, Github, ArrowUpRight } from "lucide-react";
+import { siteConfig } from "@/config/site";
+import { Logo } from "@/components/icons";
 
 const posts = [
   {
     date: "Feb 28, 2026",
     tag: "ANNOUNCEMENT",
-    title: "Introducing OmniContext v0.1.0",
-    description:
-      "The first public release of OmniContext: a high-performance, local code context engine written in Rust. Index your codebase, build a dependency graph, and serve rich context to any MCP-compatible AI agent.",
+    title: `Introducing ${siteConfig.name} v0.1.0`,
+    description: `The first public release of ${siteConfig.name}: a high-performance, local code context engine written in Rust. Index your codebase, build a dependency graph, and serve rich context to any MCP-compatible AI agent.`,
     href: "/blog/introducing-omnicontext",
   },
   {
     date: "Feb 28, 2026",
     tag: "ENGINEERING",
     title: "Why we chose Reciprocal Rank Fusion for code search",
-    description:
-      "A deep dive into how OmniContext blends semantic embeddings with BM25 keyword search using RRF to deliver precise, context-aware retrieval that outperforms either method alone.",
+    description: `A deep dive into how ${siteConfig.name} blends semantic embeddings with BM25 keyword search using RRF to deliver precise, context-aware retrieval that outperforms either method alone.`,
     href: "/blog/reciprocal-rank-fusion",
   },
   {
     date: "Feb 28, 2026",
     tag: "ARCHITECTURE",
     title: "AST-aware chunking: why code is not text",
-    description:
-      "Traditional chunking strategies designed for prose fail catastrophically on source code. Here is how OmniContext uses Tree-sitter ASTs to chunk at structural boundaries.",
+    description: `Traditional chunking strategies designed for prose fail catastrophically on source code. Here is how ${siteConfig.name} uses Tree-sitter ASTs to chunk at structural boundaries.`,
     href: "/blog/ast-aware-chunking",
   },
 ];
@@ -40,8 +39,8 @@ export default function BlogPage() {
             href="/"
             className="flex items-center gap-2 font-semibold text-sm text-zinc-100 transition-opacity hover:opacity-80"
           >
-            <SearchCode className="text-primary" size={18} strokeWidth={2} />
-            <span>OmniContext</span>
+            <Logo className="text-primary" size={18} />
+            <span>{siteConfig.name}</span>
           </Link>
           <div className="hidden md:flex items-center gap-8">
             <Link
@@ -63,7 +62,7 @@ export default function BlogPage() {
               Enterprise
             </Link>
             <a
-              href="https://github.com/steeltroops-ai/omnicontext"
+              href={siteConfig.links.github}
               target="_blank"
               rel="noopener noreferrer"
               className="text-[13px] font-medium text-zinc-400 hover:text-zinc-100 transition-colors flex items-center gap-1"
@@ -146,13 +145,13 @@ export default function BlogPage() {
           </div>
           <div className="flex items-center gap-4">
             <a
-              href="https://github.com/steeltroops-ai/omnicontext"
+              href={siteConfig.links.github}
               className="text-zinc-600 hover:text-zinc-300 transition-colors"
             >
               <Github size={18} />
             </a>
             <span className="text-[12px] text-zinc-600">
-              (c) 2026 OmniContext. Apache-2.0.
+              (c) 2026 {siteConfig.name}. Apache-2.0.
             </span>
           </div>
         </div>

@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { siteConfig } from "@/config/site";
+import { Logo } from "@/components/icons";
 import {
-  SearchCode,
   Github,
   MessageCircle,
   BookOpen,
@@ -20,8 +21,8 @@ export default function SupportPage() {
             href="/"
             className="flex items-center gap-2 font-semibold text-sm text-zinc-100 transition-opacity hover:opacity-80"
           >
-            <SearchCode className="text-primary" size={18} strokeWidth={2} />
-            <span>OmniContext</span>
+            <Logo className="text-primary" size={18} />
+            <span>{siteConfig.name}</span>
           </Link>
           <div className="hidden md:flex items-center gap-8">
             <Link
@@ -43,7 +44,7 @@ export default function SupportPage() {
               Enterprise
             </Link>
             <a
-              href="https://github.com/steeltroops-ai/omnicontext"
+              href={siteConfig.links.github}
               target="_blank"
               rel="noopener noreferrer"
               className="text-[13px] font-medium text-zinc-400 hover:text-zinc-100 transition-colors flex items-center gap-1"
@@ -65,7 +66,7 @@ export default function SupportPage() {
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-20">
           <a
-            href="https://github.com/steeltroops-ai/omnicontext/issues"
+            href={`${siteConfig.links.github}/issues`}
             target="_blank"
             rel="noopener noreferrer"
             className="bg-[#0E0E11] border border-white/5 p-8 rounded-[20px] flex flex-col group hover:border-white/10 transition-all duration-300"
@@ -100,7 +101,7 @@ export default function SupportPage() {
           </Link>
 
           <a
-            href="https://github.com/steeltroops-ai/omnicontext/discussions"
+            href={`${siteConfig.links.github}/discussions`}
             target="_blank"
             rel="noopener noreferrer"
             className="bg-[#0E0E11] border border-white/5 p-8 rounded-[20px] flex flex-col group hover:border-white/10 transition-all duration-300"
@@ -119,11 +120,11 @@ export default function SupportPage() {
           </a>
 
           <a
-            href="mailto:steeltroops.ai@gmail.com"
+            href={`mailto:${siteConfig.links.email}`}
             className="bg-[#0E0E11] border border-white/5 p-8 rounded-[20px] flex flex-col group hover:border-white/10 transition-all duration-300"
           >
             <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center mb-6 group-hover:bg-emerald-500/10 group-hover:text-emerald-400 text-zinc-500 transition-colors">
-              <SearchCode size={20} strokeWidth={1.5} />
+              <Logo size={20} />
             </div>
             <h3 className="text-[18px] font-semibold text-zinc-100 mb-3 tracking-tight group-hover:text-white transition-colors">
               Enterprise Support
@@ -162,13 +163,13 @@ export default function SupportPage() {
           </div>
           <div className="flex items-center gap-4">
             <a
-              href="https://github.com/steeltroops-ai/omnicontext"
+              href={siteConfig.links.github}
               className="text-zinc-600 hover:text-zinc-300 transition-colors"
             >
               <Github size={18} />
             </a>
             <span className="text-[12px] text-zinc-600">
-              (c) 2026 OmniContext. Apache-2.0.
+              (c) 2026 {siteConfig.name}. Apache-2.0.
             </span>
           </div>
         </div>

@@ -1,10 +1,14 @@
 import type { Metadata } from "next";
+import { siteConfig } from "@/config/site";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "OmniContext | Universal Code Context Engine",
-  description:
-    "The foundation for AI coding agents. A highly parallel, local, and universal code context engine written in Rust.",
+  title: {
+    default: `${siteConfig.name} | Universal Code Context Engine`,
+    template: `%s | ${siteConfig.name}`,
+  },
+  description: siteConfig.description,
+  authors: [{ name: siteConfig.author.name, url: siteConfig.author.url }],
 };
 
 export default function RootLayout({
