@@ -29,7 +29,7 @@ pub struct FileInfo {
 // Language
 // ---------------------------------------------------------------------------
 
-/// Supported programming languages.
+/// Supported programming languages and document formats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Language {
@@ -43,6 +43,28 @@ pub enum Language {
     Rust,
     /// Go (.go)
     Go,
+    /// Java (.java)
+    Java,
+    /// C (.c, .h)
+    C,
+    /// C++ (.cpp, .cc, .cxx, .hpp, .hxx)
+    Cpp,
+    /// C# (.cs)
+    CSharp,
+    /// CSS / SCSS (.css, .scss)
+    Css,
+    /// HTML (.html, .htm)
+    Html,
+    /// Shell / Bash (.sh, .bash, .zsh)
+    Shell,
+    /// Markdown (.md, .mdx)
+    Markdown,
+    /// TOML configuration (.toml)
+    Toml,
+    /// YAML configuration (.yml, .yaml)
+    Yaml,
+    /// JSON data (.json, .jsonc)
+    Json,
     /// Unknown / unsupported
     Unknown,
 }
@@ -56,6 +78,17 @@ impl Language {
             "js" | "jsx" | "mjs" | "cjs" => Self::JavaScript,
             "rs" => Self::Rust,
             "go" => Self::Go,
+            "java" => Self::Java,
+            "c" | "h" => Self::C,
+            "cpp" | "cc" | "cxx" | "hpp" | "hxx" | "hh" => Self::Cpp,
+            "cs" => Self::CSharp,
+            "css" | "scss" => Self::Css,
+            "html" | "htm" => Self::Html,
+            "sh" | "bash" | "zsh" => Self::Shell,
+            "md" | "mdx" => Self::Markdown,
+            "toml" => Self::Toml,
+            "yml" | "yaml" => Self::Yaml,
+            "json" | "jsonc" => Self::Json,
             _ => Self::Unknown,
         }
     }
@@ -68,8 +101,44 @@ impl Language {
             Self::JavaScript => "javascript",
             Self::Rust => "rust",
             Self::Go => "go",
+            Self::Java => "java",
+            Self::C => "c",
+            Self::Cpp => "cpp",
+            Self::CSharp => "csharp",
+            Self::Css => "css",
+            Self::Html => "html",
+            Self::Shell => "shell",
+            Self::Markdown => "markdown",
+            Self::Toml => "toml",
+            Self::Yaml => "yaml",
+            Self::Json => "json",
             Self::Unknown => "unknown",
         }
+    }
+
+    /// Returns true if this is an AST-parseable programming language.
+    pub fn is_code(&self) -> bool {
+        matches!(
+            self,
+            Self::Python
+                | Self::TypeScript
+                | Self::JavaScript
+                | Self::Rust
+                | Self::Go
+                | Self::Java
+                | Self::C
+                | Self::Cpp
+                | Self::CSharp
+                | Self::Css
+        )
+    }
+
+    /// Returns true if this is a documentation or config format.
+    pub fn is_document(&self) -> bool {
+        matches!(
+            self,
+            Self::Markdown | Self::Toml | Self::Yaml | Self::Json | Self::Html | Self::Shell
+        )
     }
 }
 

@@ -301,14 +301,27 @@ mod tests {
 
     #[test]
     fn test_is_source_file() {
+        // Code files
         assert!(is_source_file_static(Path::new("main.rs")));
         assert!(is_source_file_static(Path::new("app.py")));
         assert!(is_source_file_static(Path::new("index.ts")));
         assert!(is_source_file_static(Path::new("app.js")));
         assert!(is_source_file_static(Path::new("main.go")));
-        assert!(!is_source_file_static(Path::new("README.md")));
-        assert!(!is_source_file_static(Path::new("data.json")));
+        assert!(is_source_file_static(Path::new("App.java")));
+        assert!(is_source_file_static(Path::new("main.c")));
+        assert!(is_source_file_static(Path::new("main.cpp")));
+        assert!(is_source_file_static(Path::new("Program.cs")));
+        assert!(is_source_file_static(Path::new("styles.css")));
+        // Document/config files
+        assert!(is_source_file_static(Path::new("README.md")));
+        assert!(is_source_file_static(Path::new("data.json")));
+        assert!(is_source_file_static(Path::new("config.toml")));
+        assert!(is_source_file_static(Path::new("config.yaml")));
+        assert!(is_source_file_static(Path::new("index.html")));
+        assert!(is_source_file_static(Path::new("script.sh")));
+        // Truly unsupported
         assert!(!is_source_file_static(Path::new("Makefile")));
+        assert!(!is_source_file_static(Path::new("image.png")));
     }
 
     #[test]
@@ -330,15 +343,15 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(100);
         let count = watcher.full_scan(&tx).expect("scan");
 
-        // Should find main.rs and lib.py, skip README.md and node_modules/dep.js
-        assert_eq!(count, 2, "should find exactly 2 source files");
+        // Should find main.rs, lib.py, and README.md. Skip node_modules/dep.js.
+        assert_eq!(count, 3, "should find exactly 3 indexable files");
 
         // Drain the events
         let mut events = Vec::new();
         while let Ok(evt) = rx.try_recv() {
             events.push(evt);
         }
-        assert_eq!(events.len(), 2);
+        assert_eq!(events.len(), 3);
     }
 
     #[test]
