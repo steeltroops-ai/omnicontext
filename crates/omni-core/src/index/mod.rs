@@ -19,7 +19,7 @@ use std::path::Path;
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::error::OmniResult;
-use crate::types::{Chunk, ChunkKind, FileInfo, Language, Symbol, Visibility};
+use crate::types::{Chunk, ChunkKind, DependencyEdge, DependencyKind, FileInfo, Language, Symbol, Visibility};
 
 /// SQLite-backed metadata and full-text search index.
 pub struct MetadataIndex {
@@ -275,6 +275,28 @@ impl MetadataIndex {
         Ok(result)
     }
 
+    /// Look up a symbol by its database ID.
+    pub fn get_symbol_by_id(&self, id: i64) -> OmniResult<Option<Symbol>> {
+        let result = self.conn.query_row(
+            "SELECT id, name, fqn, kind, file_id, line, chunk_id
+             FROM symbols WHERE id = ?1",
+            params![id],
+            |row| {
+                Ok(Symbol {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    fqn: row.get(2)?,
+                    kind: parse_chunk_kind(&row.get::<_, String>(3)?),
+                    file_id: row.get(4)?,
+                    line: row.get(5)?,
+                    chunk_id: row.get(6)?,
+                })
+            },
+        ).optional()?;
+
+        Ok(result)
+    }
+
     /// Search symbols by name prefix (for autocomplete).
     pub fn search_symbols_by_name(&self, prefix: &str, limit: usize) -> OmniResult<Vec<Symbol>> {
         let mut stmt = self.conn.prepare(
@@ -469,6 +491,74 @@ impl MetadataIndex {
     /// Use sparingly -- prefer adding methods to this struct.
     pub fn connection(&self) -> &Connection {
         &self.conn
+    }
+
+    // -----------------------------------------------------------------------
+    // Dependency operations
+    // -----------------------------------------------------------------------
+
+    /// Insert a dependency edge. Idempotent (ignores duplicates).
+    pub fn insert_dependency(&self, edge: &DependencyEdge) -> OmniResult<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO dependencies (source_id, target_id, kind) VALUES (?1, ?2, ?3)",
+            params![edge.source_id, edge.target_id, edge.kind.as_str()],
+        )?;
+        Ok(())
+    }
+
+    /// Get all dependencies FROM a given symbol (outgoing edges = what it depends on).
+    pub fn get_upstream_dependencies(&self, symbol_id: i64) -> OmniResult<Vec<DependencyEdge>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT source_id, target_id, kind FROM dependencies WHERE source_id = ?1",
+        )?;
+        let edges = stmt.query_map(params![symbol_id], |row| {
+            let kind_str: String = row.get(2)?;
+            Ok(DependencyEdge {
+                source_id: row.get(0)?,
+                target_id: row.get(1)?,
+                kind: DependencyKind::from_str_lossy(&kind_str),
+            })
+        })?;
+        Ok(edges.filter_map(|e| e.ok()).collect())
+    }
+
+    /// Get all dependencies TO a given symbol (incoming edges = what depends on it).
+    pub fn get_downstream_dependencies(&self, symbol_id: i64) -> OmniResult<Vec<DependencyEdge>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT source_id, target_id, kind FROM dependencies WHERE target_id = ?1",
+        )?;
+        let edges = stmt.query_map(params![symbol_id], |row| {
+            let kind_str: String = row.get(2)?;
+            Ok(DependencyEdge {
+                source_id: row.get(0)?,
+                target_id: row.get(1)?,
+                kind: DependencyKind::from_str_lossy(&kind_str),
+            })
+        })?;
+        Ok(edges.filter_map(|e| e.ok()).collect())
+    }
+
+    /// Delete dependencies involving a symbol (both as source and target).
+    pub fn delete_dependencies_for_symbol(&self, symbol_id: i64) -> OmniResult<usize> {
+        let count1 = self.conn.execute(
+            "DELETE FROM dependencies WHERE source_id = ?1",
+            params![symbol_id],
+        )?;
+        let count2 = self.conn.execute(
+            "DELETE FROM dependencies WHERE target_id = ?1",
+            params![symbol_id],
+        )?;
+        Ok(count1 + count2)
+    }
+
+    /// Count total dependency edges.
+    pub fn dependency_count(&self) -> OmniResult<usize> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM dependencies",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
     }
 }
 

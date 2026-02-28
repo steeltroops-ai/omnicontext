@@ -21,7 +21,7 @@ pub mod languages;
 use std::path::Path;
 
 use crate::error::OmniResult;
-use crate::types::{ChunkKind, Language, Visibility};
+use crate::types::{ChunkKind, ImportStatement, Language, Visibility};
 
 /// A structural element extracted from an AST.
 #[derive(Debug, Clone)]
@@ -61,6 +61,18 @@ pub trait LanguageAnalyzer: Send + Sync {
         source: &[u8],
         file_path: &Path,
     ) -> Vec<StructuralElement>;
+
+    /// Extract import statements from a parsed tree for dependency graph construction.
+    ///
+    /// Default implementation returns empty (languages can override).
+    fn extract_imports(
+        &self,
+        _tree: &tree_sitter::Tree,
+        _source: &[u8],
+        _file_path: &Path,
+    ) -> Vec<ImportStatement> {
+        Vec::new()
+    }
 }
 
 /// Parse a source file and extract its structural elements.
@@ -100,6 +112,41 @@ pub fn parse_file(
     })?;
 
     Ok(analyzer.extract_structure(&tree, source, file_path))
+}
+
+/// Extract import statements from a source file.
+///
+/// Uses the same tree-sitter parse infrastructure as `parse_file`.
+pub fn parse_imports(
+    file_path: &Path,
+    source: &[u8],
+    language: Language,
+) -> OmniResult<Vec<ImportStatement>> {
+    let registry = registry::global_registry();
+
+    let analyzer = registry.get(language).ok_or_else(|| {
+        crate::error::OmniError::Parse {
+            path: file_path.to_path_buf(),
+            message: format!("no analyzer registered for language: {language}"),
+        }
+    })?;
+
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&analyzer.tree_sitter_language())
+        .map_err(|e| crate::error::OmniError::Parse {
+            path: file_path.to_path_buf(),
+            message: format!("failed to set tree-sitter language: {e}"),
+        })?;
+
+    let tree = parser.parse(source, None).ok_or_else(|| {
+        crate::error::OmniError::Parse {
+            path: file_path.to_path_buf(),
+            message: "tree-sitter returned None".into(),
+        }
+    })?;
+
+    Ok(analyzer.extract_imports(&tree, source, file_path))
 }
 
 #[cfg(test)]

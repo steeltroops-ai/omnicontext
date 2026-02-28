@@ -226,6 +226,35 @@ pub enum DependencyKind {
     FieldAccess,
 }
 
+impl DependencyKind {
+    /// Convert to database string.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Imports => "imports",
+            Self::Calls => "calls",
+            Self::Extends => "extends",
+            Self::Implements => "implements",
+            Self::UsesType => "uses_type",
+            Self::Instantiates => "instantiates",
+            Self::FieldAccess => "field_access",
+        }
+    }
+
+    /// Parse from database string.
+    pub fn from_str_lossy(s: &str) -> Self {
+        match s {
+            "imports" => Self::Imports,
+            "calls" => Self::Calls,
+            "extends" => Self::Extends,
+            "implements" => Self::Implements,
+            "uses_type" => Self::UsesType,
+            "instantiates" => Self::Instantiates,
+            "field_access" => Self::FieldAccess,
+            _ => Self::Calls, // fallback
+        }
+    }
+}
+
 /// A directed edge in the dependency graph.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DependencyEdge {
@@ -234,6 +263,22 @@ pub struct DependencyEdge {
     /// Target symbol ID.
     pub target_id: i64,
     /// Kind of dependency.
+    pub kind: DependencyKind,
+}
+
+/// An import statement extracted from source code.
+///
+/// Used for dependency graph construction. Each import is later resolved
+/// to a target symbol in the index.
+#[derive(Debug, Clone)]
+pub struct ImportStatement {
+    /// The raw import path (e.g., "os.path", "crate::config", "./utils").
+    pub import_path: String,
+    /// Optional specific names imported (e.g., ["Config", "load"]).
+    pub imported_names: Vec<String>,
+    /// Line number where the import appears.
+    pub line: u32,
+    /// Kind of dependency this import represents.
     pub kind: DependencyKind,
 }
 

@@ -263,19 +263,143 @@ impl OmniContextServer {
 
     #[tool(
         name = "get_dependencies",
-        description = "Get dependency relationships for a symbol: upstream (what it depends on) and downstream (what depends on it)."
+        description = "Get dependency relationships for a symbol: upstream (what it depends on) and downstream (what depends on it). Uses the dependency graph built during indexing."
     )]
     async fn get_dependencies(
         &self,
         params: Parameters<GetDependenciesParams>,
     ) -> Result<CallToolResult, McpError> {
+        let symbol_name = &params.0.symbol;
         let direction = params.0.direction.as_deref().unwrap_or("both");
-        let output = format!(
-            "## Dependencies for `{}`\n\nDirection: {}\n\n\
-             > Dependency graph analysis is available in Phase 5.\n\
-             > For now, use `search_code` to find references to this symbol.\n",
-            params.0.symbol, direction
-        );
+        let engine = self.engine.lock().await;
+        let index = engine.metadata_index();
+        let graph = engine.dep_graph();
+
+        // Look up the symbol
+        let symbol = match index.get_symbol_by_fqn(symbol_name) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                // Try prefix search
+                match index.search_symbols_by_name(symbol_name, 1) {
+                    Ok(syms) if !syms.is_empty() => syms.into_iter().next().unwrap(),
+                    _ => {
+                        return Ok(CallToolResult::success(vec![Content::text(
+                            format!("Symbol '{}' not found in the index.", symbol_name),
+                        )]));
+                    }
+                }
+            }
+            Err(e) => return Err(McpError::internal_error(format!("lookup failed: {e}"), None)),
+        };
+
+        let mut output = format!("## Dependencies for `{}`\n\n", symbol.fqn);
+
+        // Upstream (what this symbol depends on)
+        if direction == "upstream" || direction == "both" {
+            output.push_str("### Upstream (depends on)\n\n");
+            let upstream = graph.upstream(symbol.id, 2).unwrap_or_default();
+            if upstream.is_empty() {
+                // Fall back to SQLite
+                match index.get_upstream_dependencies(symbol.id) {
+                    Ok(edges) if edges.is_empty() => {
+                        output.push_str("_No upstream dependencies found._\n\n");
+                    }
+                    Ok(edges) => {
+                        for edge in &edges {
+                            let target_name = index.get_symbol_by_id(edge.target_id)
+                                .ok()
+                                .flatten()
+                                .map(|s| s.fqn)
+                                .unwrap_or_else(|| format!("symbol#{}", edge.target_id));
+                            output.push_str(&format!(
+                                "- `{}` ({:?})\n",
+                                target_name, edge.kind
+                            ));
+                        }
+                        output.push('\n');
+                    }
+                    Err(_) => output.push_str("_No upstream dependencies found._\n\n"),
+                }
+            } else {
+                for sym_id in &upstream {
+                    let name = index.get_symbol_by_id(*sym_id)
+                        .ok()
+                        .flatten()
+                        .map(|s| s.fqn)
+                        .unwrap_or_else(|| format!("symbol#{}", sym_id));
+                    output.push_str(&format!("- `{}`\n", name));
+                }
+                output.push('\n');
+            }
+        }
+
+        // Downstream (what depends on this symbol)
+        if direction == "downstream" || direction == "both" {
+            output.push_str("### Downstream (depended on by)\n\n");
+            let downstream = graph.downstream(symbol.id, 2).unwrap_or_default();
+            if downstream.is_empty() {
+                match index.get_downstream_dependencies(symbol.id) {
+                    Ok(edges) if edges.is_empty() => {
+                        output.push_str("_No downstream dependencies found._\n\n");
+                    }
+                    Ok(edges) => {
+                        for edge in &edges {
+                            let source_name = index.get_symbol_by_id(edge.source_id)
+                                .ok()
+                                .flatten()
+                                .map(|s| s.fqn)
+                                .unwrap_or_else(|| format!("symbol#{}", edge.source_id));
+                            output.push_str(&format!(
+                                "- `{}` ({:?})\n",
+                                source_name, edge.kind
+                            ));
+                        }
+                        output.push('\n');
+                    }
+                    Err(_) => output.push_str("_No downstream dependencies found._\n\n"),
+                }
+            } else {
+                for sym_id in &downstream {
+                    let name = index.get_symbol_by_id(*sym_id)
+                        .ok()
+                        .flatten()
+                        .map(|s| s.fqn)
+                        .unwrap_or_else(|| format!("symbol#{}", sym_id));
+                    output.push_str(&format!("- `{}`\n", name));
+                }
+                output.push('\n');
+            }
+        }
+
+        // Cycle detection
+        if graph.has_cycles() {
+            output.push_str("### Circular Dependencies Detected\n\n");
+            if let Ok(cycles) = graph.find_cycles() {
+                for (i, cycle) in cycles.iter().enumerate() {
+                    let names: Vec<String> = cycle.iter()
+                        .map(|id| {
+                            index.get_symbol_by_id(*id)
+                                .ok()
+                                .flatten()
+                                .map(|s| s.fqn)
+                                .unwrap_or_else(|| format!("symbol#{}", id))
+                        })
+                        .collect();
+                    output.push_str(&format!(
+                        "**Cycle {}**: {} -> ...\n",
+                        i + 1,
+                        names.join(" -> ")
+                    ));
+                }
+            }
+        }
+
+        // Graph stats
+        output.push_str(&format!(
+            "\n### Graph Statistics\n\n- Nodes: {}\n- Edges: {}\n",
+            graph.node_count(), graph.edge_count(),
+        ));
+
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 

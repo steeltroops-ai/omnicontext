@@ -14,7 +14,7 @@
 use std::path::Path;
 
 use crate::parser::{LanguageAnalyzer, StructuralElement};
-use crate::types::{ChunkKind, Visibility};
+use crate::types::{ChunkKind, DependencyKind, ImportStatement, Visibility};
 
 /// Analyzer for Python source files.
 pub struct PythonAnalyzer;
@@ -43,6 +43,84 @@ impl LanguageAnalyzer for PythonAnalyzer {
         let root = tree.root_node();
         self.walk_node(root, source, module_name, &[], &mut elements);
         elements
+    }
+
+    fn extract_imports(
+        &self,
+        tree: &tree_sitter::Tree,
+        source: &[u8],
+        _file_path: &Path,
+    ) -> Vec<ImportStatement> {
+        let mut imports = Vec::new();
+        let root = tree.root_node();
+        let mut cursor = root.walk();
+
+        for child in root.children(&mut cursor) {
+            let line = child.start_position().row as u32 + 1;
+
+            match child.kind() {
+                // `import foo` or `import foo.bar`
+                "import_statement" => {
+                    let mut inner = child.walk();
+                    for name_node in child.children(&mut inner) {
+                        if name_node.kind() == "dotted_name" || name_node.kind() == "aliased_import" {
+                            let text = if name_node.kind() == "aliased_import" {
+                                // `import foo as f` -> extract "foo"
+                                name_node.child_by_field_name("name")
+                                    .map(|n| node_text(n, source))
+                                    .unwrap_or("")
+                            } else {
+                                node_text(name_node, source)
+                            };
+                            if !text.is_empty() {
+                                imports.push(ImportStatement {
+                                    import_path: text.to_string(),
+                                    imported_names: vec![],
+                                    line,
+                                    kind: DependencyKind::Imports,
+                                });
+                            }
+                        }
+                    }
+                }
+                // `from foo import bar, baz` or `from foo.bar import *`
+                "import_from_statement" => {
+                    let module_path = child.child_by_field_name("module_name")
+                        .map(|n| node_text(n, source).to_string())
+                        .unwrap_or_default();
+
+                    if module_path.is_empty() {
+                        continue;
+                    }
+
+                    let mut names = Vec::new();
+                    let mut inner = child.walk();
+                    for name_node in child.children(&mut inner) {
+                        if name_node.kind() == "dotted_name"
+                            && name_node != child.child_by_field_name("module_name").unwrap_or(name_node)
+                        {
+                            names.push(node_text(name_node, source).to_string());
+                        } else if name_node.kind() == "aliased_import" {
+                            if let Some(n) = name_node.child_by_field_name("name") {
+                                names.push(node_text(n, source).to_string());
+                            }
+                        } else if name_node.kind() == "wildcard_import" {
+                            names.push("*".to_string());
+                        }
+                    }
+
+                    imports.push(ImportStatement {
+                        import_path: module_path,
+                        imported_names: names,
+                        line,
+                        kind: DependencyKind::Imports,
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        imports
     }
 }
 

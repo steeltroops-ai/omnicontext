@@ -18,7 +18,7 @@
 use std::path::Path;
 
 use crate::parser::{LanguageAnalyzer, StructuralElement};
-use crate::types::{ChunkKind, Visibility};
+use crate::types::{ChunkKind, DependencyKind, ImportStatement, Visibility};
 
 /// Analyzer for Rust source files.
 pub struct RustAnalyzer;
@@ -47,6 +47,20 @@ impl LanguageAnalyzer for RustAnalyzer {
         let root = tree.root_node();
         self.walk_node(root, source, module_name, &[], &mut elements, false);
         elements
+    }
+
+    fn extract_imports(
+        &self,
+        tree: &tree_sitter::Tree,
+        source: &[u8],
+        _file_path: &Path,
+    ) -> Vec<ImportStatement> {
+        let mut imports = Vec::new();
+        let root = tree.root_node();
+
+        self.collect_use_declarations(root, source, &mut imports);
+
+        imports
     }
 }
 
@@ -335,6 +349,79 @@ impl RustAnalyzer {
             self.walk_node(body, source, module_name, &inner_scope, elements, is_test_mod);
         }
     }
+
+    /// Recursively collect `use` declarations from the AST.
+    fn collect_use_declarations(
+        &self,
+        node: tree_sitter::Node<'_>,
+        source: &[u8],
+        imports: &mut Vec<ImportStatement>,
+    ) {
+        let mut cursor = node.walk();
+
+        for child in node.children(&mut cursor) {
+            match child.kind() {
+                "use_declaration" => {
+                    let line = child.start_position().row as u32 + 1;
+                    // Extract the use path text (everything after `use` and before `;`)
+                    let text = node_text(child, source);
+                    let path = text
+                        .strip_prefix("use ")
+                        .unwrap_or(text)
+                        .trim_end_matches(';')
+                        .trim();
+
+                    if path.is_empty() {
+                        continue;
+                    }
+
+                    // Handle scoped imports: `use std::collections::{HashMap, BTreeMap}`
+                    if path.contains('{') {
+                        let base = path.split('{').next().unwrap_or("").trim_end_matches("::");
+                        let names_part = path
+                            .split('{')
+                            .nth(1)
+                            .unwrap_or("")
+                            .trim_end_matches('}');
+                        let names: Vec<String> = names_part
+                            .split(',')
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+
+                        imports.push(ImportStatement {
+                            import_path: base.to_string(),
+                            imported_names: names,
+                            line,
+                            kind: DependencyKind::Imports,
+                        });
+                    } else {
+                        // Simple: `use crate::config::Config`
+                        // Split into path and final name
+                        let (base, name) = if let Some(pos) = path.rfind("::") {
+                            (&path[..pos], vec![path[pos + 2..].to_string()])
+                        } else {
+                            (path, vec![])
+                        };
+
+                        imports.push(ImportStatement {
+                            import_path: base.to_string(),
+                            imported_names: name,
+                            line,
+                            kind: DependencyKind::Imports,
+                        });
+                    }
+                }
+                // Recurse into module bodies
+                "mod_item" => {
+                    if let Some(body) = child.child_by_field_name("body") {
+                        self.collect_use_declarations(body, source, imports);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -436,7 +523,7 @@ fn has_attribute(node: tree_sitter::Node<'_>, source: &[u8], attr_name: &str) ->
 
 /// Quick reference extraction from use declarations within a node.
 fn extract_use_references(_node: tree_sitter::Node<'_>, _source: &[u8]) -> Vec<String> {
-    // TODO: Extract `use` paths from function bodies
+    // References within function bodies are extracted by extract_imports at file level
     Vec::new()
 }
 

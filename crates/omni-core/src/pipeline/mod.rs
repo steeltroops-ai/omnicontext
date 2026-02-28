@@ -27,10 +27,11 @@ use crate::chunker;
 use crate::config::Config;
 use crate::embedder::Embedder;
 use crate::error::{OmniError, OmniResult};
+use crate::graph::DependencyGraph;
 use crate::index::MetadataIndex;
 use crate::parser;
 use crate::search::SearchEngine;
-use crate::types::{FileInfo, Language, PipelineEvent, SearchResult, Symbol};
+use crate::types::{DependencyEdge, DependencyKind, FileInfo, Language, PipelineEvent, SearchResult, Symbol};
 use crate::vector::VectorIndex;
 use crate::watcher::FileWatcher;
 
@@ -48,6 +49,8 @@ pub struct Engine {
     embedder: Embedder,
     /// Hybrid search engine (RRF fusion).
     search_engine: SearchEngine,
+    /// Cross-file dependency graph.
+    dep_graph: DependencyGraph,
 }
 
 impl Engine {
@@ -84,6 +87,9 @@ impl Engine {
             config.search.token_budget,
         );
 
+        // Initialize dependency graph
+        let dep_graph = DependencyGraph::new();
+
         tracing::info!(
             repo = %config.repo_path.display(),
             data_dir = %data_dir.display(),
@@ -97,6 +103,7 @@ impl Engine {
             vector_index,
             embedder,
             search_engine,
+            dep_graph,
         })
     }
 
@@ -304,6 +311,56 @@ impl Engine {
             }
         }
 
+        // ---------------------------------------------------------------
+        // Step 5: Build dependency edges from references
+        // ---------------------------------------------------------------
+        for element in &elements {
+            if element.references.is_empty() {
+                continue;
+            }
+
+            // Find the source symbol for this element
+            let source_symbol = if !element.symbol_path.is_empty() {
+                self.index.get_symbol_by_fqn(&element.symbol_path)?
+            } else {
+                None
+            };
+
+            let source_id = match source_symbol {
+                Some(s) => s.id,
+                None => continue,
+            };
+
+            // Resolve each reference to a target symbol
+            for ref_name in &element.references {
+                // Try to find target symbol by FQN match or name prefix
+                let target = self.index.get_symbol_by_fqn(ref_name)?
+                    .or_else(|| {
+                        self.index.search_symbols_by_name(ref_name, 1)
+                            .ok()
+                            .and_then(|v| v.into_iter().next())
+                    });
+
+                if let Some(target_sym) = target {
+                    if target_sym.id != source_id {
+                        let edge = DependencyEdge {
+                            source_id,
+                            target_id: target_sym.id,
+                            kind: DependencyKind::Calls,
+                        };
+
+                        // Store in SQLite
+                        if let Err(e) = self.index.insert_dependency(&edge) {
+                            tracing::trace!(error = %e, "failed to insert dependency");
+                        }
+
+                        // Store in in-memory graph
+                        let _ = self.dep_graph.add_edge(&edge);
+                    }
+                }
+            }
+        }
+
         tracing::debug!(
             path = %path.display(),
             chunks = stats.chunks,
@@ -351,6 +408,11 @@ impl Engine {
     /// Get a reference to the metadata index (for advanced queries).
     pub fn metadata_index(&self) -> &MetadataIndex {
         &self.index
+    }
+
+    /// Get a reference to the dependency graph.
+    pub fn dep_graph(&self) -> &DependencyGraph {
+        &self.dep_graph
     }
 
     /// Shut down the engine gracefully, persisting data to disk.
