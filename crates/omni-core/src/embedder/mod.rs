@@ -210,36 +210,70 @@ impl Embedder {
 
     /// Embed a batch of text chunks.
     ///
-    /// Returns a vector of embedding vectors, one per input chunk.
-    /// Each embedding is L2-normalized.
-    pub fn embed_batch(&self, chunks: &[&str]) -> OmniResult<Vec<Vec<f32>>> {
-        let session_mutex = self.session.as_ref().ok_or_else(|| {
-            OmniError::ModelUnavailable {
-                reason: format!("model not loaded: {}", self.config.model_path.display()),
-            }
-        })?;
+    /// Returns a vector where each element corresponds to an input chunk.
+    /// If a chunk successfully embeds, `Some(embedding)` is returned.
+    /// If embedding fails (e.g., ONNX failure, chunk too large), `None` is returned.
+    pub fn embed_batch(&self, chunks: &[&str]) -> Vec<Option<Vec<f32>>> {
+        let session_mutex = match self.session.as_ref() {
+            Some(s) => s,
+            None => return vec![None; chunks.len()],
+        };
 
-        let mut session = session_mutex.lock().map_err(|e| {
-            OmniError::Internal(format!("session lock poisoned: {e}"))
-        })?;
+        let mut session = match session_mutex.lock() {
+            Ok(s) => s,
+            Err(_) => return vec![None; chunks.len()],
+        };
 
         let mut all_embeddings = Vec::with_capacity(chunks.len());
 
         // Process in batches
         for batch in chunks.chunks(self.config.batch_size) {
-            let batch_embeddings = self.run_inference(&mut session, batch)?;
-            all_embeddings.extend(batch_embeddings);
+            match self.run_inference(&mut session, batch) {
+                Ok(batch_embeddings) => {
+                    for emb in batch_embeddings {
+                        all_embeddings.push(Some(emb));
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "batch inference failed; falling back to individual chunks"
+                    );
+                    // Fall back to processing chunks one by one
+                    for text in batch {
+                        match self.run_inference(&mut session, &[*text]) {
+                            Ok(mut single_emb) => {
+                                all_embeddings.push(Some(single_emb.remove(0)));
+                            }
+                            Err(chunk_err) => {
+                                tracing::warn!(
+                                    error = %chunk_err,
+                                    "chunk inference failed; skipping this chunk"
+                                );
+                                all_embeddings.push(None);
+                            }
+                        }
+                    }
+                }
+            }
         }
 
-        Ok(all_embeddings)
+        all_embeddings
     }
 
     /// Embed a single text string.
     pub fn embed_single(&self, text: &str) -> OmniResult<Vec<f32>> {
-        let results = self.embed_batch(&[text])?;
-        results.into_iter().next().ok_or_else(|| {
-            OmniError::Internal("embed_batch returned empty results".into())
-        })
+        if !self.is_available() {
+            return Err(OmniError::ModelUnavailable {
+                reason: format!("model not loaded: {}", self.config.model_path.display()),
+            });
+        }
+        let mut results = self.embed_batch(&[text]);
+        if let Some(Some(emb)) = results.pop() {
+            Ok(emb)
+        } else {
+            Err(OmniError::Internal("embed_batch failed or returned None".into()))
+        }
     }
 
     /// Returns the embedding dimensions.
@@ -270,17 +304,21 @@ impl Embedder {
             (shape.clone(), attention_mask.clone())
         ).map_err(|e| OmniError::Internal(format!("ONNX tensor error: {e}")))?;
 
-        let type_value = ort::value::Tensor::from_array(
-            (shape, token_type_ids)
-        ).map_err(|e| OmniError::Internal(format!("ONNX tensor error: {e}")))?;
-
-        // Build inputs
+        // Build inputs dynamically based on what the model expects
         use std::borrow::Cow;
-        let inputs: Vec<(Cow<'_, str>, ort::session::SessionInputValue<'_>)> = vec![
+        let mut inputs: Vec<(Cow<'_, str>, ort::session::SessionInputValue<'_>)> = vec![
             (Cow::Borrowed("input_ids"), ort::session::SessionInputValue::from(ids_value)),
             (Cow::Borrowed("attention_mask"), ort::session::SessionInputValue::from(mask_value)),
-            (Cow::Borrowed("token_type_ids"), ort::session::SessionInputValue::from(type_value)),
         ];
+
+        // Only add token_type_ids if the model expects it (Jina doesn't, BGE might)
+        let expects_token_type = session.inputs().iter().any(|i| i.name() == "token_type_ids");
+        if expects_token_type {
+            let type_value = ort::value::Tensor::from_array(
+                (shape.clone(), token_type_ids)
+            ).map_err(|e| OmniError::Internal(format!("ONNX tensor error (token_type_ids): {e}")))?;
+            inputs.push((Cow::Borrowed("token_type_ids"), ort::session::SessionInputValue::from(type_value)));
+        }
 
         // Get output name before running (session.outputs() borrows &self)
         let output_name = session.outputs().first()

@@ -283,30 +283,22 @@ impl Engine {
                 .collect();
             let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
 
-            match self.embedder.embed_batch(&text_refs) {
-                Ok(embeddings) => {
-                    for (i, embedding) in embeddings.into_iter().enumerate() {
-                        if i < chunk_ids.len() {
-                            let vector_id = chunk_ids[i] as u64;
-                            if let Err(e) = self.vector_index.add(vector_id, &embedding) {
-                                tracing::warn!(error = %e, "failed to add vector");
-                                continue;
-                            }
-                            if let Err(e) =
-                                self.index.set_chunk_vector_id(chunk_ids[i], vector_id)
-                            {
-                                tracing::warn!(error = %e, "failed to set vector_id");
-                            }
-                            stats.embeddings += 1;
+            let embeddings = self.embedder.embed_batch(&text_refs);
+            for (i, maybe_embedding) in embeddings.into_iter().enumerate() {
+                if let Some(embedding) = maybe_embedding {
+                    if i < chunk_ids.len() {
+                        let vector_id = chunk_ids[i] as u64;
+                        if let Err(e) = self.vector_index.add(vector_id, &embedding) {
+                            tracing::warn!(error = %e, "failed to add vector");
+                            continue;
                         }
+                        if let Err(e) =
+                            self.index.set_chunk_vector_id(chunk_ids[i], vector_id)
+                        {
+                            tracing::warn!(error = %e, "failed to set vector_id");
+                        }
+                        stats.embeddings += 1;
                     }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        path = %path.display(),
-                        error = %e,
-                        "embedding failed, chunks stored without vectors"
-                    );
                 }
             }
         }
