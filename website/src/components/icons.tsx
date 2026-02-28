@@ -89,10 +89,10 @@ export function SiteIdentity({
   withText?: boolean;
 }) {
   return (
-    <div className={`flex items-center gap-2 ${className || ""}`}>
-      <Logo size={18} />
+    <div className={`flex items-center gap-2.5 ${className || ""}`}>
+      <Logo size={22} />
       {withText && (
-        <span className="font-semibold text-sm tracking-tight">
+        <span className="font-semibold text-[15px] tracking-tight">
           {siteConfig.name}
         </span>
       )}

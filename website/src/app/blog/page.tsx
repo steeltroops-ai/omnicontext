@@ -37,9 +37,9 @@ export default function BlogPage() {
         <div className="flex items-center justify-between w-full max-w-[1200px] px-8 md:px-16">
           <Link
             href="/"
-            className="flex items-center gap-2 font-semibold text-sm text-zinc-100 transition-opacity hover:opacity-80"
+            className="flex items-center gap-2.5 font-semibold text-[15px] text-zinc-100 transition-opacity hover:opacity-80"
           >
-            <Logo className="text-primary" size={18} />
+            <Logo className="text-primary" size={22} />
             <span>{siteConfig.name}</span>
           </Link>
           <div className="hidden md:flex items-center gap-8">
