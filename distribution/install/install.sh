@@ -10,7 +10,14 @@ set -euo pipefail
 
 REPO_OWNER="steeltroops-ai"
 REPO_NAME="omnicontext"
-VERSION="v0.1.0-alpha"
+
+LATEST_RELEASE=$(curl -sSL "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest" | grep '"tag_name":' | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/')
+if [ -z "$LATEST_RELEASE" ]; then
+    echo "Warning: Failed to fetch latest version from GitHub. Falling back to explicit alpha version."
+    VERSION="v0.1.0-alpha"
+else
+    VERSION="$LATEST_RELEASE"
+fi
 
 echo "========================================="
 echo " 🚀 Installing OmniContext"
@@ -60,6 +67,10 @@ if ! curl -sSL -f "$DOWNLOAD_URL" -o "${TEMP_DIR}/${ASSET_NAME}"; then
     exit 1
 fi
 
+echo "Checking for running instances for seamless update..."
+pkill -x omnicontext-mcp || true
+pkill -x omnicontext || true
+
 echo "Extracting..."
 tar -xzf "${TEMP_DIR}/${ASSET_NAME}" -C "$TEMP_DIR"
 
@@ -102,11 +113,13 @@ echo "Initializing OmniContext & downloading Jina AI embedding model..."
 echo "This requires a robust internet connection. Please wait while the model downloads."
 
 INIT_TEMP="$(mktemp -d)"
-(
+if ! (
     cd "$INIT_TEMP"
     # Runs status to force engine initialization and trigger model download with progress bar
-    omnicontext status || true
-)
+    omnicontext status
+); then
+    echo "Warning: Model download may have been interrupted or failed."
+fi
 rm -rf "$INIT_TEMP"
 
 echo ""
@@ -114,12 +127,15 @@ echo "========================================="
 echo " ✅ OmniContext installation complete!"
 echo "========================================="
 echo ""
-echo "You can now use OmniContext in your terminal:"
-echo "  > omnicontext index .           (Index current directory)"
-echo "  > omnicontext search \"auth\"     (Search codebase)"
+echo "To keep OmniContext updated locally, just re-run this install command anytime!"
 echo ""
-echo "For AI Agent usage (Claude Code, Cursor, Windsurf, etc), configure MCP:"
-echo "  Command: omnicontext-mcp"
-echo "  Args:    --repo ."
+echo "Where to start indexing:"
+echo "  Navigate to your code folder:  cd /path/to/your/repo"
+echo "  Create the search index:       omnicontext index ."
+echo "  Test searching your code:      omnicontext search \"auth\""
+echo ""
+echo "To connect your MCP (Claude, AI Agents), use this configuration:"
+echo "  Command:  omnicontext-mcp"
+echo "  Args:     [\"--repo\", \"/path/to/your/repo\"]"
 echo ""
 echo "Note: If ${BIN_DIR} was not previously in your PATH, please restart your terminal."

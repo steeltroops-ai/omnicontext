@@ -213,24 +213,28 @@ impl Engine {
             });
         }
 
+        let rel_path = path
+            .strip_prefix(&self.config.repo_path)
+            .unwrap_or(path);
+
         // Compute file hash for change detection
         let hash = compute_file_hash(&content);
 
         // Check if file has changed since last index
-        if let Ok(Some(existing_hash)) = self.index.get_file_hash(path) {
+        if let Ok(Some(existing_hash)) = self.index.get_file_hash(rel_path) {
             if existing_hash == hash {
-                tracing::debug!(path = %path.display(), "file unchanged, skipping");
+                tracing::debug!(path = %rel_path.display(), "file unchanged, skipping");
                 return Ok(stats);
             }
         }
 
-        // Parse the file into structural elements
-        let elements = parser::parse_file(path, content.as_bytes(), language)?;
+        // Parse the file into structural elements using relative path for FQN scoping
+        let elements = parser::parse_file(rel_path, content.as_bytes(), language)?;
 
-        // Build the FileInfo
+        // Build the FileInfo utilizing the relative path
         let file_info = FileInfo {
             id: 0, // will be set by upsert
-            path: path.to_path_buf(),
+            path: rel_path.to_path_buf(),
             language,
             content_hash: hash.clone(),
             size_bytes: content.len() as u64,
@@ -442,6 +446,7 @@ impl Engine {
             &self.index,
             &self.vector_index,
             &self.embedder,
+            Some(&self.dep_graph),
         )
     }
 

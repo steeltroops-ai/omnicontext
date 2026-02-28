@@ -17,7 +17,14 @@ $ErrorActionPreference = "Stop"
 # Configuration
 $RepoOwner = "steeltroops-ai"
 $RepoName = "omnicontext"
-$Version = "v0.1.0-alpha" # We pin to the alpha version for now, later we can fetch "latest"
+
+try {
+    $LatestRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/$RepoOwner/$RepoName/releases/latest" -UseBasicParsing
+    $Version = $LatestRelease.tag_name
+} catch {
+    Write-Host "Warning: Failed to fetch latest version from GitHub. Falling back to explicit alpha version." -ForegroundColor Yellow
+    $Version = "v0.1.0-alpha"
+}
 
 $OutDir = Join-Path $HOME ".omnicontext\bin"
 $OutExe = Join-Path $OutDir "omnicontext.exe"
@@ -54,22 +61,38 @@ try {
     exit 1
 }
 
-# 3. Extract and Install
+# 3. Stop running instances for seamless Auto-Update
+Write-Host "Checking for running instances for seamless update..." -ForegroundColor Yellow
+$processes = Get-Process -Name "omnicontext", "omnicontext-mcp" -ErrorAction SilentlyContinue
+if ($processes) {
+    $processes | Stop-Process -Force -ErrorAction SilentlyContinue
+}
+
+# 4. Extract and Install
 Write-Host "Extracting to $OutDir..." -ForegroundColor Yellow
 if (!(Test-Path $OutDir)) {
     New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 }
 
 try {
-    Expand-Archive -Path $TempZip -DestinationPath $OutDir -Force
+    # Extract to a temp staging directory first to properly flat-copy files
+    $StagingDir = Join-Path $env:TEMP "omnicontext_staging"
+    if (Test-Path $StagingDir) { Remove-Item -Path $StagingDir -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $StagingDir | Out-Null
+    
+    Expand-Archive -Path $TempZip -DestinationPath $StagingDir -Force
     Remove-Item -Path $TempZip -Force
+
+    # Copy files while preserving necessary relational structures if present
+    Copy-Item -Path "$StagingDir\*" -Destination $OutDir -Recurse -Force
+    Remove-Item -Path $StagingDir -Recurse -Force
 } catch {
     Write-Host "Error extracting zip file." -ForegroundColor Red
     exit 1
 }
 
 if (!(Test-Path $OutExe) -or !(Test-Path $OutMcpExe)) {
-    Write-Host "Error: Exectuables not found in the extracted archive." -ForegroundColor Red
+    Write-Host "Error: Executables not found in the extracted archive." -ForegroundColor Red
     exit 1
 }
 
@@ -97,6 +120,9 @@ try {
     # Run status
     Set-Location $InitTemp
     & $OutExe status
+    if ($LASTEXITCODE -ne 0) {
+        throw "Status command failed with exit code $LASTEXITCODE"
+    }
     
     Remove-Item -Path $InitTemp -Recurse -Force
 } catch {
@@ -109,12 +135,15 @@ Write-Host "=========================================" -ForegroundColor Green
 Write-Host " ✅ OmniContext installation complete!" -ForegroundColor Green
 Write-Host "=========================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "You can now use OmniContext in your terminal:"
-Write-Host "  > omnicontext index .           (Index current directory)"
-Write-Host "  > omnicontext search `"auth`"     (Search codebase)"
+Write-Host "To keep OmniContext updated locally, just re-run this install command anytime!" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "For AI Agent usage (Claude Code, Cursor, Windsurf, etc), configure MCP:"
-Write-Host "  Command: omnicontext-mcp"
-Write-Host "  Args:    --repo ."
+Write-Host "Where to start indexing:"
+Write-Host "  Navigate to your code folder:  cd C:\Path\To\Your\Repo"
+Write-Host "  Create the search index:       omnicontext index ."
+Write-Host "  Test searching your code:      omnicontext search `"auth`""
+Write-Host ""
+Write-Host "To connect your MCP (Claude, AI Agents), use this configuration:"
+Write-Host "  Command:  omnicontext-mcp"
+Write-Host "  Args:     [""--repo"", ""C:\\Path\\To\\Your\\Repo""]"
 Write-Host ""
 Write-Host "Note: You may need to restart your terminal for PATH changes to take effect."

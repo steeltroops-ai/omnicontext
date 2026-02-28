@@ -153,7 +153,7 @@ Add to your MCP settings:
 
 ## Architecture
 
-```
+```text
 omnicontext/
   crates/
     omni-core/     # Core engine (parser, chunker, embedder, index, search, graph)
@@ -166,7 +166,7 @@ omnicontext/
 
 ### Engine Pipeline
 
-```
+```text
 watcher --> parser --> chunker --> embedder --> index
                |                                 |
                v                                 v

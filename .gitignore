@@ -3,8 +3,10 @@
 debug/
 release/
 
-# ONNX models (tracked by git-lfs or downloaded at runtime)
+# ONNX models and runtime binaries
 models/*.onnx
+onnx.zip
+onnx_extract/
 
 # IDE
 .idea/

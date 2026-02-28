@@ -57,6 +57,7 @@ impl SearchEngine {
         index: &MetadataIndex,
         vector_index: &VectorIndex,
         embedder: &Embedder,
+        dep_graph: Option<&crate::graph::DependencyGraph>,
     ) -> OmniResult<Vec<SearchResult>> {
         let query_type = analyze_query(query);
         let limit = limit.min(self.retrieval_limit);
@@ -126,7 +127,23 @@ impl SearchEngine {
             &symbol_results,
         );
 
-        // ---- Build final results with structural boosting ----
+        // ---- Identify Anchor for Proximity Boosting ----
+        // We find the 'best' matched chunk that maps to a symbol
+        let anchor_symbol_id = if let Some(graph) = dep_graph {
+            fused.iter()
+                .take(3) // Look at top 3 results
+                .find_map(|scored| {
+                    if let Some(chunk) = self.get_chunk_by_id(index, scored.chunk_id) {
+                        index.get_symbol_by_fqn(&chunk.symbol_path).ok().flatten().map(|s| s.id)
+                    } else {
+                        None
+                    }
+                })
+        } else {
+            None
+        };
+
+        // ---- Build final results with structural and graph boosting ----
         let mut results = Vec::new();
         let mut total_tokens: u32 = 0;
 
@@ -138,9 +155,42 @@ impl SearchEngine {
                 None => continue,
             };
 
-            // Apply structural boost now that we have chunk metadata
+            // Compute Graph Boost
+            let mut graph_boost = 1.0;
+            if let Some(graph) = dep_graph {
+                if !chunk.symbol_path.is_empty() {
+                    if let Ok(Some(sym)) = index.get_symbol_by_fqn(&chunk.symbol_path) {
+                        // Global Importance (In-degree): Highly depended upon modules get a slight score bump
+                        let indegree = graph.downstream(sym.id, 1).map(|v| v.len()).unwrap_or(0);
+                        graph_boost += 0.05 * ((indegree.min(20)) as f64);
+
+                        // Local Proximity: If this chunk is closely related to the anchor, give it a big boost
+                        if let Some(anchor) = anchor_symbol_id {
+                            if sym.id != anchor {
+                                // Shortest undirected / directed path surrogate: check both ways
+                                let dist_down = graph.distance(anchor, sym.id).ok().flatten();
+                                let dist_up = graph.distance(sym.id, anchor).ok().flatten();
+                                let dist = match (dist_down, dist_up) {
+                                    (Some(d1), Some(d2)) => std::cmp::min(d1, d2),
+                                    (Some(d), None) => d,
+                                    (None, Some(d)) => d,
+                                    (None, None) => usize::MAX,
+                                };
+
+                                if dist == 1 {
+                                    graph_boost += 0.3; // Very closely related!
+                                } else if dist == 2 {
+                                    graph_boost += 0.1; // Related
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Apply structural + graph boost
             let (boosted_score, struct_weight) =
-                Self::apply_structural_boost(scored.final_score, &chunk);
+                Self::apply_structural_boost(scored.final_score, &chunk, graph_boost);
 
             // Check token budget
             if total_tokens + chunk.token_count > self.token_budget {
@@ -245,12 +295,12 @@ impl SearchEngine {
         results
     }
 
-    /// Apply structural boosting once we have the actual chunk data.
+    /// Apply structural and graph boosts once we have the actual chunk data.
     /// Called during result assembly when chunks are fetched from the DB.
-    fn apply_structural_boost(score: f64, chunk: &Chunk) -> (f64, f64) {
+    fn apply_structural_boost(score: f64, chunk: &Chunk, graph_boost: f64) -> (f64, f64) {
         let struct_weight = chunk.kind.default_weight()
             * chunk.visibility.weight_multiplier();
-        let boosted = score * (0.4 + 0.6 * struct_weight);
+        let boosted = score * (0.4 + 0.6 * struct_weight) * graph_boost;
         (boosted, struct_weight)
     }
 
