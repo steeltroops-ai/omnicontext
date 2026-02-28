@@ -481,6 +481,11 @@ impl Engine {
         &self.index
     }
 
+    /// Get the repository root path.
+    pub fn repo_path(&self) -> &Path {
+        &self.config.repo_path
+    }
+
     /// Get a reference to the dependency graph.
     pub fn dep_graph(&self) -> &DependencyGraph {
         &self.dep_graph

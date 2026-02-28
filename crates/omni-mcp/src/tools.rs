@@ -197,19 +197,74 @@ impl OmniContextServer {
         &self,
         params: Parameters<GetFileSummaryParams>,
     ) -> Result<CallToolResult, McpError> {
-        let path = &params.0.path;
+        let path_str = &params.0.path;
         let engine = self.engine.lock().await;
         let index = engine.metadata_index();
-        let file_path = std::path::Path::new(path);
+        let repo_root = engine.repo_path();
 
-        match index.get_file_by_path(file_path) {
-            Ok(Some(file_info)) => {
+        // Helper: strip Windows UNC prefix for consistent comparison
+        fn normalize_path_str(s: &str) -> &str {
+            s.strip_prefix(r"\\?\").unwrap_or(s)
+        }
+
+        // Build candidate paths to try:
+        // 1. As given (relative path)
+        // 2. Joined with repo root (absolute)
+        // 3. Canonicalized versions of both
+        let file_path = std::path::Path::new(path_str);
+        let absolute_path = if file_path.is_relative() {
+            repo_root.join(file_path)
+        } else {
+            file_path.to_path_buf()
+        };
+
+        // Try exact match first, then normalized absolute path
+        let candidates = [
+            file_path.to_path_buf(),
+            absolute_path.clone(),
+        ];
+
+        let mut file_info = None;
+        for candidate in &candidates {
+            if let Ok(Some(info)) = index.get_file_by_path(candidate) {
+                file_info = Some(info);
+                break;
+            }
+            let candidate_str = candidate.to_string_lossy();
+            let normalized = normalize_path_str(&candidate_str);
+            let norm_path = std::path::Path::new(normalized);
+            if norm_path != candidate.as_path() {
+                if let Ok(Some(info)) = index.get_file_by_path(norm_path) {
+                    file_info = Some(info);
+                    break;
+                }
+            }
+        }
+
+        // Last resort: try canonicalization
+        if file_info.is_none() {
+            if let Ok(canonical) = absolute_path.canonicalize() {
+                if let Ok(Some(info)) = index.get_file_by_path(&canonical) {
+                    file_info = Some(info);
+                } else {
+                    let canon_str = canonical.to_string_lossy();
+                    let norm = normalize_path_str(&canon_str);
+                    let norm_path = std::path::Path::new(norm);
+                    if let Ok(Some(info)) = index.get_file_by_path(norm_path) {
+                        file_info = Some(info);
+                    }
+                }
+            }
+        }
+
+        match file_info {
+            Some(info) => {
                 let mut output = format!(
                     "## File: {}\n**Language**: {:?}\n**Size**: {} bytes\n\n",
-                    path, file_info.language, file_info.size_bytes
+                    path_str, info.language, info.size_bytes
                 );
 
-                match index.get_chunks_for_file(file_info.id) {
+                match index.get_chunks_for_file(info.id) {
                     Ok(chunks) => {
                         output.push_str(&format!("### Structure ({} chunks)\n\n", chunks.len()));
                         for chunk in &chunks {
@@ -232,10 +287,9 @@ impl OmniContextServer {
                 }
                 Ok(CallToolResult::success(vec![Content::text(output)]))
             }
-            Ok(None) => Ok(CallToolResult::success(vec![Content::text(
-                format!("File not found in index: '{}'", path),
+            None => Ok(CallToolResult::success(vec![Content::text(
+                format!("File not found in index: '{}'. Try using relative path from repo root or ensure the file has been indexed.", path_str),
             )])),
-            Err(e) => Err(McpError::internal_error(format!("file lookup failed: {e}"), None)),
         }
     }
 
