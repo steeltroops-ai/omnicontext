@@ -33,7 +33,7 @@ export default function BlogPage() {
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-[#09090B] selection:bg-primary/30">
       {/* Navigation */}
-      <nav className="shrink-0 w-full h-14 flex items-center justify-center z-50 border-b border-white/5 bg-[#09090B]/50 backdrop-blur-xl">
+      <nav className="shrink-0 w-full h-14 pr-[10px] flex items-center justify-center z-50 border-b border-white/5 bg-[#09090B]/50 backdrop-blur-xl">
         <div className="flex items-center justify-between w-full max-w-[1200px] px-8 md:px-16">
           <Link
             href="/"
@@ -73,44 +73,46 @@ export default function BlogPage() {
         </div>
       </nav>
 
-      <main className="flex-1 overflow-y-auto custom-scrollbar pt-[120px] pb-[80px]">
-        <h1 className="text-4xl md:text-[56px] font-semibold text-white tracking-tighter mb-6 leading-tight">
-          Blog
-        </h1>
-        <p className="text-[18px] text-zinc-400 max-w-[600px] tracking-tight leading-snug mb-20">
-          Engineering insights, architecture decisions, and release notes from
-          the OmniContext team.
-        </p>
+      <main className="flex-1 overflow-y-scroll custom-scrollbar flex flex-col pt-[120px]">
+        <div className="flex-1 w-full max-w-[1200px] mx-auto px-8 md:px-16 pb-[80px]">
+          <h1 className="text-4xl md:text-[56px] font-semibold text-white tracking-tighter mb-6 leading-tight">
+            Blog
+          </h1>
+          <p className="text-[18px] text-zinc-400 max-w-[600px] tracking-tight leading-snug mb-20">
+            Engineering insights, architecture decisions, and release notes from
+            the OmniContext team.
+          </p>
 
-        <div className="flex flex-col gap-0 border-t border-white/5">
-          {posts.map((post, i) => (
-            <Link
-              key={i}
-              href={post.href}
-              className="flex flex-col md:flex-row md:items-center gap-4 md:gap-12 py-10 border-b border-white/5 group transition-colors hover:bg-white/[0.01] px-2 -mx-2 rounded-lg"
-            >
-              <div className="shrink-0 w-[140px]">
-                <div className="text-[12px] text-zinc-600 tracking-tight">
-                  {post.date}
+          <div className="flex flex-col gap-0 border-t border-white/5">
+            {posts.map((post, i) => (
+              <Link
+                key={i}
+                href={post.href}
+                className="flex flex-col md:flex-row md:items-center gap-4 md:gap-12 py-10 border-b border-white/5 group transition-colors hover:bg-white/[0.01] px-2 -mx-2 rounded-lg"
+              >
+                <div className="shrink-0 w-[140px]">
+                  <div className="text-[12px] text-zinc-600 tracking-tight">
+                    {post.date}
+                  </div>
+                  <div className="text-[10px] uppercase tracking-widest text-emerald-500 font-semibold mt-1">
+                    {post.tag}
+                  </div>
                 </div>
-                <div className="text-[10px] uppercase tracking-widest text-emerald-500 font-semibold mt-1">
-                  {post.tag}
+                <div className="flex-1 min-w-0">
+                  <h2 className="text-[20px] font-semibold text-zinc-100 tracking-tight mb-2 group-hover:text-white transition-colors flex items-center gap-2">
+                    {post.title}
+                    <ChevronRight
+                      size={16}
+                      className="text-zinc-600 group-hover:text-emerald-500 group-hover:translate-x-1 transition-all duration-300"
+                    />
+                  </h2>
+                  <p className="text-[14px] text-zinc-500 leading-relaxed tracking-tight line-clamp-2">
+                    {post.description}
+                  </p>
                 </div>
-              </div>
-              <div className="flex-1 min-w-0">
-                <h2 className="text-[20px] font-semibold text-zinc-100 tracking-tight mb-2 group-hover:text-white transition-colors flex items-center gap-2">
-                  {post.title}
-                  <ChevronRight
-                    size={16}
-                    className="text-zinc-600 group-hover:text-emerald-500 group-hover:translate-x-1 transition-all duration-300"
-                  />
-                </h2>
-                <p className="text-[14px] text-zinc-500 leading-relaxed tracking-tight line-clamp-2">
-                  {post.description}
-                </p>
-              </div>
-            </Link>
-          ))}
+              </Link>
+            ))}
+          </div>
         </div>
 
         {/* Footer */}

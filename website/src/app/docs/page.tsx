@@ -10,7 +10,7 @@ export default function DocsPage() {
   return (
     <div className="flex-1 flex overflow-hidden h-full">
       {/* Article Content */}
-      <div className="flex-1 overflow-y-auto custom-scrollbar px-10 md:px-20 py-16 flex justify-center bg-[#09090B]">
+      <div className="flex-1 overflow-y-scroll custom-scrollbar px-10 md:px-20 py-16 flex justify-center bg-[#09090B]">
         <article className="max-w-[760px] w-full">
           <div className="text-[12px] font-semibold tracking-wider uppercase text-zinc-600 mb-6">
             Getting Started

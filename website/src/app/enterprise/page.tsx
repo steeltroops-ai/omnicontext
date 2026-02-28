@@ -18,7 +18,7 @@ export default function EnterprisePage() {
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-[#09090B] selection:bg-primary/30">
       {/* Navigation */}
-      <nav className="shrink-0 w-full h-14 flex items-center justify-center z-50 border-b border-white/5 bg-[#09090B]/50 backdrop-blur-xl">
+      <nav className="shrink-0 w-full h-14 pr-[10px] flex items-center justify-center z-50 border-b border-white/5 bg-[#09090B]/50 backdrop-blur-xl">
         <div className="flex items-center justify-between w-full max-w-[1200px] px-8 md:px-16">
           <Link
             href="/"
@@ -61,7 +61,7 @@ export default function EnterprisePage() {
         </div>
       </nav>
 
-      <main className="flex-1 overflow-y-auto custom-scrollbar">
+      <main className="flex-1 overflow-y-scroll custom-scrollbar">
         {/* Hero */}
         <section className="pt-[160px] pb-[120px] px-8 md:px-16 max-w-[1200px] mx-auto w-full text-center relative">
           <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-[60%] w-[500px] h-[400px] bg-primary/5 blur-[120px] rounded-full pointer-events-none" />

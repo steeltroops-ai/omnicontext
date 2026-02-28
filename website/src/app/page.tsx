@@ -1,16 +1,40 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { Github, ChevronRight, ArrowUpRight } from "lucide-react";
+import {
+  Github,
+  ChevronRight,
+  ArrowUpRight,
+  Terminal,
+  Zap,
+} from "lucide-react";
 import Link from "next/link";
 import { siteConfig } from "@/config/site";
 import { Logo } from "@/components/icons";
+import { DottedSurface } from "@/components/ui/dotted-surface";
+import { useEffect, useState } from "react";
 
 export default function Home() {
+  const [scrolled, setScrolled] = useState(false);
+
+  useEffect(() => {
+    const main = document.getElementById("main-scroll");
+    if (!main) return;
+    const onScroll = () => setScrolled(main.scrollTop > 20);
+    main.addEventListener("scroll", onScroll);
+    return () => main.removeEventListener("scroll", onScroll);
+  }, []);
+
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-[#09090B] selection:bg-primary/30">
-      {/* Navigation - Apple Style Ultra-Minimal */}
-      <nav className="shrink-0 w-full h-14 flex items-center justify-center z-50 border-b border-white/5 bg-[#09090B]/50 backdrop-blur-xl">
+      {/* Navigation - Scroll-aware liquid glass */}
+      <nav
+        className={`fixed top-0 left-0 w-full h-14 flex items-center justify-center z-50 transition-all duration-500 ${
+          scrolled
+            ? "border-b border-white/[0.07] bg-black/30 backdrop-blur-2xl shadow-[0_4px_30px_rgba(0,0,0,0.3)]"
+            : "border-b border-transparent bg-transparent backdrop-blur-none"
+        }`}
+      >
         <div className="flex items-center justify-between w-full max-w-[1400px] px-8 md:px-16">
           <Link
             href="/"
@@ -69,211 +93,200 @@ export default function Home() {
         </div>
       </nav>
 
-      <main className="flex-1 overflow-y-auto custom-scrollbar flex flex-col pt-0">
-        <section className="flex-1 flex flex-col items-center justify-center text-center px-6 pt-[180px] pb-32 relative overflow-hidden">
+      <main
+        id="main-scroll"
+        className="flex-1 overflow-y-scroll custom-scrollbar flex flex-col pt-0"
+      >
+        <section className="relative w-full shrink-0 flex items-center min-h-[90vh] pt-[80px] pb-32 overflow-hidden">
+          <DottedSurface className="absolute inset-0 z-0 opacity-50" />
+
           {/* Subtle background glow */}
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-[60%] w-[600px] h-[500px] bg-primary/10 blur-[130px] rounded-full pointer-events-none" />
+          <div className="absolute top-[30%] left-[-10%] w-[600px] h-[500px] bg-primary/10 blur-[130px] rounded-full pointer-events-none" />
+          <div className="absolute bottom-[-10%] right-[-10%] w-[800px] h-[600px] bg-emerald-500/5 blur-[150px] rounded-full pointer-events-none" />
 
-          <motion.div
-            initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
-            className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-zinc-900/50 border border-white/5 text-[13px] font-medium text-zinc-300 mb-8 backdrop-blur-md cursor-pointer hover:bg-zinc-800/50 transition-colors"
-          >
-            <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
-            <span>v0.1.0 is now available</span>
-            <ChevronRight size={14} className="text-zinc-500" />
-          </motion.div>
-
-          <motion.h1
-            className="text-5xl md:text-7xl lg:text-[84px] font-semibold max-w-[900px] mx-auto tracking-tighter text-transparent bg-clip-text bg-gradient-to-b from-white to-white/70 mb-8 leading-[1.05]"
-            initial={{ opacity: 0, scale: 0.96, filter: "blur(10px)" }}
-            animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
-            transition={{ duration: 1.2, ease: [0.16, 1, 0.3, 1], delay: 0.1 }}
-          >
-            The context engine <br className="hidden md:block" /> your codebase
-            deserves.
-          </motion.h1>
-
-          <motion.p
-            className="text-[20px] md:text-[22px] text-zinc-400 max-w-2xl mx-auto mb-12 leading-snug tracking-tight"
-            initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1], delay: 0.2 }}
-          >
-            OmniContext represents a fundamental shift in AI coding. Universal
-            dependency awareness, written in Rust, and executed flawlessly on
-            your local machine.
-          </motion.p>
-
-          <motion.div
-            className="flex flex-col sm:flex-row gap-4 justify-center items-center w-full sm:w-auto"
-            initial={{ opacity: 0, y: 15 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1], delay: 0.3 }}
-          >
-            <button className="w-full sm:w-auto px-6 py-3 text-[15px] font-medium rounded-full bg-zinc-100 text-black hover:scale-105 active:scale-95 transition-all duration-300 shadow-[0_0_40px_rgba(255,255,255,0.1)]">
-              Install OmniContext CLI
-            </button>
-            <Link
-              href="/docs"
-              className="w-full sm:w-auto px-6 py-3 text-[15px] font-medium rounded-full bg-zinc-900 text-white border border-white/10 hover:bg-zinc-800 transition-colors duration-300"
-            >
-              Read Documentation
-            </Link>
-          </motion.div>
-
-          {/* Hero Visual (The Context Web) */}
-          <motion.div
-            className="mt-20 w-full max-w-[1000px] relative z-10 mx-auto h-[400px] flex items-center justify-center pointer-events-none"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ duration: 1.5, ease: [0.16, 1, 0.3, 1], delay: 0.4 }}
-          >
-            {/* Animated Web Elements */}
-            <div className="relative w-[300px] h-[300px] md:w-[400px] md:h-[400px]">
-              {/* Center Node: The Context Engine */}
+          <div className="relative z-10 flex flex-col lg:flex-row items-center justify-between px-8 md:px-16 w-full max-w-[1400px] mx-auto gap-16">
+            {/* Left Content */}
+            <div className="flex-1 flex flex-col items-start text-left max-w-[650px] mt-10 lg:mt-0">
               <motion.div
-                className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-20 h-20 rounded-full bg-[#0E0E11] border border-primary shadow-[0_0_50px_rgba(34,197,94,0.3)] flex items-center justify-center z-30"
-                animate={{
-                  boxShadow: [
-                    "0 0 30px rgba(34,197,94,0.2)",
-                    "0 0 60px rgba(34,197,94,0.5)",
-                    "0 0 30px rgba(34,197,94,0.2)",
-                  ],
-                }}
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.8, ease: [0.16, 1, 0.1, 1] }}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-zinc-900/50 border border-white/5 text-[13px] font-medium text-zinc-300 mb-8 backdrop-blur-md cursor-pointer hover:bg-zinc-800/50 transition-colors"
+              >
+                <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+                <span>v0.1.0 is now available</span>
+                <ChevronRight size={14} className="text-zinc-500" />
+              </motion.div>
+
+              <motion.h1
+                className="text-5xl md:text-7xl lg:text-[84px] font-semibold tracking-tighter text-transparent bg-clip-text bg-gradient-to-b from-white to-white/70 mb-8 leading-[1.05]"
+                initial={{ opacity: 0, scale: 0.96, filter: "blur(10px)" }}
+                animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
                 transition={{
-                  duration: 4,
-                  repeat: Infinity,
-                  ease: "easeInOut",
+                  duration: 1.2,
+                  ease: [0.16, 1, 0.1, 1],
+                  delay: 0.1,
                 }}
               >
-                <Logo
-                  className="text-primary"
-                  size={siteConfig.branding.sizes.feature}
-                />
-              </motion.div>
+                The context engine <br className="hidden md:block" /> your
+                codebase deserves.
+              </motion.h1>
 
-              {/* Orbital Rings representing the Web */}
-              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[240px] h-[240px] rounded-full border border-white/5" />
-              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[340px] h-[340px] rounded-full border border-dashed border-white/10 animate-[spin_40s_linear_infinite]" />
-              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[460px] h-[460px] rounded-full border border-white/5 opacity-50" />
-
-              {/* Connected Nodes forming the Web */}
-              <motion.div
-                className="absolute left-[-20%] top-[20%] w-[200px] bg-[#0E0E11] border border-white/10 rounded-lg p-3 flex flex-col gap-2 z-20 shadow-xl"
-                initial={{ x: -20, opacity: 0 }}
-                animate={{ x: 0, opacity: 1 }}
-                transition={{ delay: 0.6 }}
+              <motion.p
+                className="text-[20px] md:text-[22px] text-zinc-400 max-w-lg mb-12 leading-snug tracking-tight"
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{
+                  duration: 0.8,
+                  ease: [0.16, 1, 0.1, 1],
+                  delay: 0.2,
+                }}
               >
-                <div className="text-[10px] uppercase text-emerald-500 font-semibold tracking-wider">
-                  Semantic Vector Index
-                </div>
-                <div className="text-[12px] font-mono text-zinc-400">
-                  usearch HNSW (Dense)
-                </div>
-                <div className="text-[10px] text-zinc-500">
-                  all-MiniLM-L6-v2
-                </div>
-              </motion.div>
+                {siteConfig.name} represents a fundamental shift in AI coding.
+                Universal dependency awareness, written in Rust, and executed
+                flawlessly on your local machine.
+              </motion.p>
 
               <motion.div
-                className="absolute right-[-20%] top-[10%] w-[180px] bg-[#0E0E11] border border-white/10 rounded-lg p-3 flex flex-col gap-2 z-20 shadow-xl"
-                initial={{ x: 20, opacity: 0 }}
-                animate={{ x: 0, opacity: 1 }}
-                transition={{ delay: 0.8 }}
+                className="flex flex-col sm:flex-row gap-4 w-full sm:w-auto"
+                initial={{ opacity: 0, y: 15 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{
+                  duration: 0.8,
+                  ease: [0.16, 1, 0.1, 1],
+                  delay: 0.3,
+                }}
               >
-                <div className="text-[10px] uppercase text-indigo-400 font-semibold tracking-wider">
-                  Keyword Search
-                </div>
-                <div className="text-[12px] font-mono text-zinc-400">
-                  SQLite FTS5 (Sparse)
-                </div>
-                <div className="text-[10px] text-zinc-500">BM25 + TF-IDF</div>
+                <button className="w-full sm:w-auto px-6 py-3 text-[15px] font-medium rounded-full bg-zinc-100 text-black hover:scale-105 active:scale-95 transition-all duration-300 shadow-[0_0_40px_rgba(255,255,255,0.1)]">
+                  Install {siteConfig.name} CLI
+                </button>
+                <Link
+                  href="/docs"
+                  className="w-full sm:w-auto px-6 py-3 text-[15px] font-medium rounded-full bg-zinc-900 text-white border border-white/10 hover:bg-zinc-800 transition-colors duration-300 flex items-center justify-center"
+                >
+                  Read Documentation
+                </Link>
               </motion.div>
-
-              <motion.div
-                className="absolute left-[5%] bottom-[-10%] w-[220px] bg-[#0E0E11] border border-white/10 rounded-lg p-3 flex flex-col gap-2 z-20 shadow-xl"
-                initial={{ y: 20, opacity: 0 }}
-                animate={{ y: 0, opacity: 1 }}
-                transition={{ delay: 1.0 }}
-              >
-                <div className="text-[10px] uppercase text-yellow-500 font-semibold tracking-wider">
-                  Dependency Graph
-                </div>
-                <div className="text-[12px] font-mono text-zinc-400">
-                  petgraph RAM resident
-                </div>
-                <div className="text-[10px] text-zinc-500">
-                  Tree-sitter AST extraction
-                </div>
-              </motion.div>
-
-              <motion.div
-                className="absolute right-[0%] bottom-[-5%] w-[190px] bg-[#0E0E11] border border-white/10 rounded-lg p-3 flex flex-col gap-2 z-20 shadow-xl"
-                initial={{ y: 20, opacity: 0 }}
-                animate={{ y: 0, opacity: 1 }}
-                transition={{ delay: 1.2 }}
-              >
-                <div className="text-[10px] uppercase text-rose-400 font-semibold tracking-wider">
-                  Fusion Layer
-                </div>
-                <div className="text-[12px] font-mono text-zinc-400">
-                  Reciprocal Rank Fusion
-                </div>
-                <div className="text-[10px] text-zinc-500">
-                  RRF Scoring + Boosting
-                </div>
-              </motion.div>
-
-              {/* Visual connecting lines drawn using CSS gradients for the web effect */}
-              <svg
-                className="absolute inset-0 w-full h-full -z-10 overflow-visible"
-                xmlns="http://www.w3.org/2000/svg"
-              >
-                <motion.path
-                  d="M 200 200 L 0 80"
-                  stroke="rgba(255,255,255,0.15)"
-                  strokeWidth="1"
-                  strokeDasharray="4 4"
-                  initial={{ pathLength: 0 }}
-                  animate={{ pathLength: 1 }}
-                  transition={{ duration: 1, delay: 0.7 }}
-                />
-                <motion.path
-                  d="M 200 200 L 400 40"
-                  stroke="rgba(255,255,255,0.15)"
-                  strokeWidth="1"
-                  strokeDasharray="4 4"
-                  initial={{ pathLength: 0 }}
-                  animate={{ pathLength: 1 }}
-                  transition={{ duration: 1, delay: 0.9 }}
-                />
-                <motion.path
-                  d="M 200 200 L 80 400"
-                  stroke="rgba(255,255,255,0.15)"
-                  strokeWidth="1"
-                  strokeDasharray="4 4"
-                  initial={{ pathLength: 0 }}
-                  animate={{ pathLength: 1 }}
-                  transition={{ duration: 1, delay: 1.1 }}
-                />
-                <motion.path
-                  d="M 200 200 L 380 380"
-                  stroke="rgba(255,255,255,0.15)"
-                  strokeWidth="1"
-                  strokeDasharray="4 4"
-                  initial={{ pathLength: 0 }}
-                  animate={{ pathLength: 1 }}
-                  transition={{ duration: 1, delay: 1.3 }}
-                />
-              </svg>
             </div>
-          </motion.div>
+
+            {/* Right Hero Visual (Liquid Glass Terminal Mockup) */}
+            <motion.div
+              className="flex-[1.1] w-full relative z-10 perspective-[2000px] hidden md:block"
+              initial={{ opacity: 0, x: 40 }}
+              animate={{ opacity: 1, x: 0 }}
+              transition={{
+                duration: 1.2,
+                ease: [0.16, 1, 0.3, 1],
+                delay: 0.4,
+              }}
+            >
+              {/* Liquid Glass Container — fully transparent */}
+              <div
+                className="w-full relative rounded-2xl border border-white/[0.08] shadow-[0_8px_80px_rgba(0,0,0,0.6)] overflow-hidden flex flex-col backdrop-blur-[40px] group transform-gpu"
+                style={{ background: "rgba(255,255,255,0.03)" }}
+              >
+                {/* Internal Glows */}
+                <div className="absolute top-[-30%] left-[-10%] w-[60%] h-[60%] bg-emerald-500/15 blur-[120px] pointer-events-none rounded-full transition-opacity duration-700 opacity-70 group-hover:opacity-100" />
+                <div className="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] bg-indigo-500/10 blur-[100px] pointer-events-none rounded-full transition-opacity duration-700 opacity-50 group-hover:opacity-80" />
+
+                {/* Top shine edge */}
+                <div className="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-white/30 to-transparent pointer-events-none" />
+                {/* Side shine */}
+                <div className="absolute top-0 left-0 w-[1px] h-full bg-gradient-to-b from-white/20 to-transparent pointer-events-none" />
+
+                {/* Window Chrome — transparent with frost */}
+                <div
+                  className="w-full h-11 flex items-center justify-between px-5 relative z-20 border-b border-white/[0.06]"
+                  style={{ background: "rgba(255,255,255,0.04)" }}
+                >
+                  <div className="flex gap-2.5">
+                    <div className="w-2.5 h-2.5 rounded-full bg-[#FF5F56] border border-white/10 shadow-[0_0_10px_rgba(255,95,86,0.3)]" />
+                    <div className="w-2.5 h-2.5 rounded-full bg-[#FFBD2E] border border-white/10 shadow-[0_0_10px_rgba(255,189,46,0.3)]" />
+                    <div className="w-2.5 h-2.5 rounded-full bg-[#27C93F] border border-white/10 shadow-[0_0_10px_rgba(39,201,63,0.3)]" />
+                  </div>
+                  <div className="flex items-center gap-2 text-[10px] font-mono font-medium text-zinc-400 uppercase tracking-widest opacity-70">
+                    <Terminal size={10} />
+                    <span>Local Daemon</span>
+                  </div>
+                  <div className="w-[60px]" /> {/* Balance spacer */}
+                </div>
+
+                {/* Window Content */}
+                <div className="w-full p-6 md:p-8 text-left relative z-10 font-mono text-[13px] leading-[1.8] text-zinc-300 tracking-tight overflow-x-auto min-h-[420px]">
+                  {/* Command 1 */}
+                  <div className="flex items-center gap-3 mb-4 font-semibold text-zinc-200">
+                    <span className="text-emerald-500 shrink-0">❯</span>
+                    <span className="truncate">
+                      omnicontext index ./omnicontext
+                    </span>
+                  </div>
+
+                  <div className="pl-4 border-l-2 border-emerald-500/20 ml-[5px] flex flex-col gap-3 my-5 text-[12px]">
+                    <div className="flex flex-row items-center justify-between max-w-[380px]">
+                      <span className="text-zinc-500 font-bold uppercase tracking-widest w-[100px]">
+                        Indexing
+                      </span>
+                      <span className="text-zinc-400">
+                        Building semantic chunks...
+                      </span>
+                      <span className="text-emerald-500 font-bold opacity-80 text-right w-12">
+                        140ms
+                      </span>
+                    </div>
+                    <div className="flex flex-row items-center justify-between max-w-[380px]">
+                      <span className="text-zinc-500 font-bold uppercase tracking-widest w-[100px]">
+                        Embedding
+                      </span>
+                      <span className="text-zinc-400">
+                        Generating ONNX local vectors...
+                      </span>
+                      <span className="text-emerald-500 font-bold opacity-80 text-right w-12">
+                        1.2s
+                      </span>
+                    </div>
+                    <div className="flex flex-row items-center justify-between max-w-[380px]">
+                      <span className="text-zinc-500 font-bold uppercase tracking-widest w-[100px]">
+                        Graphing
+                      </span>
+                      <span className="text-zinc-400">
+                        Computing dependency graph...
+                      </span>
+                      <span className="text-emerald-500 font-bold opacity-80 text-right w-12">
+                        450ms
+                      </span>
+                    </div>
+
+                    <div className="text-primary font-semibold tracking-wide mt-3 flex items-center gap-2">
+                      <Zap size={14} className="fill-primary/20 text-primary" />
+                      Successfully indexed 42,104 files in 2.1s
+                    </div>
+                  </div>
+
+                  {/* Command 2 */}
+                  <div className="mt-8 flex items-center gap-3 mb-4 font-semibold text-zinc-200">
+                    <span className="text-emerald-500 shrink-0">❯</span>
+                    <span className="truncate">
+                      omnicontext mcp --repo ./omnicontext
+                    </span>
+                  </div>
+
+                  <div className="pl-4 border-l-2 border-indigo-500/20 ml-[5px] flex flex-col gap-2 my-5 text-[12px]">
+                    <div className="text-indigo-400 font-semibold tracking-wide flex items-center gap-3">
+                      <div className="w-2.5 h-2.5 rounded-full bg-indigo-500 animate-[pulse_2s_ease-in-out_infinite] shadow-[0_0_12px_rgba(99,102,241,0.6)]" />
+                      OmniContext MCP Server active on stdio
+                    </div>
+                    <div className="text-zinc-500 mt-1 flex items-center gap-2">
+                      Ready to serve advanced code intelligence to your agent.
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </div>
         </section>
 
         {/* Massive Graph Architecture Banner */}
-        <section className="py-[160px] px-8 md:px-16 w-full max-w-[1400px] mx-auto border-t border-white/5 relative flex flex-col items-center">
+        <section className="py-[160px] px-8 md:px-16 w-full max-w-[1200px] mx-auto border-t border-white/5 relative flex flex-col items-center">
           <h2 className="text-4xl md:text-[52px] font-semibold tracking-tighter text-white mb-6 text-center">
             The Context Engine Platform
           </h2>
@@ -392,7 +405,7 @@ export default function Home() {
         </section>
 
         {/* Feature Sections - Alternating Interactive Blocks */}
-        <section className="py-[160px] w-full max-w-[1400px] mx-auto flex flex-col gap-[200px] px-8 md:px-16 mb-20">
+        <section className="py-[160px] w-full max-w-[1200px] mx-auto flex flex-col gap-[200px] px-8 md:px-16 mb-20">
           {/* Block 1: Hybrid Retrieval */}
           <div className="flex flex-col md:flex-row items-stretch gap-16">
             <div className="flex-1 flex flex-col justify-center py-2">
@@ -749,7 +762,7 @@ export default function Home() {
 
         {/* Footer - Enterprise Grade */}
         <footer className="py-16 px-8 md:px-16 bg-[#09090B] border-t border-white/5">
-          <div className="max-w-[1400px] mx-auto">
+          <div className="max-w-[1200px] mx-auto">
             <div className="grid grid-cols-2 md:grid-cols-5 gap-12 mb-16">
               <div className="col-span-2 md:col-span-1">
                 <Link
