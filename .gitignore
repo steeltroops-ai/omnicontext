@@ -1,0 +1,25 @@
+# Build artifacts
+/target/
+debug/
+release/
+
+# ONNX models (tracked by git-lfs or downloaded at runtime)
+models/*.onnx
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# OmniContext index (generated at runtime)
+.omnicontext/
+
+# Environment
+.env
+.env.local

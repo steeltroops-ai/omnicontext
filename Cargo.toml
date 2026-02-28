@@ -1,0 +1,108 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/omni-core",
+    "crates/omni-mcp",
+    "crates/omni-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Steeltroops AI"]
+license = "Apache-2.0"
+repository = "https://github.com/steeltroops-ai/omnicontext"
+rust-version = "1.80"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Logging / tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Database
+rusqlite = { version = "0.33", features = ["bundled", "vtab", "functions"] }
+
+# AST parsing
+tree-sitter = "0.25"
+tree-sitter-python = "0.23"
+tree-sitter-typescript = "0.23"
+tree-sitter-rust = "0.23"
+tree-sitter-javascript = "0.23"
+tree-sitter-go = "0.23"
+
+# Embedding / ML
+ort = { version = "2.0.0-rc.11", features = ["download-binaries"] }
+
+# Vector index
+# usearch = "2"  # TODO: evaluate version compatibility during Phase 1
+
+# File watching
+notify = "7"
+notify-debouncer-mini = "0.5"
+
+# Git
+gix = { version = "0.72", default-features = false, features = ["basic", "index"] }
+
+# Dependency graph
+petgraph = "0.7"
+
+# Concurrent data structures
+dashmap = "6"
+
+# Configuration
+toml = "0.8"
+dirs = "6"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# HTTP (enterprise API)
+axum = "0.8"
+
+# Binary serialization
+bincode = "1"
+
+# Hashing
+sha2 = "0.10"
+hex = "0.4"
+
+# Tokenization
+tokenizers = "0.21"
+
+# Cross-crate testing
+tempfile = "3"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "warn"
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+opt-level = 3
+
+[profile.dev]
+opt-level = 0
+debug = true
+
+[profile.bench]
+lto = "thin"
+codegen-units = 1
