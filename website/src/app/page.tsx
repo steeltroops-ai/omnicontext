@@ -417,58 +417,57 @@ export default function Home() {
               Learn about Hybrid Search <ChevronRight size={14} />
             </Link>
           </div>
-          <div className="flex-[1.2] w-full flex flex-col justify-center">
-            <div className="w-full h-fit bg-gradient-to-br from-[#121215] to-[#0A0A0C] border border-white/10 rounded-[12px] shadow-2xl overflow-hidden relative group">
-              {/* MacOS Window Controls */}
-              <div className="bg-[#1C1C1E] border-b border-white/5 px-4 h-10 flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-[#FF5F56] border border-[#E0443E]" />
-                <div className="w-3 h-3 rounded-full bg-[#FFBD2E] border border-[#DEA123]" />
-                <div className="w-3 h-3 rounded-full bg-[#27C93F] border border-[#1AAB29]" />
-                <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-2 opacity-50">
-                  <Logo size={14} className="text-zinc-400" />
-                  <span className="text-[11px] font-medium font-sans text-zinc-400">
-                    hybrid-search — omni-core
-                  </span>
+          <div className="flex-[1.0] w-full relative flex items-stretch">
+            <div className="w-full h-full min-h-[320px] bg-gradient-to-b from-white/[0.03] to-transparent border border-white/10 rounded-2xl shadow-2xl overflow-hidden flex flex-col backdrop-blur-3xl group">
+              {/* Sleek Enterprise Header */}
+              <div className="flex items-center px-5 h-12 border-b border-white/5 bg-white/[0.02] relative">
+                <div className="flex gap-2.5">
+                  <div className="w-2.5 h-2.5 rounded-full bg-white/20" />
+                  <div className="w-2.5 h-2.5 rounded-full bg-white/20" />
+                  <div className="w-2.5 h-2.5 rounded-full bg-white/20" />
+                </div>
+                <div className="absolute left-1/2 -translate-x-1/2 text-[11px] font-medium text-zinc-500 font-mono tracking-wide">
+                  omni-core hybrid-search
                 </div>
               </div>
 
               {/* Terminal Content */}
-              <div className="p-6 font-mono text-[12px] text-zinc-400 flex flex-col gap-3 leading-[1.6]">
-                <div className="absolute top-10 right-0 w-64 h-64 bg-emerald-500/5 blur-[80px] pointer-events-none rounded-full" />
-                <div>
+              <div className="flex-1 p-8 font-mono text-[13px] text-zinc-400 flex flex-col justify-center gap-4 relative">
+                <div className="absolute top-10 right-0 w-64 h-64 bg-emerald-500/10 blur-[100px] pointer-events-none rounded-full" />
+                <div className="relative z-10">
                   <span className="text-zinc-500 font-bold">[1]</span> Executing
                   dense search (ONNX embedding)...{" "}
                   <span className="text-emerald-400">12ms</span>
                 </div>
-                <div>
+                <div className="relative z-10">
                   <span className="text-zinc-500 font-bold">[2]</span> Executing
                   sparse search (FTS5)...{" "}
                   <span className="text-emerald-400">4ms</span>
                 </div>
-                <div>
+                <div className="relative z-10">
                   <span className="text-zinc-500 font-bold">[3]</span> Applying
                   Reciprocal Rank Fusion...
                 </div>
-                <div className="pl-4 border-l border-white/10 ml-1 mt-2 text-zinc-300">
+                <div className="pl-4 border-l-2 border-white/10 ml-1 mt-2 text-zinc-300 relative z-10 flex flex-col gap-2">
                   <div>
-                    <span className="text-emerald-500">➜</span> Match 1:
+                    <span className="text-emerald-500 mr-2">➜</span>{" "}
                     src/middleware/auth.rs{" "}
-                    <span className="text-zinc-500 text-[10px] ml-1">
-                      (RRF Score: 0.0331)
+                    <span className="text-zinc-500 text-[11px] ml-2">
+                      (Score: 0.0331)
                     </span>
                   </div>
                   <div>
-                    <span className="text-emerald-500">➜</span> Match 2:
+                    <span className="text-emerald-500 mr-2">➜</span>{" "}
                     tests/auth_integration.rs{" "}
-                    <span className="text-zinc-500 text-[10px] ml-1">
-                      (RRF Score: 0.0325)
+                    <span className="text-zinc-500 text-[11px] ml-2">
+                      (Score: 0.0325)
                     </span>
                   </div>
                   <div>
-                    <span className="text-emerald-500">➜</span> Match 3:
+                    <span className="text-emerald-500 mr-2">➜</span>{" "}
                     docs/api/authentication.md{" "}
-                    <span className="text-zinc-500 text-[10px] ml-1">
-                      (RRF Score: 0.0150)
+                    <span className="text-zinc-500 text-[11px] ml-2">
+                      (Score: 0.0150)
                     </span>
                   </div>
                 </div>
@@ -512,60 +511,60 @@ export default function Home() {
               Explore the Graph API <ChevronRight size={14} />
             </Link>
           </div>
-          <div className="flex-[1.2] w-full flex flex-col justify-center">
-            <div className="w-full h-fit bg-gradient-to-br from-[#0B0910] to-[#07050A] border border-blue-500/10 rounded-[12px] shadow-2xl overflow-hidden relative font-sans">
-              {/* MacOS Window Controls */}
-              <div className="bg-[#15121E] border-b border-white/5 px-4 h-10 flex items-center gap-2">
-                <div className="w-3 h-3 rounded-full bg-[#FF5F56] border border-[#E0443E]" />
-                <div className="w-3 h-3 rounded-full bg-[#FFBD2E] border border-[#DEA123]" />
-                <div className="w-3 h-3 rounded-full bg-[#27C93F] border border-[#1AAB29]" />
-                <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-2 opacity-50">
-                  <span className="text-[11px] font-medium text-zinc-400">
-                    petgraph — trace
-                  </span>
+          <div className="flex-[1.2] w-full relative flex items-stretch">
+            <div className="w-full h-full min-h-[320px] bg-gradient-to-b from-[#0e0c15] to-[#07050a] border border-indigo-500/20 rounded-2xl shadow-2xl overflow-hidden flex flex-col backdrop-blur-3xl group">
+              {/* Sleek Enterprise Header */}
+              <div className="flex flex-row items-center px-5 h-12 border-b border-indigo-500/10 bg-white/[0.01] relative">
+                <div className="flex gap-2.5">
+                  <div className="w-2.5 h-2.5 rounded-full bg-white/20" />
+                  <div className="w-2.5 h-2.5 rounded-full bg-white/20" />
+                  <div className="w-2.5 h-2.5 rounded-full bg-white/20" />
+                </div>
+                <div className="absolute left-1/2 -translate-x-1/2 text-[11px] font-medium text-indigo-400/50 font-mono tracking-wide">
+                  petgraph-trace
                 </div>
               </div>
 
               {/* Terminal Content */}
-              <div className="p-6 font-mono text-[12px] leading-[1.8] relative z-10">
-                <div className="absolute top-0 left-0 w-full h-32 bg-indigo-500/5 blur-[60px] pointer-events-none" />
-                <div className="text-blue-400 font-bold text-[13px] mb-2 tracking-tighter flex items-center gap-2">
-                  <span className="text-blue-500/50">❯</span> petgraph Traversal
+              <div className="flex-1 p-8 font-mono text-[13px] leading-[1.8] flex flex-col justify-center relative">
+                <div className="absolute top-0 left-0 w-full h-32 bg-indigo-500/10 blur-[100px] pointer-events-none" />
+                <div className="text-indigo-400 font-bold text-[14px] mb-4 tracking-tight flex items-center gap-2 relative z-10">
+                  <span className="text-indigo-500">❯</span> petgraph Traversal
                 </div>
-                <div className="text-zinc-400 mb-5 text-[11px] font-sans">
+                <div className="text-zinc-400 mb-6 text-[12px] font-sans relative z-10">
                   Tracing semantic dependencies for{" "}
-                  <code className="text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded font-mono text-[10px]">
+                  <code className="text-emerald-400 bg-emerald-500/10 px-2 py-1 rounded font-mono text-[11px] border border-emerald-500/20">
                     UserService::validate()
                   </code>
                 </div>
-                <div className="pl-3 border-l-2 border-indigo-500/30 text-zinc-300 mb-2 flex flex-col gap-2.5 text-[12px]">
+                <div className="pl-4 border-l-2 border-indigo-500/30 text-zinc-300 flex flex-col gap-3 text-[12px] relative z-10">
                   <div className="flex items-center gap-2">
-                    <span className="text-indigo-400/80">↳</span>
-                    <span className="text-zinc-500 text-[10px] w-12">
-                      (Call)
+                    <span className="text-indigo-400/80 mr-1">↳</span>
+                    <span className="text-zinc-600 text-[10px] w-14 uppercase tracking-widest">
+                      Call
                     </span>
                     <span className="text-zinc-200">auth::verify_token</span>
                   </div>
-                  <div className="flex items-center gap-2 pl-4">
-                    <span className="text-indigo-400/80">↳</span>
-                    <span className="text-zinc-500 text-[10px] w-12">
-                      (Import)
+                  <div className="flex items-center gap-2 pl-6">
+                    <span className="text-indigo-400/80 mr-1">↳</span>
+                    <span className="text-zinc-600 text-[10px] w-14 uppercase tracking-widest">
+                      Import
                     </span>
                     <span className="text-orange-300">
                       jsonwebtoken::decode
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className="text-indigo-400/80">↳</span>
-                    <span className="text-zinc-500 text-[10px] w-12">
-                      (Call)
+                    <span className="text-indigo-400/80 mr-1">↳</span>
+                    <span className="text-zinc-600 text-[10px] w-14 uppercase tracking-widest">
+                      Call
                     </span>
                     <span className="text-zinc-200">db::fetch_user</span>
                   </div>
-                  <div className="flex items-center gap-2 pl-4">
-                    <span className="text-indigo-400/80">↳</span>
-                    <span className="text-zinc-500 text-[10px] w-12">
-                      (Impl)
+                  <div className="flex items-center gap-2 pl-6">
+                    <span className="text-indigo-400/80 mr-1">↳</span>
+                    <span className="text-zinc-600 text-[10px] w-14 uppercase tracking-widest">
+                      Impl
                     </span>
                     <span className="text-sky-300">CacheManager::get</span>
                   </div>
@@ -610,33 +609,35 @@ export default function Home() {
               View MCP Configuration <ChevronRight size={14} />
             </Link>
           </div>
-          <div className="flex-[1.2] w-full flex flex-col justify-center">
+          <div className="flex-[1.2] w-full relative flex items-stretch">
             {/* VS Code / IDE Editor Mockup */}
-            <div className="w-full h-fit bg-[#18181B] border border-white/10 rounded-[12px] shadow-2xl overflow-hidden font-sans flex flex-col relative z-20">
+            <div className="w-full h-full min-h-[320px] bg-[#121214] border border-white/10 rounded-2xl shadow-2xl overflow-hidden font-sans flex flex-col backdrop-blur-3xl group">
               {/* Editor Tabs & Controls */}
-              <div className="bg-[#202024] border-b border-black/40 h-10 flex items-center pr-4 select-none">
-                <div className="flex items-center gap-2 px-4 h-full border-r border-black/40">
-                  <div className="w-3 h-3 rounded-full bg-[#FF5F56] border border-[#E0443E]" />
-                  <div className="w-3 h-3 rounded-full bg-[#FFBD2E] border border-[#DEA123]" />
-                  <div className="w-3 h-3 rounded-full bg-[#27C93F] border border-[#1AAB29]" />
+              <div className="flex items-center h-12 bg-[#1A1A1C] border-b border-black/50 select-none">
+                <div className="flex items-center gap-2.5 px-5 h-full border-r border-black/50">
+                  <div className="w-2.5 h-2.5 rounded-full bg-white/20" />
+                  <div className="w-2.5 h-2.5 rounded-full bg-white/20" />
+                  <div className="w-2.5 h-2.5 rounded-full bg-white/20" />
                 </div>
                 {/* Active Tab */}
-                <div className="px-4 h-full flex items-center gap-2 bg-[#18181B] border-r border-black/40 relative">
-                  <div className="absolute top-0 left-0 w-full h-[1px] bg-emerald-500" />
-                  <span className="text-[#FFC107] text-[12px]">{"{ }"}</span>
-                  <span className="text-[11px] text-zinc-300 font-medium">
+                <div className="px-5 h-full flex items-center gap-2.5 bg-[#121214] border-r border-black/50 relative">
+                  <div className="absolute top-0 left-0 w-full h-[2px] bg-blue-500" />
+                  <span className="text-[#FFC107] text-[13px] font-mono">
+                    {"{ }"}
+                  </span>
+                  <span className="text-[12px] text-zinc-300 font-medium tracking-wide">
                     claude_desktop_config.json
                   </span>
-                  <div className="w-2 h-2 ml-4 rounded-full bg-zinc-600 hover:bg-zinc-400 transition-colors flex items-center justify-center text-[8px] cursor-pointer">
-                    ×
+                  <div className="w-4 h-4 ml-4 rounded flex items-center justify-center text-[10px] cursor-pointer text-zinc-500 hover:bg-white/10 transition-colors">
+                    ✕
                   </div>
                 </div>
               </div>
 
               {/* Editor Content Area */}
-              <div className="p-4 py-5 flex flex-row">
+              <div className="flex-1 p-6 flex flex-row relative">
                 {/* Line Numbers */}
-                <div className="flex flex-col text-[12px] font-mono text-zinc-600 pr-4 select-none border-r border-white/5 text-right opacity-50">
+                <div className="flex flex-col text-[13px] font-mono text-zinc-700 pr-5 select-none border-r border-white/5 text-right font-medium">
                   <span>1</span>
                   <span>2</span>
                   <span>3</span>
@@ -649,7 +650,7 @@ export default function Home() {
                 </div>
 
                 {/* Code Body */}
-                <div className="font-mono text-[12px] leading-[1.65] pl-4">
+                <div className="font-mono text-[13px] leading-[1.7] pl-5 flex flex-col justify-center w-full overflow-x-auto">
                   <div>
                     <span className="text-zinc-500">{"{"}</span>
                   </div>
