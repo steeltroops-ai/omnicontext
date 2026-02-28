@@ -23,7 +23,7 @@ export default function DocsLayout({
   return (
     <div className="flex flex-col md:flex-row h-screen bg-[#09090B] text-zinc-100 font-sans overflow-hidden selection:bg-primary/30">
       {/* Left Sidebar */}
-      <aside className="w-[280px] shrink-0 border-r border-white/5 flex flex-col bg-[#0E0E11] overflow-y-auto custom-scrollbar">
+      <aside className="w-[280px] shrink-0 border-r border-white/5 flex flex-col bg-[#0E0E11] overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         <div className="h-14 flex items-center px-8 font-semibold text-[14px] text-zinc-100 border-b border-white/5 shrink-0 bg-[#09090B]/50 backdrop-blur-xl sticky top-0 z-10">
           <Link
             href="/"

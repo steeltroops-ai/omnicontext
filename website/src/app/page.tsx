@@ -171,7 +171,7 @@ export default function Home() {
 
             {/* Right Hero Visual (Elegant Dark-Glass Terminal) */}
             <motion.div
-              className="flex-[1.1] w-full relative z-10 hidden lg:flex flex-col max-w-[580px]"
+              className="flex-[1.3] w-full relative z-10 hidden lg:flex flex-col"
               initial={{ opacity: 0, x: 40 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{
@@ -180,37 +180,39 @@ export default function Home() {
                 delay: 0.4,
               }}
             >
-              {/* Elegant Dark-Glass Terminal */}
+              {/* True liquid glass — near-zero opacity, minimal blur */}
               <div
                 className="w-full relative rounded-2xl overflow-hidden flex flex-col group transform-gpu"
                 style={{
-                  background: "rgba(6, 8, 10, 0.72)",
-                  border: "1px solid rgba(255,255,255,0.07)",
+                  background: "rgba(255, 255, 255, 0.02)",
+                  border: "1px solid rgba(255,255,255,0.08)",
                   boxShadow:
-                    "0 20px 60px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.06)",
-                  backdropFilter: "blur(12px) saturate(120%)",
-                  WebkitBackdropFilter: "blur(12px) saturate(120%)",
+                    "0 24px 80px rgba(0,0,0,0.55), 0 0 0 0.5px rgba(255,255,255,0.04) inset, 0 1px 0 rgba(255,255,255,0.07) inset",
+                  backdropFilter: "blur(8px)",
+                  WebkitBackdropFilter: "blur(8px)",
                 }}
               >
-                {/* Subtle internal ambient glows only */}
-                <div className="absolute top-0 left-[10%] w-[40%] h-[60%] bg-emerald-500/[0.06] blur-[80px] pointer-events-none rounded-full" />
-                <div className="absolute bottom-0 right-[5%] w-[40%] h-[50%] bg-indigo-500/[0.06] blur-[80px] pointer-events-none rounded-full" />
+                {/* Interior ambient color tints */}
+                <div className="absolute top-[-20%] left-[-5%] w-[55%] h-[55%] bg-emerald-500/[0.07] blur-[90px] pointer-events-none rounded-full" />
+                <div className="absolute bottom-[-15%] right-[0%] w-[45%] h-[50%] bg-indigo-500/[0.07] blur-[90px] pointer-events-none rounded-full" />
 
-                {/* Top specular highlight */}
-                <div className="absolute top-0 left-0 w-full h-px bg-gradient-to-r from-transparent via-white/[0.12] to-transparent pointer-events-none" />
+                {/* Top specular shine — glass refraction line */}
+                <div className="absolute top-0 left-0 w-full h-px bg-gradient-to-r from-transparent via-white/20 to-transparent pointer-events-none" />
+                {/* Left edge shine */}
+                <div className="absolute top-0 left-0 w-px h-full bg-gradient-to-b from-white/[0.12] to-transparent pointer-events-none" />
 
-                {/* Window Chrome */}
+                {/* Window Chrome — same liquid glass treatment */}
                 <div
                   className="w-full h-10 flex items-center justify-between px-5 relative z-20 border-b"
                   style={{
-                    borderColor: "rgba(255,255,255,0.05)",
-                    background: "rgba(255,255,255,0.025)",
+                    borderColor: "rgba(255,255,255,0.06)",
+                    background: "rgba(255,255,255,0.03)",
                   }}
                 >
                   <div className="flex gap-2">
-                    <div className="w-2.5 h-2.5 rounded-full bg-[#FF5F56]/80 shadow-[0_0_6px_rgba(255,95,86,0.25)]" />
-                    <div className="w-2.5 h-2.5 rounded-full bg-[#FFBD2E]/80 shadow-[0_0_6px_rgba(255,189,46,0.25)]" />
-                    <div className="w-2.5 h-2.5 rounded-full bg-[#27C93F]/80 shadow-[0_0_6px_rgba(39,201,63,0.25)]" />
+                    <div className="w-2.5 h-2.5 rounded-full bg-[#FF5F56]/80 shadow-[0_0_6px_rgba(255,95,86,0.3)]" />
+                    <div className="w-2.5 h-2.5 rounded-full bg-[#FFBD2E]/80 shadow-[0_0_6px_rgba(255,189,46,0.3)]" />
+                    <div className="w-2.5 h-2.5 rounded-full bg-[#27C93F]/80 shadow-[0_0_6px_rgba(39,201,63,0.3)]" />
                   </div>
                   <div className="flex items-center gap-1.5 text-[10px] font-mono font-medium text-zinc-500 uppercase tracking-widest">
                     <Terminal size={9} />
