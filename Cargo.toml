@@ -9,9 +9,13 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-authors = ["Mayank"]
+authors = ["Mayank <steeltroops.ai@gmail.com>"]
 license = "Apache-2.0"
 repository = "https://github.com/steeltroops-ai/omnicontext"
+homepage = "https://github.com/steeltroops-ai/omnicontext"
+readme = "README.md"
+keywords = ["code-search", "context-engine", "mcp", "ai-tools", "semantic-search"]
+categories = ["development-tools", "command-line-utilities", "text-processing"]
 rust-version = "1.80"
 
 [workspace.dependencies]

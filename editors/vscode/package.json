@@ -1,0 +1,83 @@
+{
+  "name": "omnicontext",
+  "displayName": "OmniContext",
+  "description": "Universal code context engine for AI coding agents -- semantic search, dependency graph, MCP integration",
+  "version": "0.1.0",
+  "publisher": "Mayank",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/steeltroops-ai/omnicontext"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Other"
+  ],
+  "keywords": [
+    "code search",
+    "context engine",
+    "MCP",
+    "AI",
+    "semantic search"
+  ],
+  "activationEvents": [
+    "workspaceContains:**/*.rs",
+    "workspaceContains:**/*.py",
+    "workspaceContains:**/*.ts",
+    "workspaceContains:**/*.go"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "omnicontext.index",
+        "title": "OmniContext: Index Workspace"
+      },
+      {
+        "command": "omnicontext.search",
+        "title": "OmniContext: Search"
+      },
+      {
+        "command": "omnicontext.status",
+        "title": "OmniContext: Show Status"
+      },
+      {
+        "command": "omnicontext.startMcp",
+        "title": "OmniContext: Start MCP Server"
+      }
+    ],
+    "configuration": {
+      "title": "OmniContext",
+      "properties": {
+        "omnicontext.binaryPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the omnicontext binary (auto-detected if empty)"
+        },
+        "omnicontext.autoIndex": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically index workspace on open"
+        },
+        "omnicontext.tokenBudget": {
+          "type": "number",
+          "default": 8192,
+          "description": "Token budget for search context window"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.3.0"
+  }
+}
