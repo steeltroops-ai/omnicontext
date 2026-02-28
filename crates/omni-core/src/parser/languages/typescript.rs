@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use crate::parser::{LanguageAnalyzer, StructuralElement};
-use crate::types::{ChunkKind, Visibility};
+use crate::types::{ChunkKind, DependencyKind, ImportStatement, Visibility};
 
 /// Analyzer for TypeScript source files.
 pub struct TypeScriptAnalyzer;
@@ -35,6 +35,17 @@ impl LanguageAnalyzer for TypeScriptAnalyzer {
         let root = tree.root_node();
         walk_ts_node(root, source, module_name, &[], &mut elements);
         elements
+    }
+
+    fn extract_imports(
+        &self,
+        tree: &tree_sitter::Tree,
+        source: &[u8],
+        _file_path: &Path,
+    ) -> Vec<ImportStatement> {
+        let mut imports = Vec::new();
+        collect_ts_imports(tree.root_node(), source, &mut imports);
+        imports
     }
 }
 
@@ -372,6 +383,121 @@ pub(crate) fn extract_variable_declarations(
                 doc_comment: extract_jsdoc(node, source),
                 references: Vec::new(),
             });
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Import extraction (shared TS/JS)
+// ---------------------------------------------------------------------------
+
+/// Collect ES6 import/export statements and CommonJS require() calls.
+pub(crate) fn collect_ts_imports(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    imports: &mut Vec<ImportStatement>,
+) {
+    let mut cursor = node.walk();
+
+    for child in node.children(&mut cursor) {
+        let line = child.start_position().row as u32 + 1;
+
+        match child.kind() {
+            // `import { Foo, Bar } from './module'`
+            // `import Foo from './module'`
+            // `import * as Foo from './module'`
+            "import_statement" => {
+                let source_node = child.child_by_field_name("source");
+                let module_path = source_node
+                    .map(|n| {
+                        let t = node_text(n, source);
+                        t.trim_matches(|c: char| c == '\'' || c == '"').to_string()
+                    })
+                    .unwrap_or_default();
+
+                if module_path.is_empty() {
+                    continue;
+                }
+
+                let mut names = Vec::new();
+                let mut inner = child.walk();
+                for import_child in child.children(&mut inner) {
+                    match import_child.kind() {
+                        "import_clause" => {
+                            collect_import_names(import_child, source, &mut names);
+                        }
+                        "identifier" => {
+                            // default import
+                            let name = node_text(import_child, source).to_string();
+                            if name != "import" && name != "from" {
+                                names.push(name);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                imports.push(ImportStatement {
+                    import_path: module_path,
+                    imported_names: names,
+                    line,
+                    kind: DependencyKind::Imports,
+                });
+            }
+            // `export { Foo } from './module'` (re-exports)
+            "export_statement" => {
+                let source_node = child.child_by_field_name("source");
+                if let Some(src_node) = source_node {
+                    let module_path = {
+                        let t = node_text(src_node, source);
+                        t.trim_matches(|c: char| c == '\'' || c == '"').to_string()
+                    };
+                    if !module_path.is_empty() {
+                        imports.push(ImportStatement {
+                            import_path: module_path,
+                            imported_names: vec![],
+                            line,
+                            kind: DependencyKind::Imports,
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Collect named imports from an import clause node.
+fn collect_import_names(
+    node: tree_sitter::Node<'_>,
+    source: &[u8],
+    names: &mut Vec<String>,
+) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            "identifier" => {
+                names.push(node_text(child, source).to_string());
+            }
+            "named_imports" => {
+                let mut inner = child.walk();
+                for spec in child.children(&mut inner) {
+                    if spec.kind() == "import_specifier" {
+                        if let Some(name_node) = spec.child_by_field_name("name") {
+                            names.push(node_text(name_node, source).to_string());
+                        }
+                    }
+                }
+            }
+            "namespace_import" => {
+                // `import * as X` -- push "*"
+                names.push("*".to_string());
+            }
+            _ => {
+                if child.child_count() > 0 {
+                    collect_import_names(child, source, names);
+                }
+            }
         }
     }
 }

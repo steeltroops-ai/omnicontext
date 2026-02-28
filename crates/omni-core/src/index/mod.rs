@@ -396,6 +396,30 @@ impl MetadataIndex {
         Ok(count as usize)
     }
 
+    /// Get the first symbol defined in a file (by line order).
+    ///
+    /// Used as the source node for import-based dependency edges.
+    pub fn get_first_symbol_for_file(&self, file_id: i64) -> OmniResult<Option<Symbol>> {
+        let result = self.conn.query_row(
+            "SELECT id, name, fqn, kind, file_id, line, chunk_id
+             FROM symbols WHERE file_id = ?1 ORDER BY line LIMIT 1",
+            params![file_id],
+            |row| {
+                Ok(Symbol {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    fqn: row.get(2)?,
+                    kind: parse_chunk_kind(&row.get::<_, String>(3)?),
+                    file_id: row.get(4)?,
+                    line: row.get(5)?,
+                    chunk_id: row.get(6)?,
+                })
+            },
+        ).optional()?;
+
+        Ok(result)
+    }
+
     // -----------------------------------------------------------------------
     // FTS5 keyword search
     // -----------------------------------------------------------------------
@@ -410,6 +434,10 @@ impl MetadataIndex {
     ) -> OmniResult<Vec<(i64, f64)>> {
         // FTS5 uses BM25 for relevance ranking.
         // We search across content, doc_comment, and symbol_path.
+        // Quote the query so FTS5 treats it as a phrase literal
+        // preventing syntax errors on characters like hyphens or colons.
+        let safe_query = format!("\"{}\"", query.replace('"', ""));
+
         let mut stmt = self.conn.prepare(
             "SELECT rowid, bm25(chunks_fts, 1.0, 0.5, 2.0) as score
              FROM chunks_fts
@@ -418,7 +446,7 @@ impl MetadataIndex {
              LIMIT ?2",
         )?;
 
-        let results = stmt.query_map(params![query, limit as i64], |row| {
+        let results = stmt.query_map(params![safe_query, limit as i64], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?))
         })?;
 

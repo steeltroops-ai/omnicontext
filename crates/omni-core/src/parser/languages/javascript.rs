@@ -6,6 +6,7 @@
 use std::path::Path;
 
 use crate::parser::{LanguageAnalyzer, StructuralElement};
+use crate::types::ImportStatement;
 
 /// Analyzer for JavaScript source files.
 pub struct JavaScriptAnalyzer;
@@ -35,6 +36,17 @@ impl LanguageAnalyzer for JavaScriptAnalyzer {
         // Reuse the TS walker -- JS is a subset of TS AST node types
         super::typescript::walk_ts_node(root, source, module_name, &[], &mut elements);
         elements
+    }
+
+    fn extract_imports(
+        &self,
+        tree: &tree_sitter::Tree,
+        source: &[u8],
+        _file_path: &Path,
+    ) -> Vec<ImportStatement> {
+        let mut imports = Vec::new();
+        super::typescript::collect_ts_imports(tree.root_node(), source, &mut imports);
+        imports
     }
 }
 

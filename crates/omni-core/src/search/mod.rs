@@ -61,12 +61,25 @@ impl SearchEngine {
         let query_type = analyze_query(query);
         let limit = limit.min(self.retrieval_limit);
 
+        // ---- Query expansion for NL queries ----
+        // Extract meaningful tokens for better keyword matching
+        let expanded_query = if query_type == QueryType::NaturalLanguage {
+            expand_query(query)
+        } else {
+            query.to_string()
+        };
+
         // ---- Signal 1: Keyword (FTS5) ----
-        let keyword_results = match index.keyword_search(query, self.retrieval_limit) {
+        let keyword_results = match index.keyword_search(&expanded_query, self.retrieval_limit) {
             Ok(results) => results,
             Err(e) => {
                 tracing::warn!(error = %e, "keyword search failed");
-                Vec::new()
+                // Fallback: try original query if expansion failed
+                if expanded_query != query {
+                    index.keyword_search(query, self.retrieval_limit).unwrap_or_default()
+                } else {
+                    Vec::new()
+                }
             }
         };
 
@@ -113,21 +126,21 @@ impl SearchEngine {
             &symbol_results,
         );
 
-        // ---- Build final results ----
+        // ---- Build final results with structural boosting ----
         let mut results = Vec::new();
         let mut total_tokens: u32 = 0;
 
-        for scored in fused.iter().take(limit) {
-            // Fetch the chunk from the index
+        for scored in fused.iter().take(limit * 2) {
             let chunk_id = scored.chunk_id;
 
-            // We need to find the chunk -- query from the database
-            // For now, look up chunks by file and filter
-            // In production, we'd have a direct chunk-by-id lookup
             let chunk = match self.get_chunk_by_id(index, chunk_id) {
                 Some(c) => c,
                 None => continue,
             };
+
+            // Apply structural boost now that we have chunk metadata
+            let (boosted_score, struct_weight) =
+                Self::apply_structural_boost(scored.final_score, &chunk);
 
             // Check token budget
             if total_tokens + chunk.token_count > self.token_budget {
@@ -139,13 +152,25 @@ impl SearchEngine {
             let file_path = self.get_file_path_for_chunk(index, &chunk)
                 .unwrap_or_default();
 
+            let mut breakdown = scored.breakdown.clone();
+            breakdown.structural_weight = struct_weight;
+
             results.push(SearchResult {
                 chunk,
                 file_path,
-                score: scored.final_score,
-                score_breakdown: scored.breakdown.clone(),
+                score: boosted_score,
+                score_breakdown: breakdown,
             });
         }
+
+        // Re-sort after structural boosting (order may have changed)
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        results.truncate(limit);
 
         Ok(results)
     }
@@ -201,9 +226,12 @@ impl SearchEngine {
             entry.breakdown.rrf_score += rank_score;
         }
 
-        // Compute final scores
+        // Compute final scores with structural weight boost
         let mut results: Vec<ScoredChunk> = scores.into_values().collect();
         for item in &mut results {
+            // Apply structural weight from chunk kind
+            // Chunks of more important structural types get boosted
+            item.breakdown.structural_weight = 1.0; // will be refined when chunk is fetched
             item.final_score = item.breakdown.rrf_score;
         }
 
@@ -215,6 +243,15 @@ impl SearchEngine {
         });
 
         results
+    }
+
+    /// Apply structural boosting once we have the actual chunk data.
+    /// Called during result assembly when chunks are fetched from the DB.
+    fn apply_structural_boost(score: f64, chunk: &Chunk) -> (f64, f64) {
+        let struct_weight = chunk.kind.default_weight()
+            * chunk.visibility.weight_multiplier();
+        let boosted = score * (0.4 + 0.6 * struct_weight);
+        (boosted, struct_weight)
     }
 
     /// Get a chunk by its database ID.
@@ -344,6 +381,47 @@ struct ScoredChunk {
     chunk_id: i64,
     breakdown: ScoreBreakdown,
     final_score: f64,
+}
+
+// ---------------------------------------------------------------------------
+// Query expansion
+// ---------------------------------------------------------------------------
+
+/// Stop words to strip from natural language queries for FTS5.
+const STOP_WORDS: &[&str] = &[
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "shall",
+    "should", "may", "might", "can", "could", "must", "to", "of", "in",
+    "for", "on", "with", "at", "by", "from", "as", "into", "through",
+    "during", "before", "after", "above", "below", "and", "but", "or",
+    "not", "no", "if", "then", "than", "that", "this", "these", "those",
+    "it", "its", "i", "me", "my", "we", "our", "you", "your", "he",
+    "she", "they", "them", "their", "what", "which", "who", "whom",
+    "how", "when", "where", "why", "all", "each", "every", "both",
+    "few", "more", "most", "other", "some", "such", "only", "own",
+    "same", "so", "very", "just", "about", "there", "here",
+    "find", "show", "get", "list", "explain", "describe",
+];
+
+/// Expand a natural language query into better FTS5 tokens.
+///
+/// Strips stop words and question marks, preserving content-bearing tokens
+/// that are more likely to match code identifiers and documentation.
+fn expand_query(query: &str) -> String {
+    let tokens: Vec<&str> = query
+        .split_whitespace()
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric() && c != '_'))
+        .filter(|w| !w.is_empty())
+        .filter(|w| !STOP_WORDS.contains(&w.to_lowercase().as_str()))
+        .collect();
+
+    if tokens.is_empty() {
+        // Fallback: return original query to avoid empty FTS5 query
+        return query.to_string();
+    }
+
+    // Join with OR for broader FTS5 matching
+    tokens.join(" OR ")
 }
 
 // ---------------------------------------------------------------------------

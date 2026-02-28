@@ -10,7 +10,7 @@
 use std::path::Path;
 
 use crate::parser::{LanguageAnalyzer, StructuralElement};
-use crate::types::{ChunkKind, Visibility};
+use crate::types::{ChunkKind, DependencyKind, ImportStatement, Visibility};
 
 /// Analyzer for Go source files.
 pub struct GoAnalyzer;
@@ -39,6 +39,49 @@ impl LanguageAnalyzer for GoAnalyzer {
         let root = tree.root_node();
         self.walk_node(root, source, module_name, &[], &mut elements);
         elements
+    }
+
+    fn extract_imports(
+        &self,
+        tree: &tree_sitter::Tree,
+        source: &[u8],
+        _file_path: &Path,
+    ) -> Vec<ImportStatement> {
+        let mut imports = Vec::new();
+        let root = tree.root_node();
+        let mut cursor = root.walk();
+
+        for child in root.children(&mut cursor) {
+            let line = child.start_position().row as u32 + 1;
+
+            match child.kind() {
+                // `import "fmt"` or `import ( "fmt" ; "os" )`
+                "import_declaration" => {
+                    let mut inner = child.walk();
+                    for spec in child.children(&mut inner) {
+                        if spec.kind() == "import_spec" || spec.kind() == "import_spec_list" {
+                            self.collect_import_specs(spec, source, &mut imports);
+                        } else if spec.kind() == "interpreted_string_literal" {
+                            // single import: `import "fmt"`
+                            let path = node_text(spec, source)
+                                .trim_matches('"')
+                                .to_string();
+                            if !path.is_empty() {
+                                imports.push(ImportStatement {
+                                    import_path: path,
+                                    imported_names: vec![],
+                                    line,
+                                    kind: DependencyKind::Imports,
+                                });
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        imports
     }
 }
 
@@ -251,6 +294,53 @@ impl GoAnalyzer {
                     doc_comment: None,
                     references: Vec::new(),
                 });
+            }
+        }
+    }
+
+    fn collect_import_specs(
+        &self,
+        node: tree_sitter::Node<'_>,
+        source: &[u8],
+        imports: &mut Vec<ImportStatement>,
+    ) {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "import_spec" {
+                let line = child.start_position().row as u32 + 1;
+                // Get the path (string literal)
+                if let Some(path_node) = child.child_by_field_name("path") {
+                    let path = node_text(path_node, source)
+                        .trim_matches('"')
+                        .to_string();
+                    // Get optional alias
+                    let alias = child.child_by_field_name("name")
+                        .map(|n| node_text(n, source).to_string());
+                    let names = alias.into_iter().collect();
+                    if !path.is_empty() {
+                        imports.push(ImportStatement {
+                            import_path: path,
+                            imported_names: names,
+                            line,
+                            kind: DependencyKind::Imports,
+                        });
+                    }
+                }
+            } else if child.kind() == "interpreted_string_literal" {
+                let line = child.start_position().row as u32 + 1;
+                let path = node_text(child, source)
+                    .trim_matches('"')
+                    .to_string();
+                if !path.is_empty() {
+                    imports.push(ImportStatement {
+                        import_path: path,
+                        imported_names: vec![],
+                        line,
+                        kind: DependencyKind::Imports,
+                    });
+                }
+            } else if child.child_count() > 0 {
+                self.collect_import_specs(child, source, imports);
             }
         }
     }

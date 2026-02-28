@@ -361,11 +361,77 @@ impl Engine {
             }
         }
 
+        // ---------------------------------------------------------------
+        // Step 6: Build dependency edges from import statements
+        // ---------------------------------------------------------------
+        let imports = parser::parse_imports(path, content.as_bytes(), language)
+            .unwrap_or_default();
+
+        if !imports.is_empty() {
+            // Use the first symbol of the file (or the file_id-based ID) as source
+            let file_source_id = self.index.get_first_symbol_for_file(file_id)
+                .unwrap_or(None)
+                .map(|s| s.id);
+
+            if let Some(source_id) = file_source_id {
+                for import in &imports {
+                    // Try to resolve each imported name to a symbol
+                    for name in &import.imported_names {
+                        if name == "*" {
+                            continue;
+                        }
+                        let target = self.index.search_symbols_by_name(name, 1)
+                            .ok()
+                            .and_then(|v| v.into_iter().next());
+
+                        if let Some(target_sym) = target {
+                            if target_sym.id != source_id {
+                                let edge = DependencyEdge {
+                                    source_id,
+                                    target_id: target_sym.id,
+                                    kind: DependencyKind::Imports,
+                                };
+                                if let Err(e) = self.index.insert_dependency(&edge) {
+                                    tracing::trace!(error = %e, "failed to insert import dep");
+                                }
+                                let _ = self.dep_graph.add_edge(&edge);
+                            }
+                        }
+                    }
+
+                    // Also try resolving the import path itself as a module symbol
+                    let target = self.index.get_symbol_by_fqn(&import.import_path)
+                        .ok()
+                        .flatten()
+                        .or_else(|| {
+                            self.index.search_symbols_by_name(&import.import_path, 1)
+                                .ok()
+                                .and_then(|v| v.into_iter().next())
+                        });
+
+                    if let Some(target_sym) = target {
+                        if target_sym.id != source_id {
+                            let edge = DependencyEdge {
+                                source_id,
+                                target_id: target_sym.id,
+                                kind: import.kind,
+                            };
+                            if let Err(e) = self.index.insert_dependency(&edge) {
+                                tracing::trace!(error = %e, "failed to insert import dep");
+                            }
+                            let _ = self.dep_graph.add_edge(&edge);
+                        }
+                    }
+                }
+            }
+        }
+
         tracing::debug!(
             path = %path.display(),
             chunks = stats.chunks,
             symbols = stats.symbols,
             embeddings = stats.embeddings,
+            imports = imports.len(),
             "file processed"
         );
 
