@@ -192,6 +192,233 @@ impl DependencyGraph {
             inner.symbol_to_node.clear();
         }
     }
+
+    /// Get the in-degree (number of incoming edges) for a symbol.
+    ///
+    /// High in-degree means many other symbols depend on this one --
+    /// it is structurally important (e.g., a core utility function).
+    pub fn in_degree(&self, symbol_id: i64) -> usize {
+        self.inner
+            .read()
+            .ok()
+            .and_then(|inner| {
+                inner.symbol_to_node.get(&symbol_id).map(|&node| {
+                    inner.graph.neighbors_directed(node, Direction::Incoming).count()
+                })
+            })
+            .unwrap_or(0)
+    }
+
+    /// Resolve an import statement to a target symbol ID.
+    ///
+    /// Multi-strategy resolution:
+    /// 1. Exact FQN match (e.g., `crate::config::Config`)
+    /// 2. FQN suffix match (e.g., `config::Config` matches `crate::config::Config`)
+    /// 3. Name-only fallback with shortest FQN preference
+    ///
+    /// Returns `None` if the import cannot be resolved.
+    pub fn resolve_import(
+        index: &crate::index::MetadataIndex,
+        import_path: &str,
+        imported_name: &str,
+    ) -> Option<i64> {
+        // Strategy 1: Exact FQN match
+        // Try: import_path::imported_name (e.g., "crate::config" + "Config" -> "crate::config::Config")
+        let fqn_candidate = if import_path.is_empty() {
+            imported_name.to_string()
+        } else {
+            format!("{import_path}::{imported_name}")
+        };
+
+        if let Ok(Some(sym)) = index.get_symbol_by_fqn(&fqn_candidate) {
+            return Some(sym.id);
+        }
+
+        // Also try with dot separator (Python/TS style)
+        let fqn_dot = if import_path.is_empty() {
+            imported_name.to_string()
+        } else {
+            format!("{import_path}.{imported_name}")
+        };
+        if let Ok(Some(sym)) = index.get_symbol_by_fqn(&fqn_dot) {
+            return Some(sym.id);
+        }
+
+        // Strategy 2: FQN suffix match
+        // Try matching any symbol whose FQN ends with the import path
+        let suffix = if imported_name.is_empty() {
+            import_path.to_string()
+        } else {
+            format!("::{imported_name}")
+        };
+        if let Ok(matches) = index.search_symbols_by_fqn_suffix(&suffix, 5) {
+            if matches.len() == 1 {
+                return Some(matches[0].id);
+            }
+            // If multiple matches, prefer the one whose FQN contains the import path
+            if !import_path.is_empty() {
+                for m in &matches {
+                    if m.fqn.contains(import_path) {
+                        return Some(m.id);
+                    }
+                }
+            }
+            // Fall through to name-only if ambiguous
+            if !matches.is_empty() {
+                return Some(matches[0].id);
+            }
+        }
+
+        // Strategy 3: Name-only fallback (shortest FQN wins)
+        if let Ok(matches) = index.search_symbols_by_name(imported_name, 5) {
+            if !matches.is_empty() {
+                return Some(matches[0].id);
+            }
+        }
+
+        None
+    }
+
+    /// Build call graph edges from element references.
+    ///
+    /// For each symbol in the file, resolve its `references` to target symbols
+    /// and add `Calls` edges to the graph.
+    pub fn build_call_edges(
+        &self,
+        index: &crate::index::MetadataIndex,
+        file_id: i64,
+        elements: &[crate::parser::StructuralElement],
+    ) -> Vec<DependencyEdge> {
+        let mut edges = Vec::new();
+
+        // Get all symbols in this file
+        let file_symbols = match index.get_all_symbols_for_file(file_id) {
+            Ok(s) => s,
+            Err(_) => return edges,
+        };
+
+        // Build a map from element name -> symbol_id for this file
+        let mut name_to_symbol: HashMap<String, i64> = HashMap::new();
+        for sym in &file_symbols {
+            name_to_symbol.insert(sym.name.clone(), sym.id);
+        }
+
+        // For each element with references, try to resolve the references
+        for elem in elements {
+            if elem.references.is_empty() {
+                continue;
+            }
+
+            // Find the symbol_id for this element
+            let source_id = match name_to_symbol.get(&elem.name) {
+                Some(&id) => id,
+                None => continue,
+            };
+
+            for ref_name in &elem.references {
+                // Skip self-references
+                if ref_name == &elem.name {
+                    continue;
+                }
+
+                // Try to resolve: first check local file symbols, then global
+                let target_id = if let Some(&local_id) = name_to_symbol.get(ref_name) {
+                    if local_id != source_id { Some(local_id) } else { None }
+                } else {
+                    // Global resolution via index
+                    index.search_symbols_by_name(ref_name, 1)
+                        .ok()
+                        .and_then(|v| v.into_iter().next())
+                        .map(|s| s.id)
+                };
+
+                if let Some(target) = target_id {
+                    let edge = DependencyEdge {
+                        source_id,
+                        target_id: target,
+                        kind: DependencyKind::Calls,
+                    };
+                    edges.push(edge.clone());
+                    let _ = self.add_edge(&edge);
+                }
+            }
+        }
+
+        edges
+    }
+
+    /// Build type hierarchy edges (Extends, Implements) from element structure.
+    pub fn build_type_edges(
+        &self,
+        index: &crate::index::MetadataIndex,
+        file_id: i64,
+        elements: &[crate::parser::StructuralElement],
+    ) -> Vec<DependencyEdge> {
+        let mut edges = Vec::new();
+
+        let file_symbols = match index.get_all_symbols_for_file(file_id) {
+            Ok(s) => s,
+            Err(_) => return edges,
+        };
+
+        let mut name_to_symbol: HashMap<String, i64> = HashMap::new();
+        for sym in &file_symbols {
+            name_to_symbol.insert(sym.name.clone(), sym.id);
+        }
+
+        for elem in elements {
+            if elem.extends.is_empty() && elem.implements.is_empty() {
+                continue;
+            }
+
+            let source_id = match name_to_symbol.get(&elem.name) {
+                Some(&id) => id,
+                None => continue,
+            };
+
+            for type_name in &elem.extends {
+                let target_id = name_to_symbol.get(type_name).copied()
+                    .or_else(|| {
+                        index.search_symbols_by_name(type_name, 1)
+                            .ok()
+                            .and_then(|v| v.into_iter().next())
+                            .map(|s| s.id)
+                    });
+
+                if let Some(target) = target_id {
+                    let edge = DependencyEdge {
+                        source_id,
+                        target_id: target,
+                        kind: DependencyKind::Extends,
+                    };
+                    edges.push(edge.clone());
+                    let _ = self.add_edge(&edge);
+                }
+            }
+
+            for type_name in &elem.implements {
+                let target_id = name_to_symbol.get(type_name).copied()
+                    .or_else(|| {
+                        index.search_symbols_by_name(type_name, 1)
+                            .ok()
+                            .and_then(|v| v.into_iter().next())
+                            .map(|s| s.id)
+                    });
+
+                if let Some(target) = target_id {
+                    let edge = DependencyEdge {
+                        source_id,
+                        target_id: target,
+                        kind: DependencyKind::Implements,
+                    };
+                    edges.push(edge.clone());
+                    let _ = self.add_edge(&edge);
+                }
+            }
+        }
+
+        edges
+    }
 }
 
 impl Default for DependencyGraph {

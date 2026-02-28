@@ -167,6 +167,8 @@ impl GoAnalyzer {
             content: node_text(node, source).to_string(),
             doc_comment,
             references: Vec::new(),
+                extends: Vec::new(),
+                implements: Vec::new(),
         })
     }
 
@@ -214,6 +216,8 @@ impl GoAnalyzer {
             content: node_text(node, source).to_string(),
             doc_comment,
             references: Vec::new(),
+                extends: Vec::new(),
+                implements: Vec::new(),
         })
     }
 
@@ -257,6 +261,8 @@ impl GoAnalyzer {
                     content: node_text(node, source).to_string(),
                     doc_comment,
                     references: Vec::new(),
+                extends: Vec::new(),
+                implements: Vec::new(),
                 });
             }
         }
@@ -291,6 +297,8 @@ impl GoAnalyzer {
                     content: node_text(child, source).to_string(),
                     doc_comment: None,
                     references: Vec::new(),
+                extends: Vec::new(),
+                implements: Vec::new(),
                 });
             }
         }

@@ -44,6 +44,10 @@ pub struct StructuralElement {
     pub doc_comment: Option<String>,
     /// Symbols referenced within this element (for dependency extraction).
     pub references: Vec<String>,
+    /// Base class/struct this element extends.
+    pub extends: Vec<String>,
+    /// Interfaces/traits this element implements.
+    pub implements: Vec<String>,
 }
 
 /// Trait that each language analyzer must implement.

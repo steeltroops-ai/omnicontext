@@ -458,3 +458,67 @@ pub enum PipelineEvent {
     /// Shutdown the pipeline gracefully.
     Shutdown,
 }
+
+// ---------------------------------------------------------------------------
+// Context assembly types
+// ---------------------------------------------------------------------------
+
+/// A token-budget-aware context window assembled from search results.
+///
+/// Groups chunks by file and includes graph-neighbor chunks for
+/// maximum relevant context within a fixed token budget.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextWindow {
+    /// Ordered entries (highest score first).
+    pub entries: Vec<ContextEntry>,
+    /// Total tokens consumed.
+    pub total_tokens: u32,
+    /// Token budget this window was assembled for.
+    pub token_budget: u32,
+}
+
+/// A single entry in a context window.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextEntry {
+    /// File path of this chunk.
+    pub file_path: PathBuf,
+    /// The code chunk.
+    pub chunk: Chunk,
+    /// Relevance score.
+    pub score: f64,
+    /// Whether this chunk was included via graph traversal (not direct search match).
+    pub is_graph_neighbor: bool,
+}
+
+impl ContextWindow {
+    /// Render the context window as a single string suitable for LLM consumption.
+    pub fn render(&self) -> String {
+        let mut out = String::new();
+        let mut current_file: Option<&std::path::Path> = None;
+
+        for entry in &self.entries {
+            if current_file != Some(&entry.file_path) {
+                if current_file.is_some() {
+                    out.push_str("\n\n");
+                }
+                out.push_str(&format!("// === {} ===\n", entry.file_path.display()));
+                current_file = Some(&entry.file_path);
+            }
+            out.push_str(&entry.chunk.content);
+            out.push('\n');
+        }
+
+        out
+    }
+
+    /// Number of entries in this window.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether the window is empty.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+

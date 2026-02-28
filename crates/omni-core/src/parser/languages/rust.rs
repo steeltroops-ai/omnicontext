@@ -212,6 +212,8 @@ impl RustAnalyzer {
             content: node_text(node, source).to_string(),
             doc_comment,
             references,
+                extends: Vec::new(),
+                implements: Vec::new(),
         })
     }
 
@@ -241,6 +243,8 @@ impl RustAnalyzer {
             content: node_text(node, source).to_string(),
             doc_comment,
             references: Vec::new(),
+                extends: Vec::new(),
+                implements: Vec::new(),
         })
     }
 
@@ -276,6 +280,8 @@ impl RustAnalyzer {
             content: node_text(node, source).to_string(),
             doc_comment: None,
             references: Vec::new(),
+                extends: Vec::new(),
+                implements: Vec::new(),
         })
     }
 
@@ -304,6 +310,8 @@ impl RustAnalyzer {
             content: node_text(node, source).to_string(),
             doc_comment,
             references: Vec::new(),
+                extends: Vec::new(),
+                implements: Vec::new(),
         })
     }
 
@@ -337,6 +345,8 @@ impl RustAnalyzer {
             content: node_text(node, source).to_string(),
             doc_comment: extract_rust_doc_comment(node, source),
             references: Vec::new(),
+                extends: Vec::new(),
+                implements: Vec::new(),
         });
 
         // If inline module, recurse into body

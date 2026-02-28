@@ -273,6 +273,8 @@ impl PythonAnalyzer {
             content: node_text(node, source).to_string(),
             doc_comment,
             references,
+                extends: Vec::new(),
+                implements: Vec::new(),
         })
     }
 
@@ -313,6 +315,8 @@ impl PythonAnalyzer {
             content: node_text(node, source).to_string(),
             doc_comment,
             references,
+                extends: Vec::new(),
+                implements: Vec::new(),
         })
     }
 

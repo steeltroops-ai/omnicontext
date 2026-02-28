@@ -508,6 +508,8 @@ mod tests {
             content: content.to_string(),
             doc_comment: Some("A doc comment.".to_string()),
             references: vec!["foo".to_string()],
+            extends: Vec::new(),
+            implements: Vec::new(),
         }
     }
 

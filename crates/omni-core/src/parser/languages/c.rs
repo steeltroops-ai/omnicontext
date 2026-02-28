@@ -99,6 +99,8 @@ impl CAnalyzer {
                                 content: node_text(child, source).to_string(),
                                 doc_comment: doc,
                                 references: Vec::new(),
+                extends: Vec::new(),
+                implements: Vec::new(),
                             });
                         }
                     }
@@ -122,6 +124,8 @@ impl CAnalyzer {
                             content: node_text(child, source).to_string(),
                             doc_comment: doc,
                             references: Vec::new(),
+                extends: Vec::new(),
+                implements: Vec::new(),
                         });
                     }
                 }
@@ -142,6 +146,8 @@ impl CAnalyzer {
                                 content: text,
                                 doc_comment: None,
                                 references: Vec::new(),
+                extends: Vec::new(),
+                implements: Vec::new(),
                             });
                         }
                     }
@@ -159,6 +165,8 @@ impl CAnalyzer {
                             content: node_text(child, source).to_string(),
                             doc_comment: None,
                             references: Vec::new(),
+                extends: Vec::new(),
+                implements: Vec::new(),
                         });
                     }
                 }

@@ -111,6 +111,8 @@ impl CSharpAnalyzer {
                             content: node_text(child, source).to_string(),
                             doc_comment: None,
                             references: Vec::new(),
+                extends: Vec::new(),
+                implements: Vec::new(),
                         });
 
                         if let Some(body) = child.child_by_field_name("body") {
@@ -136,6 +138,8 @@ impl CSharpAnalyzer {
                             content: node_text(child, source).to_string(),
                             doc_comment: doc,
                             references: Vec::new(),
+                extends: Vec::new(),
+                implements: Vec::new(),
                         });
                     }
                 }
@@ -154,6 +158,8 @@ impl CSharpAnalyzer {
                             content: node_text(child, source).to_string(),
                             doc_comment: None,
                             references: Vec::new(),
+                extends: Vec::new(),
+                implements: Vec::new(),
                         });
                     }
                 }
@@ -191,6 +197,8 @@ impl CSharpAnalyzer {
                 content: node_text(node, source).to_string(),
                 doc_comment: doc,
                 references: Vec::new(),
+                extends: Vec::new(),
+                implements: Vec::new(),
             });
 
             // Recurse into body

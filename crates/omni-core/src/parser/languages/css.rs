@@ -66,6 +66,8 @@ impl LanguageAnalyzer for CssAnalyzer {
                                 content: node_text(child, source).to_string(),
                                 doc_comment: None,
                                 references: Vec::new(),
+                extends: Vec::new(),
+                implements: Vec::new(),
                             });
                         }
                     }
@@ -88,6 +90,8 @@ impl LanguageAnalyzer for CssAnalyzer {
                         content: node_text(child, source).to_string(),
                         doc_comment: None,
                         references: Vec::new(),
+                extends: Vec::new(),
+                implements: Vec::new(),
                     });
                 }
                 _ => {}

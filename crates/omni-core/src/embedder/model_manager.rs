@@ -325,7 +325,16 @@ mod tests {
     #[test]
     fn test_model_not_ready_when_missing() {
         // Non-existent path should not be ready
-        assert!(!is_model_ready(&DEFAULT_MODEL));
+        let dummy = ModelSpec {
+            name: "non-existent-model-xyz-123",
+            hf_repo: "fake/repo",
+            model_url: "http://fake.com",
+            tokenizer_url: "http://fake.com",
+            dimensions: 10,
+            max_seq_length: 10,
+            approx_size_bytes: 10,
+        };
+        assert!(!is_model_ready(&dummy));
     }
 
     #[test]

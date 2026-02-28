@@ -220,6 +220,8 @@ pub(crate) fn extract_function_decl(
         content: node_text(node, source).to_string(),
         doc_comment,
         references: Vec::new(),
+                extends: Vec::new(),
+                implements: Vec::new(),
     })
 }
 
@@ -264,6 +266,8 @@ pub(crate) fn extract_class_decl(
         content: node_text(node, source).to_string(),
         doc_comment,
         references,
+                extends: Vec::new(),
+                implements: Vec::new(),
     })
 }
 
@@ -290,6 +294,8 @@ fn extract_interface(
         content: node_text(node, source).to_string(),
         doc_comment,
         references: Vec::new(),
+                extends: Vec::new(),
+                implements: Vec::new(),
     })
 }
 
@@ -315,6 +321,8 @@ fn extract_type_alias(
         content: node_text(node, source).to_string(),
         doc_comment: None,
         references: Vec::new(),
+                extends: Vec::new(),
+                implements: Vec::new(),
     })
 }
 
@@ -341,6 +349,8 @@ pub(crate) fn extract_method(
         content: node_text(node, source).to_string(),
         doc_comment,
         references: Vec::new(),
+                extends: Vec::new(),
+                implements: Vec::new(),
     })
 }
 
@@ -380,6 +390,8 @@ pub(crate) fn extract_variable_declarations(
                 content: node_text(node, source).to_string(),
                 doc_comment: extract_jsdoc(node, source),
                 references: Vec::new(),
+                extends: Vec::new(),
+                implements: Vec::new(),
             });
         }
     }

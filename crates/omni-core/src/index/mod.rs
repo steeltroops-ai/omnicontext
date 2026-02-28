@@ -420,6 +420,66 @@ impl MetadataIndex {
         Ok(result)
     }
 
+    /// Search symbols whose FQN ends with the given suffix.
+    ///
+    /// This is the core of import resolution: `config::Config` should match
+    /// `crate::config::Config` or `my_module.config.Config`.
+    pub fn search_symbols_by_fqn_suffix(&self, suffix: &str, limit: usize) -> OmniResult<Vec<Symbol>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, fqn, kind, file_id, line, chunk_id
+             FROM symbols WHERE fqn LIKE ?1 ORDER BY length(fqn) ASC LIMIT ?2",
+        )?;
+
+        // Match FQNs ending with the suffix (preceded by :: or . or at start)
+        let pattern = format!("%{suffix}");
+        let symbols = stmt.query_map(params![pattern, limit as i64], |row| {
+            Ok(Symbol {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                fqn: row.get(2)?,
+                kind: parse_chunk_kind(&row.get::<_, String>(3)?),
+                file_id: row.get(4)?,
+                line: row.get(5)?,
+                chunk_id: row.get(6)?,
+            })
+        })?;
+
+        let mut result = Vec::new();
+        for s in symbols {
+            result.push(s?);
+        }
+        Ok(result)
+    }
+
+    /// Get ALL symbols defined in a file (ordered by line).
+    ///
+    /// Used for call graph construction -- we need to iterate all symbols
+    /// in a file to resolve their references.
+    pub fn get_all_symbols_for_file(&self, file_id: i64) -> OmniResult<Vec<Symbol>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, fqn, kind, file_id, line, chunk_id
+             FROM symbols WHERE file_id = ?1 ORDER BY line",
+        )?;
+
+        let symbols = stmt.query_map(params![file_id], |row| {
+            Ok(Symbol {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                fqn: row.get(2)?,
+                kind: parse_chunk_kind(&row.get::<_, String>(3)?),
+                file_id: row.get(4)?,
+                line: row.get(5)?,
+                chunk_id: row.get(6)?,
+            })
+        })?;
+
+        let mut result = Vec::new();
+        for s in symbols {
+            result.push(s?);
+        }
+        Ok(result)
+    }
+
     // -----------------------------------------------------------------------
     // FTS5 keyword search
     // -----------------------------------------------------------------------

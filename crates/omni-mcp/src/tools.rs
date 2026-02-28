@@ -71,6 +71,17 @@ pub struct FindPatternsParams {
     pub limit: Option<usize>,
 }
 
+/// Parameters for context_window tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ContextWindowParams {
+    /// Search query -- natural language or symbol name.
+    pub query: String,
+    /// Maximum number of search results to consider (default: 20).
+    pub limit: Option<usize>,
+    /// Token budget for the context window (default: engine config).
+    pub token_budget: Option<u32>,
+}
+
 // -----------------------------------------------------------------------
 // MCP Server
 // -----------------------------------------------------------------------
@@ -132,6 +143,59 @@ impl OmniContextServer {
                 Ok(CallToolResult::success(vec![Content::text(output)]))
             }
             Err(e) => Err(McpError::internal_error(format!("search failed: {e}"), None)),
+        }
+    }
+
+    #[tool(
+        name = "context_window",
+        description = "Get a pre-assembled, token-budget-aware context window for a query. Groups results by file, includes graph-neighbor definitions, and packs optimally within a token budget. Use this when you need maximum relevant context for understanding or modifying code."
+    )]
+    async fn context_window(
+        &self,
+        params: Parameters<ContextWindowParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let limit = params.0.limit.unwrap_or(20);
+        let query = &params.0.query;
+        let engine = self.engine.lock().await;
+
+        match engine.search_context_window(query, limit, params.0.token_budget) {
+            Ok(ctx) => {
+                if ctx.is_empty() {
+                    return Ok(CallToolResult::success(vec![Content::text(
+                        "No results found. Make sure the repository has been indexed."
+                    )]));
+                }
+
+                let mut output = format!(
+                    "# Context Window ({} entries, {}/{} tokens used)\n\n",
+                    ctx.len(), ctx.total_tokens, ctx.token_budget
+                );
+
+                // Group entries by file for cleaner output
+                let mut current_file: Option<&std::path::Path> = None;
+                for entry in &ctx.entries {
+                    if current_file != Some(&entry.file_path) {
+                        output.push_str(&format!(
+                            "\n## {}{}\n",
+                            entry.file_path.display(),
+                            if entry.is_graph_neighbor { " (graph neighbor)" } else { "" }
+                        ));
+                        current_file = Some(&entry.file_path);
+                    }
+
+                    output.push_str(&format!(
+                        "### {} ({:?}, score: {:.4}){}\n```\n{}\n```\n\n",
+                        entry.chunk.symbol_path,
+                        entry.chunk.kind,
+                        entry.score,
+                        if entry.is_graph_neighbor { " [via graph]" } else { "" },
+                        entry.chunk.content,
+                    ));
+                }
+
+                Ok(CallToolResult::success(vec![Content::text(output)]))
+            }
+            Err(e) => Err(McpError::internal_error(format!("context_window failed: {e}"), None)),
         }
     }
 

@@ -13,7 +13,7 @@
 
 use crate::embedder::Embedder;
 use crate::index::MetadataIndex;
-use crate::types::{Chunk, SearchResult, ScoreBreakdown};
+use crate::types::{Chunk, SearchResult, ScoreBreakdown, ContextWindow, ContextEntry};
 use crate::vector::VectorIndex;
 use crate::error::OmniResult;
 
@@ -397,6 +397,176 @@ impl SearchEngine {
         let semantic = semantic_rank.map_or(0.0, |r| 1.0 / (k + f64::from(r)));
         let keyword = keyword_rank.map_or(0.0, |r| 1.0 / (k + f64::from(r)));
         semantic + keyword
+    }
+
+    /// Assemble a token-budget-aware context window from search results.
+    ///
+    /// This is the Phase 3 context assembly engine. Instead of blindly
+    /// concatenating search results, it:
+    /// 1. Groups results by file
+    /// 2. For files with 3+ matching chunks, includes ALL chunks from that file
+    /// 3. Fetches 1-hop graph neighbors of anchor symbols
+    /// 4. Packs greedily by score until token budget is hit
+    ///
+    /// Returns a structured context window with file grouping.
+    pub fn assemble_context_window(
+        &self,
+        search_results: &[SearchResult],
+        index: &MetadataIndex,
+        dep_graph: Option<&crate::graph::DependencyGraph>,
+        token_budget: u32,
+    ) -> ContextWindow {
+        use std::collections::{HashMap, HashSet, BinaryHeap};
+        use std::cmp::Ordering;
+
+        // Priority queue entry
+        #[derive(Debug)]
+        struct ScoredEntry {
+            score: f64,
+            chunk: Chunk,
+            file_path: std::path::PathBuf,
+            is_neighbor: bool,
+        }
+
+        impl PartialEq for ScoredEntry {
+            fn eq(&self, other: &Self) -> bool { self.score == other.score }
+        }
+        impl Eq for ScoredEntry {}
+        impl PartialOrd for ScoredEntry {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                self.score.partial_cmp(&other.score)
+            }
+        }
+        impl Ord for ScoredEntry {
+            fn cmp(&self, other: &Self) -> Ordering {
+                self.partial_cmp(other).unwrap_or(Ordering::Equal)
+            }
+        }
+
+        let mut heap: BinaryHeap<ScoredEntry> = BinaryHeap::new();
+        let mut seen_chunk_ids: HashSet<i64> = HashSet::new();
+
+        // Step 1: Group search results by file
+        let mut file_groups: HashMap<i64, Vec<&SearchResult>> = HashMap::new();
+        for result in search_results {
+            file_groups.entry(result.chunk.file_id)
+                .or_default()
+                .push(result);
+        }
+
+        // Step 2: For files with 3+ matches, include ALL chunks from that file
+        for (&file_id, results) in &file_groups {
+            if results.len() >= 3 {
+                // This file is highly relevant -- include all its chunks
+                if let Ok(all_chunks) = index.get_chunks_for_file(file_id) {
+                    let file_path = results[0].file_path.clone();
+                    let avg_score = results.iter().map(|r| r.score).sum::<f64>() / results.len() as f64;
+                    for chunk in all_chunks {
+                        if !seen_chunk_ids.contains(&chunk.id) {
+                            seen_chunk_ids.insert(chunk.id);
+                            heap.push(ScoredEntry {
+                                score: avg_score * 0.9, // slight discount for non-matched chunks
+                                chunk,
+                                file_path: file_path.clone(),
+                                is_neighbor: false,
+                            });
+                        }
+                    }
+                }
+            } else {
+                // Include only the matched chunks
+                for result in results {
+                    if !seen_chunk_ids.contains(&result.chunk.id) {
+                        seen_chunk_ids.insert(result.chunk.id);
+                        heap.push(ScoredEntry {
+                            score: result.score,
+                            chunk: result.chunk.clone(),
+                            file_path: result.file_path.clone(),
+                            is_neighbor: false,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Step 3: Fetch 1-hop graph neighbors of top-scored anchor symbols
+        if let Some(graph) = dep_graph {
+            for result in search_results.iter().take(3) {
+                if result.chunk.symbol_path.is_empty() {
+                    continue;
+                }
+                if let Ok(Some(sym)) = index.get_symbol_by_fqn(&result.chunk.symbol_path) {
+                    // Get upstream dependencies (what this symbol depends on)
+                    if let Ok(upstream) = graph.upstream(sym.id, 1) {
+                        for dep_id in upstream {
+                            if let Ok(Some(dep_sym)) = index.get_symbol_by_id(dep_id) {
+                                if let Some(chunk_id) = dep_sym.chunk_id {
+                                    if !seen_chunk_ids.contains(&chunk_id) {
+                                        if let Some(chunk) = self.get_chunk_by_id(index, chunk_id) {
+                                            let fp = self.get_file_path_for_chunk(index, &chunk)
+                                                .unwrap_or_default();
+                                            seen_chunk_ids.insert(chunk_id);
+                                            heap.push(ScoredEntry {
+                                                score: result.score * 0.5, // neighbor discount
+                                                chunk,
+                                                file_path: fp,
+                                                is_neighbor: true,
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // Get downstream dependencies (what depends on this)
+                    if let Ok(downstream) = graph.downstream(sym.id, 1) {
+                        for dep_id in downstream {
+                            if let Ok(Some(dep_sym)) = index.get_symbol_by_id(dep_id) {
+                                if let Some(chunk_id) = dep_sym.chunk_id {
+                                    if !seen_chunk_ids.contains(&chunk_id) {
+                                        if let Some(chunk) = self.get_chunk_by_id(index, chunk_id) {
+                                            let fp = self.get_file_path_for_chunk(index, &chunk)
+                                                .unwrap_or_default();
+                                            seen_chunk_ids.insert(chunk_id);
+                                            heap.push(ScoredEntry {
+                                                score: result.score * 0.4,
+                                                chunk,
+                                                file_path: fp,
+                                                is_neighbor: true,
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Step 4: Pack greedily by score until token budget is hit
+        let mut total_tokens: u32 = 0;
+        let mut entries: Vec<ContextEntry> = Vec::new();
+
+        while let Some(entry) = heap.pop() {
+            if total_tokens + entry.chunk.token_count > token_budget {
+                // Try to fit -- if this single chunk exceeds remaining budget, skip it
+                continue;
+            }
+            total_tokens += entry.chunk.token_count;
+            entries.push(ContextEntry {
+                file_path: entry.file_path,
+                chunk: entry.chunk,
+                score: entry.score,
+                is_graph_neighbor: entry.is_neighbor,
+            });
+        }
+
+        ContextWindow {
+            entries,
+            total_tokens,
+            token_budget,
+        }
     }
 }
 

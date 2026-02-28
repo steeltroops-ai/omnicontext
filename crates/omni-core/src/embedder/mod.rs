@@ -61,6 +61,17 @@ impl Embedder {
     /// already cached. On failure, returns Ok with the embedder in
     /// degraded mode (keyword-only search).
     pub fn new(config: &EmbeddingConfig) -> OmniResult<Self> {
+        // In test environments where ONNX might not be available or 
+        // we want to skip downloading completely, return a degraded embedder.
+        if std::env::var("OMNI_SKIP_MODEL_DOWNLOAD").is_ok() {
+            tracing::info!("OMNI_SKIP_MODEL_DOWNLOAD is set, skipping embedding model loading");
+            return Ok(Self {
+                config: config.clone(),
+                session: None,
+                tokenizer: None,
+            });
+        }
+
         // Resolve model spec and auto-download if needed
         let (model_path, tokenizer_path) = Self::resolve_model_files(config)?;
 

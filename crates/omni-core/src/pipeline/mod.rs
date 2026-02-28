@@ -363,29 +363,32 @@ impl Engine {
 
         // ---------------------------------------------------------------
         // Step 6: Build dependency edges from import statements
+        //         using the multi-strategy import resolution engine
         // ---------------------------------------------------------------
         if !imports.is_empty() {
-            // Use the first symbol of the file (or the file_id-based ID) as source
             let file_source_id = self.index.get_first_symbol_for_file(file_id)
                 .unwrap_or(None)
                 .map(|s| s.id);
 
             if let Some(source_id) = file_source_id {
                 for import in &imports {
-                    // Try to resolve each imported name to a symbol
                     for name in &import.imported_names {
                         if name == "*" {
                             continue;
                         }
-                        let target = self.index.search_symbols_by_name(name, 1)
-                            .ok()
-                            .and_then(|v| v.into_iter().next());
 
-                        if let Some(target_sym) = target {
-                            if target_sym.id != source_id {
+                        // Use multi-strategy resolution instead of naive name search
+                        let target_id = DependencyGraph::resolve_import(
+                            &self.index,
+                            &import.import_path,
+                            name,
+                        );
+
+                        if let Some(target) = target_id {
+                            if target != source_id {
                                 let edge = DependencyEdge {
                                     source_id,
-                                    target_id: target_sym.id,
+                                    target_id: target,
                                     kind: DependencyKind::Imports,
                                 };
                                 if let Err(e) = self.index.insert_dependency(&edge) {
@@ -396,32 +399,53 @@ impl Engine {
                         }
                     }
 
-                    // Also try resolving the import path itself as a module symbol
-                    let target = self.index.get_symbol_by_fqn(&import.import_path)
-                        .ok()
-                        .flatten()
-                        .or_else(|| {
-                            self.index.search_symbols_by_name(&import.import_path, 1)
-                                .ok()
-                                .and_then(|v| v.into_iter().next())
-                        });
+                    // Resolve the module path itself
+                    let target_id = DependencyGraph::resolve_import(
+                        &self.index,
+                        "",
+                        &import.import_path,
+                    );
 
-                    if let Some(target_sym) = target {
-                        if target_sym.id != source_id {
-                            let edge = DependencyEdge {
-                                source_id,
-                                target_id: target_sym.id,
-                                kind: import.kind,
-                            };
-                            if let Err(e) = self.index.insert_dependency(&edge) {
-                                tracing::trace!(error = %e, "failed to insert import dep");
+                    if let Some(target) = target_id {
+                        if let Some(source_id) = file_source_id {
+                            if target != source_id {
+                                let edge = DependencyEdge {
+                                    source_id,
+                                    target_id: target,
+                                    kind: import.kind,
+                                };
+                                if let Err(e) = self.index.insert_dependency(&edge) {
+                                    tracing::trace!(error = %e, "failed to insert import dep");
+                                }
+                                let _ = self.dep_graph.add_edge(&edge);
                             }
-                            let _ = self.dep_graph.add_edge(&edge);
                         }
                     }
                 }
             }
         }
+
+        // ---------------------------------------------------------------
+        // Step 7: Build call graph edges from element references
+        // ---------------------------------------------------------------
+        let call_edges = self.dep_graph.build_call_edges(&self.index, file_id, &elements);
+        for edge in &call_edges {
+            if let Err(e) = self.index.insert_dependency(edge) {
+                tracing::trace!(error = %e, "failed to insert call edge");
+            }
+        }
+        stats.call_edges = call_edges.len();
+
+        // ---------------------------------------------------------------
+        // Step 8: Build type hierarchy edges from element structures
+        // ---------------------------------------------------------------
+        let type_edges = self.dep_graph.build_type_edges(&self.index, file_id, &elements);
+        for edge in &type_edges {
+            if let Err(e) = self.index.insert_dependency(edge) {
+                tracing::trace!(error = %e, "failed to insert type edge");
+            }
+        }
+        // Let's reuse call_edges stat or add a new one? No, we'll just track it via the graph size later.
 
         tracing::debug!(
             path = %path.display(),
@@ -429,6 +453,7 @@ impl Engine {
             symbols = stats.symbols,
             embeddings = stats.embeddings,
             imports = imports.len(),
+            call_edges = stats.call_edges,
             "file processed"
         );
 
@@ -449,6 +474,30 @@ impl Engine {
             &self.embedder,
             Some(&self.dep_graph),
         )
+    }
+
+    /// Execute a search and assemble a token-budget-aware context window.
+    ///
+    /// This is the Phase 3 intelligent context assembly:
+    /// - Runs hybrid search
+    /// - Groups results by file
+    /// - Includes graph-neighbor chunks
+    /// - Packs optimally within token budget
+    pub fn search_context_window(
+        &self,
+        query: &str,
+        limit: usize,
+        token_budget: Option<u32>,
+    ) -> OmniResult<crate::types::ContextWindow> {
+        let results = self.search(query, limit)?;
+        let budget = token_budget.unwrap_or(self.config.search.token_budget);
+        let ctx = self.search_engine.assemble_context_window(
+            &results,
+            &self.index,
+            Some(&self.dep_graph),
+            budget,
+        );
+        Ok(ctx)
     }
 
     /// Get engine status information.
@@ -545,6 +594,7 @@ struct FileProcessStats {
     chunks: usize,
     symbols: usize,
     embeddings: usize,
+    call_edges: usize,
 }
 
 /// Compute a SHA-256 hash of file content for change detection.
@@ -559,6 +609,10 @@ fn compute_file_hash(content: &str) -> String {
 mod tests {
     use super::*;
 
+    fn setup() {
+        std::env::set_var("OMNI_SKIP_MODEL_DOWNLOAD", "1");
+    }
+
     #[test]
     fn test_compute_file_hash() {
         let hash1 = compute_file_hash("hello world");
@@ -571,6 +625,7 @@ mod tests {
 
     #[test]
     fn test_engine_creation() {
+        setup();
         let dir = tempfile::tempdir().expect("create temp dir");
         let config = Config::defaults(dir.path());
         let engine = Engine::with_config(config);
@@ -579,6 +634,7 @@ mod tests {
 
     #[test]
     fn test_engine_status() {
+        setup();
         let dir = tempfile::tempdir().expect("create temp dir");
         let config = Config::defaults(dir.path());
         let engine = Engine::with_config(config).expect("create engine");
@@ -590,6 +646,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_index_empty_directory() {
+        setup();
         let dir = tempfile::tempdir().expect("create temp dir");
         let config = Config::defaults(dir.path());
         let mut engine = Engine::with_config(config).expect("create engine");
@@ -600,6 +657,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_index_single_file() {
+        setup();
         let dir = tempfile::tempdir().expect("create temp dir");
         let root = dir.path();
 
@@ -625,6 +683,7 @@ mod tests {
 
     #[test]
     fn test_search_empty_index() {
+        setup();
         let dir = tempfile::tempdir().expect("create temp dir");
         let config = Config::defaults(dir.path());
         let engine = Engine::with_config(config).expect("create engine");
