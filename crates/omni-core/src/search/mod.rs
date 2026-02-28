@@ -129,7 +129,7 @@ impl SearchEngine {
 
         // ---- Identify Anchor for Proximity Boosting ----
         // We find the 'best' matched chunk that maps to a symbol
-        let anchor_symbol_id = if let Some(graph) = dep_graph {
+        let anchor_symbol_id = if let Some(_graph) = dep_graph {
             fused.iter()
                 .take(3) // Look at top 3 results
                 .find_map(|scored| {
@@ -220,9 +220,28 @@ impl SearchEngine {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        results.truncate(limit);
+        // ---- Deduplication: remove overlapping chunks from same file ----
+        // If two results cover the same file and their line ranges overlap by >50%,
+        // keep only the higher-scored one.
+        let mut deduped: Vec<SearchResult> = Vec::with_capacity(results.len());
+        for result in results {
+            let dominated = deduped.iter().any(|existing| {
+                existing.chunk.file_id == result.chunk.file_id
+                    && Self::line_overlap_ratio(
+                        existing.chunk.line_start,
+                        existing.chunk.line_end,
+                        result.chunk.line_start,
+                        result.chunk.line_end,
+                    ) > 0.5
+            });
+            if !dominated {
+                deduped.push(result);
+            }
+        }
 
-        Ok(results)
+        deduped.truncate(limit);
+
+        Ok(deduped)
     }
 
     /// Fuse multiple rank lists using Reciprocal Rank Fusion (RRF).
@@ -304,6 +323,27 @@ impl SearchEngine {
         (boosted, struct_weight)
     }
 
+    /// Compute the overlap ratio between two line ranges.
+    /// Returns intersection / min(len_a, len_b), so 1.0 means one range fully contains the other.
+    fn line_overlap_ratio(a_start: u32, a_end: u32, b_start: u32, b_end: u32) -> f64 {
+        let overlap_start = a_start.max(b_start);
+        let overlap_end = a_end.min(b_end);
+
+        if overlap_start > overlap_end {
+            return 0.0;
+        }
+
+        let intersection = (overlap_end - overlap_start + 1) as f64;
+        let len_a = (a_end - a_start + 1) as f64;
+        let len_b = (b_end - b_start + 1) as f64;
+        let min_len = len_a.min(len_b);
+
+        if min_len == 0.0 {
+            return 0.0;
+        }
+
+        intersection / min_len
+    }
     /// Get a chunk by its database ID.
     ///
     /// Uses a direct SQL query instead of the chunked file-based lookup.
@@ -455,7 +495,8 @@ const STOP_WORDS: &[&str] = &[
 
 /// Expand a natural language query into better FTS5 tokens.
 ///
-/// Strips stop words and question marks, preserving content-bearing tokens
+/// Strips stop words, splits code identifiers (snake_case, CamelCase,
+/// dot.paths, colon::paths), and preserves content-bearing tokens
 /// that are more likely to match code identifiers and documentation.
 fn expand_query(query: &str) -> String {
     let tokens: Vec<&str> = query
@@ -470,8 +511,80 @@ fn expand_query(query: &str) -> String {
         return query.to_string();
     }
 
+    // Split code identifiers into constituent words
+    let mut expanded: Vec<String> = Vec::new();
+    for token in &tokens {
+        // Always include the original token
+        expanded.push(token.to_string());
+
+        // Split on code delimiters and CamelCase
+        let sub_tokens = split_code_token(token);
+        for sub in sub_tokens {
+            let lower = sub.to_lowercase();
+            if lower.len() >= 2
+                && !STOP_WORDS.contains(&lower.as_str())
+                && !expanded.contains(&lower)
+            {
+                expanded.push(lower);
+            }
+        }
+    }
+
+    // Deduplicate while preserving order
+    let mut seen = std::collections::HashSet::new();
+    expanded.retain(|t| seen.insert(t.to_lowercase()));
+
     // Join with OR for broader FTS5 matching
-    tokens.join(" OR ")
+    expanded.join(" OR ")
+}
+
+/// Split a code token into constituent sub-words.
+///
+/// Handles:
+/// - `snake_case` -> ["snake", "case"]
+/// - `CamelCase` -> ["Camel", "Case"]
+/// - `HTTPServer` -> ["HTTP", "Server"]
+/// - `module::path` -> ["module", "path"]
+/// - `package.Class` -> ["package", "Class"]
+/// - `kebab-case-name` -> ["kebab", "case", "name"]
+fn split_code_token(token: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+
+    // First split on clear separators: _ . :: - /
+    for segment in token.split(|c: char| c == '_' || c == '.' || c == ':' || c == '-' || c == '/') {
+        if segment.is_empty() {
+            continue;
+        }
+
+        // Then split CamelCase within each segment
+        let bytes = segment.as_bytes();
+        let mut start = 0;
+        for i in 1..bytes.len() {
+            let cur = bytes[i] as char;
+            let prev = bytes[i - 1] as char;
+
+            // Split on case transitions: lowercase->UPPERCASE or UPPERCASE->UPPERCASE+lowercase
+            let boundary = (prev.is_lowercase() && cur.is_uppercase())
+                || (i + 1 < bytes.len()
+                    && prev.is_uppercase()
+                    && cur.is_uppercase()
+                    && (bytes[i + 1] as char).is_lowercase());
+
+            if boundary {
+                let part = &segment[start..i];
+                if !part.is_empty() {
+                    parts.push(part);
+                }
+                start = i;
+            }
+        }
+        let tail = &segment[start..];
+        if !tail.is_empty() {
+            parts.push(tail);
+        }
+    }
+
+    parts
 }
 
 // ---------------------------------------------------------------------------
@@ -603,5 +716,79 @@ mod tests {
         let engine = SearchEngine::new(60, 4000);
         assert_eq!(engine.rrf_k, 60);
         assert_eq!(engine.token_budget, 4000);
+    }
+
+    // -- Code token splitting tests --
+
+    #[test]
+    fn test_split_snake_case() {
+        let parts = split_code_token("process_file_hash");
+        assert_eq!(parts, vec!["process", "file", "hash"]);
+    }
+
+    #[test]
+    fn test_split_camel_case() {
+        let parts = split_code_token("SearchEngine");
+        assert_eq!(parts, vec!["Search", "Engine"]);
+    }
+
+    #[test]
+    fn test_split_http_server() {
+        let parts = split_code_token("HTTPServer");
+        assert_eq!(parts, vec!["HTTP", "Server"]);
+    }
+
+    #[test]
+    fn test_split_module_path() {
+        let parts = split_code_token("crate::parser::mod");
+        assert_eq!(parts, vec!["crate", "parser", "mod"]);
+    }
+
+    #[test]
+    fn test_split_dot_path() {
+        let parts = split_code_token("package.ClassName.method");
+        assert_eq!(parts, vec!["package", "Class", "Name", "method"]);
+    }
+
+    #[test]
+    fn test_split_single_word() {
+        let parts = split_code_token("authenticate");
+        assert_eq!(parts, vec!["authenticate"]);
+    }
+
+    // -- Line overlap ratio tests --
+
+    #[test]
+    fn test_overlap_full_containment() {
+        let ratio = SearchEngine::line_overlap_ratio(10, 20, 12, 18);
+        assert!((ratio - 1.0).abs() < 1e-6, "inner range fully contained");
+    }
+
+    #[test]
+    fn test_overlap_no_overlap() {
+        let ratio = SearchEngine::line_overlap_ratio(1, 10, 20, 30);
+        assert_eq!(ratio, 0.0);
+    }
+
+    #[test]
+    fn test_overlap_partial() {
+        let ratio = SearchEngine::line_overlap_ratio(1, 10, 5, 15);
+        // intersection = 5..10 = 6 lines. min(10, 11) = 10. 6/10 = 0.6
+        assert!(ratio > 0.5);
+    }
+
+    // -- Expand query with code splitting tests --
+
+    #[test]
+    fn test_expand_query_splits_identifier() {
+        let expanded = expand_query("processFileHash");
+        assert!(expanded.contains("process"), "should contain sub-word");
+        assert!(expanded.contains("File"), "should contain sub-word");
+    }
+
+    #[test]
+    fn test_expand_query_preserves_original() {
+        let expanded = expand_query("processFileHash");
+        assert!(expanded.contains("processFileHash"), "should keep original");
     }
 }
