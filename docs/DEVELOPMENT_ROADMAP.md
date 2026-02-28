@@ -19,7 +19,7 @@ This means you can work on the parser without touching the embedder.
 You can debug search without understanding the dependency graph.
 You can replace the vector index without changing anything else.
 
-```
+```text
   watcher --> parser --> chunker --> embedder --> index
                 |                                  |
                 v                                  v
@@ -306,7 +306,7 @@ You can replace the vector index without changing anything else.
 
 ## Development Order Summary
 
-```
+```text
 Phase 0  [DONE]     Scaffold, CI, docs
 Phase 1  [DONE]     Parser + Chunker (Python, TS/JS, Rust, Go)
 Phase 2  [DONE]     Embedder + Index + Vector + Search
