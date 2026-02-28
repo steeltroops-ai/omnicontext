@@ -247,14 +247,20 @@ impl OmniContextServer {
         let engine = self.engine.lock().await;
         match engine.status() {
             Ok(s) => {
-                let output = format!(
+                let mut output = format!(
                     "## OmniContext Status\n\n\
                      - **Repository**: {}\n- **Data dir**: {}\n- **Search mode**: {}\n\n\
                      ### Index Statistics\n\n\
-                     - Files: {}\n- Chunks: {}\n- Symbols: {}\n- Vectors: {}\n",
+                     - Files: {}\n- Chunks: {}\n- Symbols: {}\n- Vectors: {}\n\n\
+                     ### Dependency Graph\n\n\
+                     - Edges (persisted): {}\n- Graph nodes: {}\n- Graph edges: {}\n",
                     s.repo_path, s.data_dir, s.search_mode,
                     s.files_indexed, s.chunks_indexed, s.symbols_indexed, s.vectors_indexed,
+                    s.dep_edges, s.graph_nodes, s.graph_edges,
                 );
+                if s.has_cycles {
+                    output.push_str("\n> **Warning**: Circular dependencies detected in the graph.\n");
+                }
                 Ok(CallToolResult::success(vec![Content::text(output)]))
             }
             Err(e) => Err(McpError::internal_error(format!("status failed: {e}"), None)),
