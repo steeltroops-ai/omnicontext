@@ -187,7 +187,7 @@ export default function Home() {
 
       {/* Footer */}
       <footer className={styles.footer}>
-        <p>© 2026 OmniContext by SteelTroops. Built with Next.js and Bun.</p>
+        <p>© 2026 OmniContext by Mayank. Built with Next.js and Bun.</p>
         <div className={styles.socials}>
           <a
             href="https://github.com/steeltroops-ai/omnicontext"
