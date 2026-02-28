@@ -1,9 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { ChevronRight, Github, ArrowUpRight } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { siteConfig } from "@/config/site";
-import { Logo } from "@/components/icons";
+import { SiteNav } from "@/components/site-nav";
+import { SiteFooterMini } from "@/components/site-footer-mini";
 
 const posts = [
   {
@@ -31,56 +32,17 @@ const posts = [
 
 export default function BlogPage() {
   return (
-    <div className="flex flex-col h-screen overflow-hidden bg-[#09090B] selection:bg-primary/30">
-      {/* Navigation */}
-      <nav className="shrink-0 w-full h-14 pr-[10px] flex items-center justify-center z-50 border-b border-white/5 bg-[#09090B]/50 backdrop-blur-xl">
-        <div className="flex items-center justify-between w-full max-w-[1200px] px-8 md:px-16">
-          <Link
-            href="/"
-            className="flex items-center gap-2.5 font-semibold text-[15px] text-zinc-100 transition-opacity hover:opacity-80"
-          >
-            <Logo className="text-primary" size={22} />
-            <span>{siteConfig.name}</span>
-          </Link>
-          <div className="hidden md:flex items-center gap-8">
-            <Link
-              href="/docs"
-              className="text-[13px] font-medium text-zinc-400 hover:text-zinc-100 transition-colors"
-            >
-              Docs
-            </Link>
-            <Link
-              href="/blog"
-              className="text-[13px] font-medium text-zinc-100 transition-colors"
-            >
-              Blog
-            </Link>
-            <Link
-              href="/enterprise"
-              className="text-[13px] font-medium text-zinc-400 hover:text-zinc-100 transition-colors"
-            >
-              Enterprise
-            </Link>
-            <a
-              href={siteConfig.links.github}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-[13px] font-medium text-zinc-400 hover:text-zinc-100 transition-colors flex items-center gap-1"
-            >
-              GitHub <ArrowUpRight size={12} />
-            </a>
-          </div>
-        </div>
-      </nav>
+    <div className="flex flex-col min-h-screen bg-[#09090B] selection:bg-primary/30">
+      <SiteNav />
 
-      <main className="flex-1 overflow-y-scroll custom-scrollbar flex flex-col pt-[120px]">
-        <div className="flex-1 w-full max-w-[1200px] mx-auto px-8 md:px-16 pb-[80px]">
-          <h1 className="text-4xl md:text-[56px] font-semibold text-white tracking-tighter mb-6 leading-tight">
+      <main className="flex-1 flex flex-col pt-24 sm:pt-28">
+        <div className="w-full max-w-[1400px] mx-auto px-6 sm:px-8 md:px-16 pb-20">
+          <h1 className="text-4xl sm:text-5xl md:text-[56px] font-semibold text-white tracking-tighter mb-4 leading-tight">
             Blog
           </h1>
-          <p className="text-[18px] text-zinc-400 max-w-[600px] tracking-tight leading-snug mb-20">
+          <p className="text-[16px] sm:text-[18px] text-zinc-400 max-w-[560px] tracking-tight leading-snug mb-16">
             Engineering insights, architecture decisions, and release notes from
-            the OmniContext team.
+            the {siteConfig.name} team.
           </p>
 
           <div className="flex flex-col gap-0 border-t border-white/5">
@@ -88,9 +50,9 @@ export default function BlogPage() {
               <Link
                 key={i}
                 href={post.href}
-                className="flex flex-col md:flex-row md:items-center gap-4 md:gap-12 py-10 border-b border-white/5 group transition-colors hover:bg-white/[0.01] px-2 -mx-2 rounded-lg"
+                className="flex flex-col sm:flex-row sm:items-center gap-4 sm:gap-12 py-8 sm:py-10 border-b border-white/5 group transition-colors hover:bg-white/[0.01] px-2 -mx-2 rounded-lg"
               >
-                <div className="shrink-0 w-[140px]">
+                <div className="shrink-0 sm:w-[140px]">
                   <div className="text-[12px] text-zinc-600 tracking-tight">
                     {post.date}
                   </div>
@@ -99,11 +61,11 @@ export default function BlogPage() {
                   </div>
                 </div>
                 <div className="flex-1 min-w-0">
-                  <h2 className="text-[20px] font-semibold text-zinc-100 tracking-tight mb-2 group-hover:text-white transition-colors flex items-center gap-2">
-                    {post.title}
+                  <h2 className="text-[17px] sm:text-[20px] font-semibold text-zinc-100 tracking-tight mb-2 group-hover:text-white transition-colors flex items-center gap-2">
+                    <span>{post.title}</span>
                     <ChevronRight
                       size={16}
-                      className="text-zinc-600 group-hover:text-emerald-500 group-hover:translate-x-1 transition-all duration-300"
+                      className="text-zinc-600 group-hover:text-emerald-500 group-hover:translate-x-1 transition-all duration-300 shrink-0"
                     />
                   </h2>
                   <p className="text-[14px] text-zinc-500 leading-relaxed tracking-tight line-clamp-2">
@@ -115,58 +77,7 @@ export default function BlogPage() {
           </div>
         </div>
 
-        {/* Footer */}
-        <footer className="py-12 px-8 md:px-16 border-t border-white/5 bg-[#09090B] mt-auto">
-          <div className="max-w-[1200px] mx-auto flex flex-col md:flex-row items-center justify-between gap-6">
-            <Link
-              href="/"
-              className="flex items-center gap-2 font-semibold text-sm text-zinc-100"
-            >
-              <Logo
-                className="text-primary"
-                size={siteConfig.branding.sizes.footer}
-              />
-              <span>{siteConfig.name}</span>
-            </Link>
-            <div className="flex items-center gap-6 text-[13px] text-zinc-500">
-              <Link
-                href="/docs"
-                className="hover:text-zinc-200 transition-colors"
-              >
-                Docs
-              </Link>
-              <Link
-                href="/blog"
-                className="hover:text-zinc-200 transition-colors"
-              >
-                Blog
-              </Link>
-              <Link
-                href="/enterprise"
-                className="hover:text-zinc-200 transition-colors"
-              >
-                Enterprise
-              </Link>
-              <Link
-                href="/support"
-                className="hover:text-zinc-200 transition-colors"
-              >
-                Support
-              </Link>
-            </div>
-            <div className="flex items-center gap-4">
-              <a
-                href={siteConfig.links.github}
-                className="text-zinc-600 hover:text-zinc-300 transition-colors"
-              >
-                <Github size={18} />
-              </a>
-              <span className="text-[12px] text-zinc-600">
-                (c) 2026 {siteConfig.name}. Apache-2.0.
-              </span>
-            </div>
-          </div>
-        </footer>
+        <SiteFooterMini />
       </main>
     </div>
   );

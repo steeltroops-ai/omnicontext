@@ -1,97 +1,17 @@
 "use client";
 
 import { motion } from "framer-motion";
-import {
-  Github,
-  ChevronRight,
-  ArrowUpRight,
-  Terminal,
-  Zap,
-} from "lucide-react";
+import { ChevronRight, Terminal, Zap } from "lucide-react";
 import Link from "next/link";
 import { siteConfig } from "@/config/site";
-import { Logo } from "@/components/icons";
 import { DottedSurface } from "@/components/ui/dotted-surface";
-import { useEffect, useState } from "react";
+import { SiteNav } from "@/components/site-nav";
+import { SiteFooterFull } from "@/components/site-footer-full";
 
 export default function Home() {
-  const [scrolled, setScrolled] = useState(false);
-
-  useEffect(() => {
-    const main = document.getElementById("main-scroll");
-    if (!main) return;
-    const onScroll = () => setScrolled(main.scrollTop > 20);
-    main.addEventListener("scroll", onScroll);
-    return () => main.removeEventListener("scroll", onScroll);
-  }, []);
-
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-[#09090B] selection:bg-primary/30">
-      {/* Navigation - Scroll-aware liquid glass */}
-      <nav
-        className={`fixed top-0 left-0 w-full h-14 flex items-center justify-center z-50 transition-all duration-500 ${
-          scrolled
-            ? "border-b border-white/[0.07] bg-black/30 backdrop-blur-2xl shadow-[0_4px_30px_rgba(0,0,0,0.3)]"
-            : "border-b border-transparent bg-transparent backdrop-blur-none"
-        }`}
-      >
-        <div className="flex items-center justify-between w-full max-w-[1400px] px-8 md:px-16">
-          <Link
-            href="/"
-            className="flex items-center gap-2.5 font-semibold text-[15px] text-zinc-100 transition-opacity hover:opacity-80"
-          >
-            <Logo
-              className="text-primary"
-              size={siteConfig.branding.sizes.header}
-            />
-            <span>{siteConfig.name}</span>
-          </Link>
-
-          <div className="hidden md:flex items-center gap-8">
-            <Link
-              href="/docs"
-              className="text-[13px] font-medium text-zinc-400 hover:text-zinc-100 transition-colors"
-            >
-              Docs
-            </Link>
-            <Link
-              href="/blog"
-              className="text-[13px] font-medium text-zinc-400 hover:text-zinc-100 transition-colors"
-            >
-              Blog
-            </Link>
-            <Link
-              href="/enterprise"
-              className="text-[13px] font-medium text-zinc-400 hover:text-zinc-100 transition-colors"
-            >
-              Enterprise
-            </Link>
-            <Link
-              href="/support"
-              className="text-[13px] font-medium text-zinc-400 hover:text-zinc-100 transition-colors"
-            >
-              Support
-            </Link>
-          </div>
-
-          <div className="flex items-center gap-4">
-            <a
-              href={siteConfig.links.github}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-[13px] font-medium text-zinc-400 hover:text-zinc-100 transition-colors hidden sm:flex items-center gap-1"
-            >
-              GitHub <ArrowUpRight size={12} />
-            </a>
-            <Link
-              href="/docs/quickstart"
-              className="px-3 py-1.5 text-[13px] font-medium rounded-full bg-zinc-100 text-black hover:bg-white transition-colors"
-            >
-              Get Started
-            </Link>
-          </div>
-        </div>
-      </nav>
+      <SiteNav transparent scrollTarget="main-scroll" />
 
       <main
         id="main-scroll"
@@ -770,143 +690,7 @@ export default function Home() {
           </div>
         </section>
 
-        {/* Footer */}
-        <footer className="py-16 px-6 sm:px-8 md:px-16 bg-[#09090B] border-t border-white/5">
-          <div className="max-w-[1400px] mx-auto">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-[1.5fr_1fr_1fr_1fr_1fr] gap-x-8 gap-y-10 mb-16">
-              <div className="col-span-1 sm:col-span-2 lg:col-span-1">
-                <Link
-                  href="/"
-                  className="flex items-center gap-2 font-semibold text-sm text-zinc-100 mb-4"
-                >
-                  <Logo
-                    className="text-primary"
-                    size={siteConfig.branding.sizes.footer}
-                  />
-                  <span>{siteConfig.name}</span>
-                </Link>
-                <p className="text-[12px] text-zinc-600 leading-relaxed">
-                  High-performance code context engine. Open-source core. Built
-                  in Rust.
-                </p>
-              </div>
-              <div>
-                <div className="text-[11px] uppercase tracking-widest text-emerald-500 font-semibold mb-4">
-                  Product
-                </div>
-                <div className="flex flex-col gap-2 text-[13px] text-zinc-500">
-                  <Link
-                    href="/docs"
-                    className="hover:text-zinc-200 transition-colors"
-                  >
-                    Documentation
-                  </Link>
-                  <Link
-                    href="/docs/quickstart"
-                    className="hover:text-zinc-200 transition-colors"
-                  >
-                    Quickstart
-                  </Link>
-                  <Link
-                    href="/docs/pricing"
-                    className="hover:text-zinc-200 transition-colors"
-                  >
-                    Pricing
-                  </Link>
-                  <Link
-                    href="/enterprise"
-                    className="hover:text-zinc-200 transition-colors"
-                  >
-                    Enterprise
-                  </Link>
-                </div>
-              </div>
-              <div>
-                <div className="text-[11px] uppercase tracking-widest text-emerald-500 font-semibold mb-4">
-                  Resources
-                </div>
-                <div className="flex flex-col gap-2 text-[13px] text-zinc-500">
-                  <Link
-                    href="/blog"
-                    className="hover:text-zinc-200 transition-colors"
-                  >
-                    Blog
-                  </Link>
-                  <Link
-                    href="/docs/architecture"
-                    className="hover:text-zinc-200 transition-colors"
-                  >
-                    Architecture
-                  </Link>
-                  <Link
-                    href="/docs/supported-languages"
-                    className="hover:text-zinc-200 transition-colors"
-                  >
-                    Supported Languages
-                  </Link>
-                </div>
-              </div>
-              <div>
-                <div className="text-[11px] uppercase tracking-widest text-emerald-500 font-semibold mb-4">
-                  Company
-                </div>
-                <div className="flex flex-col gap-2 text-[13px] text-zinc-500">
-                  <Link
-                    href="/support"
-                    className="hover:text-zinc-200 transition-colors"
-                  >
-                    Support
-                  </Link>
-                  <Link
-                    href={`mailto:${siteConfig.links.email}`}
-                    className="hover:text-zinc-200 transition-colors"
-                  >
-                    Contact
-                  </Link>
-                  <a
-                    href={siteConfig.links.github}
-                    className="hover:text-zinc-200 transition-colors"
-                  >
-                    GitHub
-                  </a>
-                </div>
-              </div>
-              <div>
-                <div className="text-[11px] uppercase tracking-widest text-emerald-500 font-semibold mb-4">
-                  Legal
-                </div>
-                <div className="flex flex-col gap-2 text-[13px] text-zinc-500">
-                  <Link
-                    href="/privacy"
-                    className="hover:text-zinc-200 transition-colors"
-                  >
-                    Privacy Policy
-                  </Link>
-                  <Link
-                    href="/terms"
-                    className="hover:text-zinc-200 transition-colors"
-                  >
-                    Terms of Service
-                  </Link>
-                </div>
-              </div>
-            </div>
-            <div className="border-t border-white/5 pt-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-center sm:text-left">
-              <p className="text-[12px] text-zinc-600">
-                (c) 2026 {siteConfig.name}. All rights reserved. Apache-2.0
-                License.
-              </p>
-              <div className="flex items-center gap-4">
-                <a
-                  href={siteConfig.links.github}
-                  className="text-zinc-600 hover:text-zinc-300 transition-colors"
-                >
-                  <Github size={18} />
-                </a>
-              </div>
-            </div>
-          </div>
-        </footer>
+        <SiteFooterFull />
       </main>
     </div>
   );
