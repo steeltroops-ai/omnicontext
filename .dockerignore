@@ -1,0 +1,9 @@
+target/
+.omnicontext/
+*.db
+*.bin
+*.onnx
+node_modules/
+out/
+editors/vscode/out/
+.env

@@ -313,12 +313,13 @@ Phase 2  [DONE]     Embedder + Index + Vector + Search
 Phase 3  [DONE]     Pipeline + CLI (end-to-end demo)
 Phase 4  [DONE]     MCP Server (AI agent integration)
 Phase 5  [DONE]     Dependency Graph (smarter search)
-Phase 6  [NEXT]     Distribution (package managers, VS Code)
-Phase 7             Pro Features
-Phase 8             Enterprise
+Phase 6  [DONE]     Distribution (Homebrew, Scoop, VS Code, benchmarks, NDCG)
+Phase 7  [DONE]     Pro Features (workspace, commits, patterns)
+Phase 8  [DONE]     Enterprise (REST API, auth, metering, Docker)
 ```
 
 Each phase produces a **working, testable increment**.
 After Phase 3, you have a usable CLI tool.
 After Phase 4, you have a usable MCP server.
-Everything after that is enhancement and distribution.
+After Phase 6, you have distributable packages.
+After Phase 8, you have enterprise deployment ready.

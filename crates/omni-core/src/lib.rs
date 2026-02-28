@@ -16,11 +16,15 @@
 //! - **`chunker`** -- AST-aware semantic code chunking
 //! - **`embedder`** -- ONNX-based local embedding inference
 //! - **`index`** -- SQLite metadata store + FTS5 full-text search
-//! - **`vector`** -- usearch HNSW approximate nearest neighbor index
+//! - **`vector`** -- Flat vector index with disk persistence (HNSW planned)
 //! - **`graph`** -- Dependency graph construction and traversal (petgraph)
 //! - **`search`** -- Hybrid retrieval engine (RRF fusion + ranking)
 //! - **`watcher`** -- File system watcher with debouncing
-//! - **`pipeline`** -- Orchestrates the ingestion pipeline (watcher -> parser -> chunker -> embedder -> index)
+//! - **`pipeline`** -- Orchestrates the ingestion pipeline
+//! - **`workspace`** -- Multi-repo workspace management (Pro)
+//! - **`commits`** -- Git commit lineage indexing (Pro)
+//! - **`patterns`** -- Convention and pattern recognition (Pro)
+//! - **`server`** -- REST API server for enterprise deployment
 //!
 //! Each module exposes a public trait or struct that the pipeline wires together.
 //! Modules communicate via well-defined types in the `types` module.
@@ -31,7 +35,7 @@ pub mod config;
 pub mod error;
 pub mod types;
 
-// Subsystems -- each is an independent module with its own error types
+// Core subsystems
 pub mod parser;
 pub mod chunker;
 pub mod embedder;
@@ -41,6 +45,14 @@ pub mod graph;
 pub mod search;
 pub mod watcher;
 pub mod pipeline;
+
+// Pro features (Phase 7)
+pub mod workspace;
+pub mod commits;
+pub mod patterns;
+
+// Enterprise features (Phase 8)
+pub mod server;
 
 /// Re-export the primary engine interface.
 pub use pipeline::Engine;
