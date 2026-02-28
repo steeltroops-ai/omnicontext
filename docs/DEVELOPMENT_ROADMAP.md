@@ -237,7 +237,7 @@ You can replace the vector index without changing anything else.
 
 ---
 
-## Phase 5: Dependency Graph
+## Phase 5: Dependency Graph [COMPLETE]
 
 **Goal**: Cross-file dependency analysis for smarter search.
 **Duration**: ~2 weeks
@@ -312,8 +312,8 @@ Phase 1  [DONE]     Parser + Chunker (Python, TS/JS, Rust, Go)
 Phase 2  [DONE]     Embedder + Index + Vector + Search
 Phase 3  [DONE]     Pipeline + CLI (end-to-end demo)
 Phase 4  [DONE]     MCP Server (AI agent integration)
-Phase 5  [NEXT]     Dependency Graph (smarter search)
-Phase 6             Distribution (package managers, VS Code)
+Phase 5  [DONE]     Dependency Graph (smarter search)
+Phase 6  [NEXT]     Distribution (package managers, VS Code)
 Phase 7             Pro Features
 Phase 8             Enterprise
 ```
