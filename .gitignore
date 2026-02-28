@@ -23,3 +23,7 @@ Thumbs.db
 # Environment
 .env
 .env.local
+
+# Internal Planning & Agent Workspaces
+.agents/
+docs/local/
