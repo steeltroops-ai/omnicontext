@@ -347,33 +347,15 @@ struct ScoredChunk {
 }
 
 // ---------------------------------------------------------------------------
-// Parse helpers (duplicated from index for decoupling)
+// Parse helpers (delegates to centralized methods on types)
 // ---------------------------------------------------------------------------
 
 fn parse_kind(s: &str) -> crate::types::ChunkKind {
-    use crate::types::ChunkKind;
-    match s {
-        "function" => ChunkKind::Function,
-        "class" => ChunkKind::Class,
-        "trait" => ChunkKind::Trait,
-        "impl" => ChunkKind::Impl,
-        "const" => ChunkKind::Const,
-        "typedef" => ChunkKind::TypeDef,
-        "module" => ChunkKind::Module,
-        "test" => ChunkKind::Test,
-        _ => ChunkKind::TopLevel,
-    }
+    crate::types::ChunkKind::from_str_lossy(s)
 }
 
 fn parse_vis(s: &str) -> crate::types::Visibility {
-    use crate::types::Visibility;
-    match s {
-        "public" => Visibility::Public,
-        "crate" => Visibility::Crate,
-        "protected" => Visibility::Protected,
-        "private" => Visibility::Private,
-        _ => Visibility::Private,
-    }
+    crate::types::Visibility::from_str_lossy(s)
 }
 
 #[cfg(test)]

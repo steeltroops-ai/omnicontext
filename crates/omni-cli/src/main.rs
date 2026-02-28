@@ -19,6 +19,10 @@ struct Cli {
     /// Log level.
     #[arg(long, global = true, default_value = "info")]
     log_level: String,
+
+    /// Output results as JSON (for scripting and CI/CD).
+    #[arg(long, global = true)]
+    json: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -96,13 +100,13 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Index { path, force } => {
-            cmd_index(&path, force).await?;
+            cmd_index(&path, force, cli.json).await?;
         }
         Commands::Search { query, limit, language, kind } => {
-            cmd_search(&query, limit, language.as_deref(), kind.as_deref())?;
+            cmd_search(&query, limit, language.as_deref(), kind.as_deref(), cli.json)?;
         }
         Commands::Status { path } => {
-            cmd_status(&path)?;
+            cmd_status(&path, cli.json)?;
         }
         Commands::Mcp { repo, transport, port } => {
             cmd_mcp(&repo, &transport, port).await?;
@@ -116,13 +120,15 @@ async fn main() -> Result<()> {
 }
 
 /// Index a repository.
-async fn cmd_index(path: &str, _force: bool) -> Result<()> {
+async fn cmd_index(path: &str, _force: bool, json: bool) -> Result<()> {
     let repo_path = std::path::PathBuf::from(path)
         .canonicalize()
         .unwrap_or_else(|_| std::path::PathBuf::from(path));
 
-    println!("OmniContext - Indexing: {}", repo_path.display());
-    println!("---");
+    if !json {
+        println!("OmniContext - Indexing: {}", repo_path.display());
+        println!("---");
+    }
 
     let start = Instant::now();
 
@@ -131,13 +137,26 @@ async fn cmd_index(path: &str, _force: bool) -> Result<()> {
 
     let elapsed = start.elapsed();
 
-    println!();
-    println!("  Indexing complete in {:.2}s", elapsed.as_secs_f64());
-    println!("  Files processed:  {}", result.files_processed);
-    println!("  Files failed:     {}", result.files_failed);
-    println!("  Chunks created:   {}", result.chunks_created);
-    println!("  Symbols found:    {}", result.symbols_extracted);
-    println!("  Embeddings:       {}", result.embeddings_generated);
+    if json {
+        let output = serde_json::json!({
+            "status": "ok",
+            "elapsed_ms": elapsed.as_millis(),
+            "files_processed": result.files_processed,
+            "files_failed": result.files_failed,
+            "chunks_created": result.chunks_created,
+            "symbols_extracted": result.symbols_extracted,
+            "embeddings_generated": result.embeddings_generated,
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        println!();
+        println!("  Indexing complete in {:.2}s", elapsed.as_secs_f64());
+        println!("  Files processed:  {}", result.files_processed);
+        println!("  Files failed:     {}", result.files_failed);
+        println!("  Chunks created:   {}", result.chunks_created);
+        println!("  Symbols found:    {}", result.symbols_extracted);
+        println!("  Embeddings:       {}", result.embeddings_generated);
+    }
 
     // Persist on shutdown
     engine.shutdown()?;
@@ -146,13 +165,32 @@ async fn cmd_index(path: &str, _force: bool) -> Result<()> {
 }
 
 /// Search the indexed codebase.
-fn cmd_search(query: &str, limit: usize, _language: Option<&str>, _kind: Option<&str>) -> Result<()> {
+fn cmd_search(query: &str, limit: usize, _language: Option<&str>, _kind: Option<&str>, json: bool) -> Result<()> {
     let repo_path = std::env::current_dir()?;
     let engine = omni_core::Engine::new(&repo_path)?;
 
     let start = Instant::now();
     let results = engine.search(query, limit)?;
     let elapsed = start.elapsed();
+
+    if json {
+        let output = serde_json::json!({
+            "query": query,
+            "elapsed_ms": elapsed.as_millis(),
+            "count": results.len(),
+            "results": results.iter().map(|r| serde_json::json!({
+                "file": r.file_path.display().to_string(),
+                "score": r.score,
+                "kind": format!("{:?}", r.chunk.kind),
+                "symbol": r.chunk.symbol_path,
+                "line_start": r.chunk.line_start,
+                "line_end": r.chunk.line_end,
+                "content": r.chunk.content,
+            })).collect::<Vec<_>>(),
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+        return Ok(());
+    }
 
     if results.is_empty() {
         println!("No results found for: \"{}\"", query);
@@ -191,7 +229,7 @@ fn cmd_search(query: &str, limit: usize, _language: Option<&str>, _kind: Option<
 }
 
 /// Show engine status and index statistics.
-fn cmd_status(path: &str) -> Result<()> {
+fn cmd_status(path: &str, json: bool) -> Result<()> {
     let repo_path = std::path::PathBuf::from(path)
         .canonicalize()
         .unwrap_or_else(|_| std::path::PathBuf::from(path));
@@ -199,9 +237,14 @@ fn cmd_status(path: &str) -> Result<()> {
     let engine = omni_core::Engine::new(&repo_path)?;
     let status = engine.status()?;
 
+    if json {
+        println!("{}", serde_json::to_string_pretty(&status)?);
+        return Ok(());
+    }
+
     println!("OmniContext Status");
     println!("---");
-    println!("  Repository:      {}", status.repo_path);
+    println!("  Repository:       {}", status.repo_path);
     println!("  Data directory:   {}", status.data_dir);
     println!("  Search mode:      {}", status.search_mode);
     println!();
@@ -209,6 +252,13 @@ fn cmd_status(path: &str) -> Result<()> {
     println!("  Chunks indexed:   {}", status.chunks_indexed);
     println!("  Symbols indexed:  {}", status.symbols_indexed);
     println!("  Vectors indexed:  {}", status.vectors_indexed);
+    println!();
+    println!("  Dep edges (db):   {}", status.dep_edges);
+    println!("  Graph nodes:      {}", status.graph_nodes);
+    println!("  Graph edges:      {}", status.graph_edges);
+    if status.has_cycles {
+        println!("  [!] Circular dependencies detected");
+    }
 
     Ok(())
 }

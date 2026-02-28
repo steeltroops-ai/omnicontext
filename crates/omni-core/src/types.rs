@@ -122,6 +122,36 @@ impl ChunkKind {
             Self::TopLevel => 0.50,
         }
     }
+
+    /// Convert to database string.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Function => "function",
+            Self::Class => "class",
+            Self::Trait => "trait",
+            Self::Impl => "impl",
+            Self::Const => "const",
+            Self::TypeDef => "typedef",
+            Self::Module => "module",
+            Self::Test => "test",
+            Self::TopLevel => "top_level",
+        }
+    }
+
+    /// Parse from database string.
+    pub fn from_str_lossy(s: &str) -> Self {
+        match s {
+            "function" => Self::Function,
+            "class" => Self::Class,
+            "trait" => Self::Trait,
+            "impl" => Self::Impl,
+            "const" => Self::Const,
+            "typedef" => Self::TypeDef,
+            "module" => Self::Module,
+            "test" => Self::Test,
+            _ => Self::TopLevel,
+        }
+    }
 }
 
 /// Visibility of a code symbol.
@@ -139,6 +169,27 @@ pub enum Visibility {
 }
 
 impl Visibility {
+    /// Convert to database string.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::Crate => "crate",
+            Self::Protected => "protected",
+            Self::Private => "private",
+        }
+    }
+
+    /// Parse from database string.
+    pub fn from_str_lossy(s: &str) -> Self {
+        match s {
+            "public" => Self::Public,
+            "crate" => Self::Crate,
+            "protected" => Self::Protected,
+            "private" => Self::Private,
+            _ => Self::Private,
+        }
+    }
+
     /// Returns a weight multiplier for public vs private apis.
     pub fn weight_multiplier(&self) -> f64 {
         match self {

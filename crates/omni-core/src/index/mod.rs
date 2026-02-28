@@ -21,6 +21,9 @@ use rusqlite::{params, Connection, OptionalExtension};
 use crate::error::OmniResult;
 use crate::types::{Chunk, ChunkKind, DependencyEdge, DependencyKind, FileInfo, Language, Symbol, Visibility};
 
+/// Current database schema version. Increment when schema changes.
+const SCHEMA_VERSION: i64 = 1;
+
 /// SQLite-backed metadata and full-text search index.
 pub struct MetadataIndex {
     conn: Connection,
@@ -36,14 +39,18 @@ impl MetadataIndex {
 
         let conn = Connection::open(db_path)?;
 
-        // Configure for performance
+        // Configure for performance and concurrency
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "cache_size", "-64000")?; // 64MB cache
         conn.pragma_update(None, "foreign_keys", "ON")?;
+        conn.pragma_update(None, "busy_timeout", "5000")?; // 5s retry on SQLITE_BUSY
+        conn.pragma_update(None, "mmap_size", "268435456")?; // 256MB memory-mapped I/O
+        conn.pragma_update(None, "temp_store", "MEMORY")?;
 
         let index = Self { conn };
         index.ensure_schema()?;
+        index.ensure_schema_version()?;
 
         Ok(index)
     }
@@ -51,6 +58,52 @@ impl MetadataIndex {
     /// Create all tables and indexes if they don't exist.
     fn ensure_schema(&self) -> OmniResult<()> {
         self.conn.execute_batch(include_str!("schema.sql"))?;
+        Ok(())
+    }
+
+    /// Ensure schema version is tracked and compatible.
+    fn ensure_schema_version(&self) -> OmniResult<()> {
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS schema_version (
+                version INTEGER NOT NULL,
+                migrated_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );"
+        )?;
+
+        let current: Option<i64> = self.conn.query_row(
+            "SELECT MAX(version) FROM schema_version",
+            [],
+            |row| row.get(0),
+        ).optional()?.flatten();
+
+        match current {
+            None => {
+                // First run -- set initial version
+                self.conn.execute(
+                    "INSERT INTO schema_version (version) VALUES (?1)",
+                    params![SCHEMA_VERSION],
+                )?;
+            }
+            Some(v) if v < SCHEMA_VERSION => {
+                // Future: run migrations here
+                tracing::info!(from = v, to = SCHEMA_VERSION, "schema migration required");
+                self.conn.execute(
+                    "INSERT INTO schema_version (version) VALUES (?1)",
+                    params![SCHEMA_VERSION],
+                )?;
+            }
+            Some(v) if v > SCHEMA_VERSION => {
+                return Err(crate::error::OmniError::Config {
+                    details: format!(
+                        "database schema version ({v}) is newer than this binary ({SCHEMA_VERSION}). Upgrade OmniContext."
+                    ),
+                });
+            }
+            _ => {
+                // Schema is current
+            }
+        }
+
         Ok(())
     }
 
@@ -383,7 +436,8 @@ impl MetadataIndex {
     /// Re-index a file atomically: delete old data, insert new chunks and symbols.
     ///
     /// This is the primary write operation. It ensures consistency by
-    /// wrapping delete+insert in a single transaction.
+    /// wrapping delete+insert in a single transaction. Stale dependency
+    /// edges are cleaned up before symbols are deleted.
     pub fn reindex_file(
         &self,
         file: &FileInfo,
@@ -416,6 +470,14 @@ impl MetadataIndex {
             |row| row.get(0),
         )?;
 
+        // Delete stale dependency edges for symbols in this file BEFORE
+        // deleting the symbols themselves. This prevents ghost edges.
+        tx.execute(
+            "DELETE FROM dependencies WHERE source_id IN (SELECT id FROM symbols WHERE file_id = ?1)
+             OR target_id IN (SELECT id FROM symbols WHERE file_id = ?1)",
+            params![file_id],
+        )?;
+
         // Delete old chunks and symbols for this file
         tx.execute("DELETE FROM symbols WHERE file_id = ?1", params![file_id])?;
         tx.execute("DELETE FROM chunks WHERE file_id = ?1", params![file_id])?;
@@ -430,8 +492,8 @@ impl MetadataIndex {
                 params![
                     file_id,
                     chunk.symbol_path,
-                    format!("{:?}", chunk.kind).to_lowercase(),
-                    format!("{:?}", chunk.visibility).to_lowercase(),
+                    chunk.kind.as_str(),
+                    chunk.visibility.as_str(),
                     chunk.line_start,
                     chunk.line_end,
                     chunk.content,
@@ -452,7 +514,7 @@ impl MetadataIndex {
                 params![
                     symbol.name,
                     symbol.fqn,
-                    format!("{:?}", symbol.kind).to_lowercase(),
+                    symbol.kind.as_str(),
                     file_id,
                     symbol.line,
                     symbol.chunk_id,
@@ -574,31 +636,15 @@ pub struct IndexStats {
 }
 
 // ---------------------------------------------------------------------------
-// Parse helpers
+// Parse helpers (delegates to centralized methods on types)
 // ---------------------------------------------------------------------------
 
 fn parse_chunk_kind(s: &str) -> ChunkKind {
-    match s {
-        "function" => ChunkKind::Function,
-        "class" => ChunkKind::Class,
-        "trait" => ChunkKind::Trait,
-        "impl" => ChunkKind::Impl,
-        "const" => ChunkKind::Const,
-        "typedef" => ChunkKind::TypeDef,
-        "module" => ChunkKind::Module,
-        "test" => ChunkKind::Test,
-        _ => ChunkKind::TopLevel,
-    }
+    ChunkKind::from_str_lossy(s)
 }
 
 fn parse_visibility(s: &str) -> Visibility {
-    match s {
-        "public" => Visibility::Public,
-        "crate" => Visibility::Crate,
-        "protected" => Visibility::Protected,
-        "private" => Visibility::Private,
-        _ => Visibility::Private,
-    }
+    Visibility::from_str_lossy(s)
 }
 
 #[cfg(test)]

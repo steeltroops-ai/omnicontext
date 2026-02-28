@@ -390,6 +390,7 @@ impl Engine {
     /// Get engine status information.
     pub fn status(&self) -> OmniResult<EngineStatus> {
         let stats = self.index.statistics()?;
+        let dep_edges = self.index.dependency_count().unwrap_or(0);
         Ok(EngineStatus {
             repo_path: self.config.repo_path.display().to_string(),
             data_dir: self.config.data_dir().display().to_string(),
@@ -397,6 +398,10 @@ impl Engine {
             chunks_indexed: stats.chunk_count,
             symbols_indexed: stats.symbol_count,
             vectors_indexed: self.vector_index.len(),
+            dep_edges,
+            graph_nodes: self.dep_graph.node_count(),
+            graph_edges: self.dep_graph.edge_count(),
+            has_cycles: self.dep_graph.has_cycles(),
             search_mode: if self.embedder.is_available() {
                 "hybrid".into()
             } else {
@@ -453,6 +458,14 @@ pub struct EngineStatus {
     pub symbols_indexed: usize,
     /// Number of vectors in the index.
     pub vectors_indexed: usize,
+    /// Number of dependency edges in the SQLite store.
+    pub dep_edges: usize,
+    /// Number of nodes in the in-memory dependency graph.
+    pub graph_nodes: usize,
+    /// Number of edges in the in-memory dependency graph.
+    pub graph_edges: usize,
+    /// Whether the dependency graph contains cycles.
+    pub has_cycles: bool,
     /// Current search mode (hybrid or keyword-only).
     pub search_mode: String,
 }

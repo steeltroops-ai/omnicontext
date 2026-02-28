@@ -150,7 +150,10 @@ impl VectorIndex {
         self.dimensions
     }
 
-    /// Persist the index to disk.
+    /// Persist the index to disk atomically.
+    ///
+    /// Writes to a temporary file first, then renames to the target path.
+    /// This prevents corruption if the process is interrupted mid-write.
     pub fn save(&self) -> OmniResult<()> {
         let path = match &self.index_path {
             Some(p) => p,
@@ -173,8 +176,16 @@ impl VectorIndex {
             OmniError::Internal(format!("failed to serialize vector index: {e}"))
         })?;
 
-        std::fs::write(path, encoded)?;
-        tracing::debug!(path = %path.display(), vectors = self.len(), "saved vector index");
+        // Write to temp file alongside target, then atomic rename
+        let tmp_path = path.with_extension("bin.tmp");
+        std::fs::write(&tmp_path, encoded)?;
+        std::fs::rename(&tmp_path, path).map_err(|e| {
+            // Clean up temp file on rename failure
+            let _ = std::fs::remove_file(&tmp_path);
+            OmniError::Io(e)
+        })?;
+
+        tracing::debug!(path = %path.display(), vectors = self.len(), "saved vector index (atomic)");
 
         Ok(())
     }
