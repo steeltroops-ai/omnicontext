@@ -47,7 +47,7 @@ You can replace the vector index without changing anything else.
 
 ---
 
-## Phase 1: Core Engine -- Parser & Chunker
+## Phase 1: Core Engine -- Parser & Chunker [COMPLETE]
 
 **Goal**: Parse source files into structured, searchable chunks.
 **Duration**: ~2 weeks
@@ -106,7 +106,7 @@ You can replace the vector index without changing anything else.
 
 ---
 
-## Phase 2: Core Engine -- Index & Search
+## Phase 2: Core Engine -- Index & Search [COMPLETE]
 
 **Goal**: Store chunks and enable hybrid retrieval.
 **Duration**: ~2 weeks
@@ -159,7 +159,7 @@ You can replace the vector index without changing anything else.
 
 ---
 
-## Phase 3: Pipeline & CLI
+## Phase 3: Pipeline & CLI [COMPLETE]
 
 **Goal**: Wire everything together into a working end-to-end system.
 **Duration**: ~1 week
@@ -308,10 +308,10 @@ You can replace the vector index without changing anything else.
 
 ```
 Phase 0  [DONE]     Scaffold, CI, docs
-Phase 1  [NEXT]     Parser + Chunker (Python, TS/JS, Rust, Go)
-Phase 2             Embedder + Index + Vector + Search
-Phase 3             Pipeline + CLI (end-to-end demo)
-Phase 4             MCP Server (AI agent integration)
+Phase 1  [DONE]     Parser + Chunker (Python, TS/JS, Rust, Go)
+Phase 2  [DONE]     Embedder + Index + Vector + Search
+Phase 3  [DONE]     Pipeline + CLI (end-to-end demo)
+Phase 4  [NEXT]     MCP Server (AI agent integration)
 Phase 5             Dependency Graph (smarter search)
 Phase 6             Distribution (package managers, VS Code)
 Phase 7             Pro Features
