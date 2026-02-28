@@ -3,11 +3,20 @@
 //! Exposes code intelligence tools to AI coding agents via the
 //! Model Context Protocol (MCP). Supports stdio transport.
 //!
+//! ## Auto-Index on Startup
+//!
+//! By default, the MCP server automatically indexes the repository
+//! on startup if no existing index is found. This ensures AI agents
+//! always connect to a ready-to-use engine without manual steps.
+//!
 //! ## Usage
 //!
 //! ```text
 //! # Start the MCP server (AI agents connect via stdio)
 //! omnicontext-mcp --repo /path/to/repo
+//!
+//! # Skip auto-index (use existing index only)
+//! omnicontext-mcp --repo /path/to/repo --no-auto-index
 //!
 //! # Or from the CLI
 //! omnicontext mcp --repo .
@@ -30,6 +39,11 @@ struct Args {
     /// Log level (trace, debug, info, warn, error).
     #[arg(long, default_value = "info")]
     log_level: String,
+
+    /// Skip automatic indexing on startup.
+    /// By default, the server indexes the repo if no index exists.
+    #[arg(long)]
+    no_auto_index: bool,
 }
 
 #[tokio::main]
@@ -56,9 +70,44 @@ async fn main() -> Result<()> {
     );
 
     // Initialize the core engine
-    let engine = omni_core::Engine::new(&repo_path)?;
+    let mut engine = omni_core::Engine::new(&repo_path)?;
 
-    tracing::info!("engine initialized, starting MCP server on stdio");
+    // Auto-index: if the index is empty and auto-index is not disabled,
+    // run a full index before starting the MCP server.
+    // This ensures AI agents always connect to a ready engine.
+    if !args.no_auto_index {
+        let status = engine.status()?;
+        if status.files_indexed == 0 {
+            tracing::info!("no existing index found, running auto-index...");
+            let start = std::time::Instant::now();
+            match engine.run_index().await {
+                Ok(result) => {
+                    tracing::info!(
+                        files = result.files_processed,
+                        chunks = result.chunks_created,
+                        symbols = result.symbols_extracted,
+                        embeddings = result.embeddings_generated,
+                        elapsed_ms = start.elapsed().as_millis() as u64,
+                        "auto-index complete"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "auto-index failed, MCP tools may return empty results"
+                    );
+                }
+            }
+        } else {
+            tracing::info!(
+                files = status.files_indexed,
+                chunks = status.chunks_indexed,
+                "using existing index"
+            );
+        }
+    }
+
+    tracing::info!("engine ready, starting MCP server on stdio");
 
     // Create and start the MCP server
     let server = tools::OmniContextServer::new(engine);

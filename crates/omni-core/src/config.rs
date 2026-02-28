@@ -179,11 +179,14 @@ impl Default for EmbeddingConfig {
 
 impl EmbeddingConfig {
     fn default_model_path() -> PathBuf {
-        PathBuf::from("models/all-MiniLM-L6-v2.onnx")
+        // Default: auto-download cache location for jina-embeddings-v2-base-code.
+        // If the model isn't here yet, the embedder will auto-download it.
+        // Users can override via config or OMNI_MODEL_PATH env var.
+        crate::embedder::model_manager::model_path(&crate::embedder::model_manager::DEFAULT_MODEL)
     }
-    fn default_dimensions() -> usize { 384 }
+    fn default_dimensions() -> usize { 768 } // jina-code v2 output dimensions
     fn default_batch_size() -> usize { 32 }
-    fn default_max_seq_length() -> usize { 256 }
+    fn default_max_seq_length() -> usize { 512 } // practical limit for code chunks
 }
 
 /// File watcher configuration.
@@ -334,10 +337,18 @@ impl Config {
     }
 
     /// Compute a short hash of the repo path for the data directory name.
+    ///
+    /// Normalizes the path to avoid Windows `\\?\` extended path prefix
+    /// causing different hashes for the same physical directory.
     fn repo_hash(&self) -> String {
         use sha2::{Sha256, Digest};
+        let path_str = self.repo_path.to_string_lossy();
+        // Strip Windows extended path prefix for consistent hashing
+        let normalized = path_str
+            .strip_prefix(r"\\?\")
+            .unwrap_or(&path_str);
         let mut hasher = Sha256::new();
-        hasher.update(self.repo_path.to_string_lossy().as_bytes());
+        hasher.update(normalized.as_bytes());
         let result = hasher.finalize();
         hex::encode(&result[..4])
     }
@@ -352,7 +363,7 @@ mod tests {
         let config = Config::defaults(Path::new("/tmp/test-repo"));
         assert_eq!(config.indexing.max_file_size, 5 * 1024 * 1024);
         assert_eq!(config.search.default_limit, 10);
-        assert_eq!(config.embedding.dimensions, 384);
+        assert_eq!(config.embedding.dimensions, 768);
         assert_eq!(config.watcher.debounce_ms, 100);
     }
 

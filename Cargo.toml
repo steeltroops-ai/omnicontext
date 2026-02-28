@@ -88,6 +88,10 @@ hex = "0.4"
 # Tokenization
 tokenizers = "0.21"
 
+# HTTP downloads (model auto-download)
+reqwest = { version = "0.12", features = ["blocking", "rustls-tls"], default-features = false }
+indicatif = "0.17"
+
 # Cross-crate testing
 tempfile = "3"
 

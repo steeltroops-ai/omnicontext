@@ -1,13 +1,30 @@
-//! ONNX-based local embedding engine.
+//! ONNX-based local embedding engine with automatic model management.
 //!
 //! This module runs embedding inference locally using ONNX Runtime.
-//! No network calls, no API keys. The model file is loaded from disk
-//! at startup and kept in memory.
+//! No network calls during inference, no API keys. The model file is
+//! automatically downloaded on first use and cached permanently.
+//!
+//! ## Model: jina-embeddings-v2-base-code
+//!
+//! The default model is specifically trained on code retrieval tasks:
+//! - Code-to-text and code-to-code search
+//! - 768 dimensions, 8192 token context window
+//! - Understands variable names, syntax patterns, cross-language concepts
+//!
+//! ## First-Run Behavior
+//!
+//! On the first invocation, the engine will:
+//! 1. Detect that the model is not cached
+//! 2. Download model.onnx (~550MB) and tokenizer.json from HuggingFace
+//! 3. Cache them in `~/.omnicontext/models/jina-embeddings-v2-base-code/`
+//! 4. Proceed with indexing
+//!
+//! Subsequent runs use the cached model instantly.
 //!
 //! ## Failure Handling
 //!
-//! If the model fails to load, the system operates in keyword-only mode.
-//! Individual embedding failures (OOM, timeout) are logged and the chunk
+//! If the model fails to download or load, the system operates in keyword-only
+//! mode. Individual embedding failures (OOM, timeout) are logged and the chunk
 //! is indexed without a vector (keyword search still finds it).
 //!
 //! ## Architecture
@@ -18,10 +35,14 @@
 //!
 //! The pipeline checks `is_available()` and skips embedding when degraded.
 
+pub mod model_manager;
+
 use ort::session::Session;
 
 use crate::config::EmbeddingConfig;
 use crate::error::{OmniError, OmniResult};
+
+pub use model_manager::{DEFAULT_MODEL, FALLBACK_MODEL, ModelSpec};
 
 /// Embedding engine that uses ONNX Runtime for local inference.
 pub struct Embedder {
@@ -36,17 +57,18 @@ pub struct Embedder {
 impl Embedder {
     /// Create a new embedder with the given configuration.
     ///
-    /// If the model file doesn't exist, returns `Ok` with the embedder in
-    /// degraded mode (no embedding, keyword-only search).
+    /// This will automatically download the embedding model if it's not
+    /// already cached. On failure, returns Ok with the embedder in
+    /// degraded mode (keyword-only search).
     pub fn new(config: &EmbeddingConfig) -> OmniResult<Self> {
-        let model_path = &config.model_path;
-        let tokenizer_path = model_path.with_file_name("tokenizer.json");
+        // Resolve model spec and auto-download if needed
+        let (model_path, tokenizer_path) = Self::resolve_model_files(config)?;
 
         // Try to load the ONNX model
         let session = if model_path.exists() {
             match Session::builder() {
                 Ok(builder) => {
-                    match builder.commit_from_file(model_path) {
+                    match builder.commit_from_file(&model_path) {
                         Ok(session) => {
                             tracing::info!(
                                 model = %model_path.display(),
@@ -67,7 +89,8 @@ impl Embedder {
                 Err(e) => {
                     tracing::warn!(
                         error = %e,
-                        "failed to create ONNX session builder, operating in keyword-only mode"
+                        "failed to create ONNX session builder, operating in keyword-only mode.\n\
+                         Hint: ONNX Runtime may not be installed. The engine will use keyword-only search."
                     );
                     None
                 }
@@ -75,7 +98,7 @@ impl Embedder {
         } else {
             tracing::warn!(
                 model = %model_path.display(),
-                "embedding model not found, operating in keyword-only mode"
+                "embedding model not found after download attempt, operating in keyword-only mode"
             );
             None
         };
@@ -102,6 +125,73 @@ impl Embedder {
             session,
             tokenizer,
         })
+    }
+
+    /// Resolve model file paths, auto-downloading if needed.
+    ///
+    /// Strategy:
+    /// 1. If config.model_path points to an existing file, use it directly (manual override)
+    /// 2. If model is already cached, use the cached version
+    /// 3. If OMNI_SKIP_MODEL_DOWNLOAD is set, skip download (CI/testing/offline)
+    /// 4. Otherwise, download the model from HuggingFace
+    fn resolve_model_files(config: &EmbeddingConfig) -> OmniResult<(std::path::PathBuf, std::path::PathBuf)> {
+        // Check if the user has manually specified a model path that exists
+        if config.model_path.exists() {
+            let tokenizer_path = config.model_path.with_file_name("tokenizer.json");
+            tracing::debug!(
+                model = %config.model_path.display(),
+                "using user-specified model path"
+            );
+            return Ok((config.model_path.clone(), tokenizer_path));
+        }
+
+        let spec = model_manager::resolve_model_spec();
+
+        // Check if already cached -- fast path, no network
+        if model_manager::is_model_ready(spec) {
+            return Ok((
+                model_manager::model_path(spec),
+                model_manager::tokenizer_path(spec),
+            ));
+        }
+
+        // Skip download if explicitly disabled via env var.
+        // This env var is also set by CI, integration tests, and offline environments.
+        if std::env::var("OMNI_SKIP_MODEL_DOWNLOAD").is_ok() {
+            tracing::info!("OMNI_SKIP_MODEL_DOWNLOAD set, operating in keyword-only mode");
+            return Ok((
+                model_manager::model_path(spec),
+                model_manager::tokenizer_path(spec),
+            ));
+        }
+
+        // Belt-and-suspenders: skip in unit test context within this crate
+        #[cfg(test)]
+        {
+            tracing::debug!("skipping model download in test environment");
+            return Ok((
+                model_manager::model_path(spec),
+                model_manager::tokenizer_path(spec),
+            ));
+        }
+
+        // Production path: auto-download the model
+        #[cfg(not(test))]
+        {
+            match model_manager::ensure_model(spec) {
+                Ok((model, tokenizer)) => Ok((model, tokenizer)),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "model auto-download failed, will operate in keyword-only mode"
+                    );
+                    Ok((
+                        model_manager::model_path(spec),
+                        model_manager::tokenizer_path(spec),
+                    ))
+                }
+            }
+        }
     }
 
     /// Create an embedder in degraded mode (for testing without a model).
@@ -336,7 +426,8 @@ mod tests {
             batch_size: 32,
             max_seq_length: 256,
         };
-        let embedder = Embedder::new(&config).expect("should create in degraded mode");
+        // Use degraded() directly to avoid triggering download
+        let embedder = Embedder::degraded(&config);
         assert!(!embedder.is_available());
     }
 
