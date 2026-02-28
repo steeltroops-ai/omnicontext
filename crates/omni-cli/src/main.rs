@@ -3,6 +3,8 @@
 //! Command-line interface for indexing, searching, and managing
 //! OmniContext indexes.
 
+use std::time::Instant;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
@@ -55,10 +57,6 @@ enum Commands {
         /// Path to the repository root.
         #[arg(default_value = ".")]
         path: String,
-
-        /// Show files that failed to parse.
-        #[arg(long)]
-        failed: bool,
     },
 
     /// Start the MCP server for AI agent integration.
@@ -88,7 +86,8 @@ enum Commands {
     },
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     tracing_subscriber::fmt()
@@ -97,36 +96,200 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Index { path, force } => {
-            tracing::info!(path = %path, force, "indexing repository");
-            // TODO: Initialize engine, run indexing
-            println!("Indexing: {path} (force={force})");
+            cmd_index(&path, force).await?;
         }
         Commands::Search { query, limit, language, kind } => {
-            tracing::info!(query = %query, limit, "searching");
-            // TODO: Initialize engine, run search, display results
-            println!("Searching for: \"{query}\" (limit={limit})");
-            let _ = (language, kind);
+            cmd_search(&query, limit, language.as_deref(), kind.as_deref())?;
         }
-        Commands::Status { path, failed } => {
-            tracing::info!(path = %path, "showing status");
-            // TODO: Load engine, display status
-            println!("Status for: {path} (show_failed={failed})");
+        Commands::Status { path } => {
+            cmd_status(&path)?;
         }
         Commands::Mcp { repo, transport, port } => {
-            tracing::info!(repo = %repo, transport = %transport, port, "starting MCP server");
-            // TODO: Delegate to omni-mcp logic
-            println!("MCP server: repo={repo} transport={transport} port={port}");
+            cmd_mcp(&repo, &transport, port).await?;
         }
         Commands::Config { show, init } => {
-            if init {
-                // TODO: Generate default config file
-                println!("Initialized .omnicontext/config.toml");
-            }
-            if show {
-                // TODO: Load and display effective config
-                println!("Configuration: (not yet implemented)");
-            }
+            cmd_config(show, init)?;
         }
+    }
+
+    Ok(())
+}
+
+/// Index a repository.
+async fn cmd_index(path: &str, _force: bool) -> Result<()> {
+    let repo_path = std::path::PathBuf::from(path)
+        .canonicalize()
+        .unwrap_or_else(|_| std::path::PathBuf::from(path));
+
+    println!("OmniContext - Indexing: {}", repo_path.display());
+    println!("---");
+
+    let start = Instant::now();
+
+    let mut engine = omni_core::Engine::new(&repo_path)?;
+    let result = engine.run_index().await?;
+
+    let elapsed = start.elapsed();
+
+    println!();
+    println!("  Indexing complete in {:.2}s", elapsed.as_secs_f64());
+    println!("  Files processed:  {}", result.files_processed);
+    println!("  Files failed:     {}", result.files_failed);
+    println!("  Chunks created:   {}", result.chunks_created);
+    println!("  Symbols found:    {}", result.symbols_extracted);
+    println!("  Embeddings:       {}", result.embeddings_generated);
+
+    // Persist on shutdown
+    engine.shutdown()?;
+
+    Ok(())
+}
+
+/// Search the indexed codebase.
+fn cmd_search(query: &str, limit: usize, _language: Option<&str>, _kind: Option<&str>) -> Result<()> {
+    let repo_path = std::env::current_dir()?;
+    let engine = omni_core::Engine::new(&repo_path)?;
+
+    let start = Instant::now();
+    let results = engine.search(query, limit)?;
+    let elapsed = start.elapsed();
+
+    if results.is_empty() {
+        println!("No results found for: \"{}\"", query);
+        println!();
+        println!("Tip: Make sure you've run `omnicontext index .` first.");
+        return Ok(());
+    }
+
+    println!("Results for \"{}\" ({} found, {:.1}ms):", query, results.len(), elapsed.as_secs_f64() * 1000.0);
+    println!();
+
+    for (i, result) in results.iter().enumerate() {
+        let path = &result.file_path;
+        let score = result.score;
+        let kind = format!("{:?}", result.chunk.kind);
+        let symbol = &result.chunk.symbol_path;
+        let lines = format!("L{}-L{}", result.chunk.line_start, result.chunk.line_end);
+
+        println!("  {}. {} (score: {:.4})", i + 1, path.display(), score);
+        println!("     {} {} [{}]", kind, symbol, lines);
+
+        // Print a preview of the content (first 2 lines)
+        let preview: String = result.chunk.content
+            .lines()
+            .take(2)
+            .map(|l| format!("     | {}", l))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if !preview.is_empty() {
+            println!("{}", preview);
+        }
+        println!();
+    }
+
+    Ok(())
+}
+
+/// Show engine status and index statistics.
+fn cmd_status(path: &str) -> Result<()> {
+    let repo_path = std::path::PathBuf::from(path)
+        .canonicalize()
+        .unwrap_or_else(|_| std::path::PathBuf::from(path));
+
+    let engine = omni_core::Engine::new(&repo_path)?;
+    let status = engine.status()?;
+
+    println!("OmniContext Status");
+    println!("---");
+    println!("  Repository:      {}", status.repo_path);
+    println!("  Data directory:   {}", status.data_dir);
+    println!("  Search mode:      {}", status.search_mode);
+    println!();
+    println!("  Files indexed:    {}", status.files_indexed);
+    println!("  Chunks indexed:   {}", status.chunks_indexed);
+    println!("  Symbols indexed:  {}", status.symbols_indexed);
+    println!("  Vectors indexed:  {}", status.vectors_indexed);
+
+    Ok(())
+}
+
+/// Start the MCP server.
+async fn cmd_mcp(repo: &str, transport: &str, port: u16) -> Result<()> {
+    println!("OmniContext MCP Server");
+    println!("  Repository: {}", repo);
+    println!("  Transport:  {}", transport);
+    if transport == "sse" {
+        println!("  Port:       {}", port);
+    }
+    println!();
+    println!("  [MCP server implementation pending -- Phase 4]");
+    // TODO: Wire up omni-mcp crate
+    Ok(())
+}
+
+/// Manage configuration.
+fn cmd_config(show: bool, init: bool) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+
+    if init {
+        let config_dir = cwd.join(".omnicontext");
+        let config_file = config_dir.join("config.toml");
+
+        if config_file.exists() {
+            println!("Configuration already exists: {}", config_file.display());
+        } else {
+            std::fs::create_dir_all(&config_dir)?;
+            let default_config = r#"# OmniContext Configuration
+# See https://github.com/omnicontext/omnicontext for documentation.
+
+[indexing]
+# exclude_patterns = [".git", "node_modules", "target", "__pycache__"]
+# max_file_size = 1048576  # 1 MB
+# max_chunk_tokens = 512
+
+[search]
+# default_limit = 10
+# rrf_k = 60
+# token_budget = 8192
+
+[embedding]
+# dimensions = 384
+
+[watcher]
+# debounce_ms = 100
+# poll_interval_secs = 300
+"#;
+            std::fs::write(&config_file, default_config)?;
+            println!("Created: {}", config_file.display());
+        }
+    }
+
+    if show {
+        let config = omni_core::Config::load(&cwd)?;
+        println!("Effective configuration for: {}", cwd.display());
+        println!();
+
+        println!("[indexing]");
+        println!("  exclude_patterns = {:?}", config.indexing.exclude_patterns);
+        println!("  max_file_size = {}", config.indexing.max_file_size);
+        println!("  max_chunk_tokens = {}", config.indexing.max_chunk_tokens);
+        println!("  parse_concurrency = {}", config.indexing.parse_concurrency);
+        println!();
+
+        println!("[search]");
+        println!("  default_limit = {}", config.search.default_limit);
+        println!("  rrf_k = {}", config.search.rrf_k);
+        println!("  token_budget = {}", config.search.token_budget);
+        println!();
+
+        println!("[embedding]");
+        println!("  dimensions = {}", config.embedding.dimensions);
+        println!("  model_path = {}", config.embedding.model_path.display());
+    }
+
+    if !show && !init {
+        println!("Usage: omnicontext config --init   Create default config");
+        println!("       omnicontext config --show   Show effective config");
     }
 
     Ok(())
