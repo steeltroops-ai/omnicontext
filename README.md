@@ -20,7 +20,23 @@ OmniContext is a **high-performance, locally-runnable code context engine** that
 
 ## Installation
 
-### From Source (Recommended)
+### One-Line Install (Recommended)
+
+The easiest way to install OmniContext and auto-download the embedding AI model.
+
+**macOS / Linux:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install/install.sh | bash
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install/install.ps1 | iex
+```
+
+### From Source
 
 ```bash
 # Clone and build
