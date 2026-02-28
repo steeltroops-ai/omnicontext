@@ -159,45 +159,50 @@
   }
 }
 
-/* Custom Scrollbar for Enterprise Feel */
-html::-webkit-scrollbar,
-body::-webkit-scrollbar,
-::-webkit-scrollbar,
-*::-webkit-scrollbar {
+/* --- SYSTEM ROOT CONFIG --- */
+:root {
+  color-scheme: dark !important;
+}
+
+html,
+body {
+  background-color: #09090b !important;
+  color-scheme: dark !important;
+  margin: 0;
+  padding: 0;
+  overflow: hidden; /* Lock root to prevent double scrollbars and header overlap */
+  height: 100%;
+}
+
+/* --- DECOUPLED SCROLLBAR ENGINE --- */
+/* Use a class to apply the scrollbar only where intended (e.g. main content) */
+.custom-scrollbar::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 
-html::-webkit-scrollbar-track,
-body::-webkit-scrollbar-track,
-::-webkit-scrollbar-track,
-*::-webkit-scrollbar-track {
+.custom-scrollbar::-webkit-scrollbar-track {
   background: transparent;
 }
 
-html::-webkit-scrollbar-thumb,
-body::-webkit-scrollbar-thumb,
-::-webkit-scrollbar-thumb,
-*::-webkit-scrollbar-thumb {
+.custom-scrollbar::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.1);
-  border-radius: 5px;
+  border-radius: 10px;
   border: 2px solid transparent;
   background-clip: padding-box;
 }
 
-html::-webkit-scrollbar-thumb:hover,
-body::-webkit-scrollbar-thumb:hover,
-::-webkit-scrollbar-thumb:hover,
-*::-webkit-scrollbar-thumb:hover {
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.2);
-  border: 2px solid transparent;
-  background-clip: padding-box;
 }
 
-/* Firefox scrollbar */
-html,
-body,
-* {
+/* Firefox Support */
+.custom-scrollbar {
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
+}
+
+/* --- UI COMPONENTS --- */
+nav {
+  z-index: 50;
 }

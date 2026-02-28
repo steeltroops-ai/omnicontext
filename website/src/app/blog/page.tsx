@@ -31,9 +31,9 @@ const posts = [
 
 export default function BlogPage() {
   return (
-    <main className="flex flex-col min-h-screen bg-[#09090B] font-sans selection:bg-primary/30">
+    <div className="flex flex-col h-screen overflow-hidden bg-[#09090B] selection:bg-primary/30">
       {/* Navigation */}
-      <nav className="fixed top-0 w-full h-14 flex items-center justify-center z-50 border-b border-white/5 bg-[#09090B]/50 backdrop-blur-xl">
+      <nav className="shrink-0 w-full h-14 flex items-center justify-center z-50 border-b border-white/5 bg-[#09090B]/50 backdrop-blur-xl">
         <div className="flex items-center justify-between w-full max-w-[1200px] px-8 md:px-16">
           <Link
             href="/"
@@ -73,7 +73,7 @@ export default function BlogPage() {
         </div>
       </nav>
 
-      <section className="pt-[140px] pb-[100px] px-8 md:px-16 max-w-[1200px] mx-auto w-full">
+      <main className="flex-1 overflow-y-auto custom-scrollbar pt-[120px] pb-[80px]">
         <h1 className="text-4xl md:text-[56px] font-semibold text-white tracking-tighter mb-6 leading-tight">
           Blog
         </h1>
@@ -112,50 +112,50 @@ export default function BlogPage() {
             </Link>
           ))}
         </div>
-      </section>
 
-      {/* Footer */}
-      <footer className="py-12 px-8 md:px-16 border-t border-white/5 bg-[#09090B] mt-auto">
-        <div className="max-w-[1200px] mx-auto flex flex-col md:flex-row items-center justify-between gap-6">
-          <div className="flex items-center gap-6 text-[13px] text-zinc-500">
-            <Link
-              href="/docs"
-              className="hover:text-zinc-200 transition-colors"
-            >
-              Docs
-            </Link>
-            <Link
-              href="/blog"
-              className="hover:text-zinc-200 transition-colors"
-            >
-              Blog
-            </Link>
-            <Link
-              href="/enterprise"
-              className="hover:text-zinc-200 transition-colors"
-            >
-              Enterprise
-            </Link>
-            <Link
-              href="/support"
-              className="hover:text-zinc-200 transition-colors"
-            >
-              Support
-            </Link>
+        {/* Footer */}
+        <footer className="py-12 px-8 md:px-16 border-t border-white/5 bg-[#09090B] mt-auto">
+          <div className="max-w-[1200px] mx-auto flex flex-col md:flex-row items-center justify-between gap-6">
+            <div className="flex items-center gap-6 text-[13px] text-zinc-500">
+              <Link
+                href="/docs"
+                className="hover:text-zinc-200 transition-colors"
+              >
+                Docs
+              </Link>
+              <Link
+                href="/blog"
+                className="hover:text-zinc-200 transition-colors"
+              >
+                Blog
+              </Link>
+              <Link
+                href="/enterprise"
+                className="hover:text-zinc-200 transition-colors"
+              >
+                Enterprise
+              </Link>
+              <Link
+                href="/support"
+                className="hover:text-zinc-200 transition-colors"
+              >
+                Support
+              </Link>
+            </div>
+            <div className="flex items-center gap-4">
+              <a
+                href={siteConfig.links.github}
+                className="text-zinc-600 hover:text-zinc-300 transition-colors"
+              >
+                <Github size={18} />
+              </a>
+              <span className="text-[12px] text-zinc-600">
+                (c) 2026 {siteConfig.name}. Apache-2.0.
+              </span>
+            </div>
           </div>
-          <div className="flex items-center gap-4">
-            <a
-              href={siteConfig.links.github}
-              className="text-zinc-600 hover:text-zinc-300 transition-colors"
-            >
-              <Github size={18} />
-            </a>
-            <span className="text-[12px] text-zinc-600">
-              (c) 2026 {siteConfig.name}. Apache-2.0.
-            </span>
-          </div>
-        </div>
-      </footer>
-    </main>
+        </footer>
+      </main>
+    </div>
   );
 }
