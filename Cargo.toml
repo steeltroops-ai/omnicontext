@@ -9,7 +9,7 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-authors = ["Steeltroops AI"]
+authors = ["Mayank"]
 license = "Apache-2.0"
 repository = "https://github.com/steeltroops-ai/omnicontext"
 rust-version = "1.80"
@@ -72,6 +72,10 @@ axum = "0.8"
 
 # Binary serialization
 bincode = "1"
+
+# MCP SDK
+rmcp = { version = "0.17", features = ["server", "transport-io", "macros"] }
+schemars = "1"
 
 # Hashing
 sha2 = "0.10"

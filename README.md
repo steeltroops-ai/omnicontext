@@ -4,6 +4,18 @@
 
 OmniContext is a **high-performance, locally-runnable code context engine** that gives AI coding agents deep understanding of any codebase. Built in Rust, exposed via the Model Context Protocol (MCP).
 
+[![Status](https://img.shields.io/badge/Status-Alpha-orange)](https://github.com/steeltroops-ai/omnicontext)
+[![Version](https://img.shields.io/badge/Version-v0.1.0-blue)](https://github.com/steeltroops-ai/omnicontext/releases)
+[![Build](https://img.shields.io/github/actions/workflow/status/steeltroops-ai/omnicontext/deploy.yml?branch=main&label=Build)](https://github.com/steeltroops-ai/omnicontext/actions)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](https://github.com/steeltroops-ai/omnicontext)
+[![License](<https://img.shields.io/badge/License-Open%20Core%20(Apache%202.0%20%2F%20Commercial)-blue>)](./LICENSE)
+
+## Tech Stack
+
+[![Rust](https://img.shields.io/badge/Rust-000000?logo=rust&logoColor=white)](https://www.rust-lang.org/)
+[![SQLite](https://img.shields.io/badge/SQLite-07405E?logo=sqlite&logoColor=white)](https://www.sqlite.org/)
+[![ONNX](https://img.shields.io/badge/ONNX-005CED?logo=onnx&logoColor=white)](https://onnx.ai/)
+
 ## Quick Start
 
 ```bash
@@ -59,4 +71,7 @@ omnicontext/
 
 ## License
 
-Apache 2.0
+OmniContext uses an **Open-Core** licensing model:
+
+- **Base Engine** (`omni-core`, `omni-mcp`, `omni-cli`): Licensed under [Apache 2.0](./LICENSE).
+- **Pro / Enterprise Features**: Licensed under a Custom Commercial License.
