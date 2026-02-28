@@ -160,15 +160,24 @@
 }
 
 /* Custom Scrollbar for Enterprise Feel */
+html::-webkit-scrollbar,
+body::-webkit-scrollbar,
+::-webkit-scrollbar,
 *::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 
+html::-webkit-scrollbar-track,
+body::-webkit-scrollbar-track,
+::-webkit-scrollbar-track,
 *::-webkit-scrollbar-track {
   background: transparent;
 }
 
+html::-webkit-scrollbar-thumb,
+body::-webkit-scrollbar-thumb,
+::-webkit-scrollbar-thumb,
 *::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.1);
   border-radius: 5px;
@@ -176,6 +185,9 @@
   background-clip: padding-box;
 }
 
+html::-webkit-scrollbar-thumb:hover,
+body::-webkit-scrollbar-thumb:hover,
+::-webkit-scrollbar-thumb:hover,
 *::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.2);
   border: 2px solid transparent;
@@ -183,6 +195,8 @@
 }
 
 /* Firefox scrollbar */
+html,
+body,
 * {
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.1) transparent;

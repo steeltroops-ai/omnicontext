@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { Github, SearchCode, ChevronRight, ArrowUpRight } from "lucide-react";
+import { Github, ChevronRight, ArrowUpRight } from "lucide-react";
 import Link from "next/link";
 import { siteConfig } from "@/config/site";
 import { Logo } from "@/components/icons";
@@ -381,8 +381,8 @@ export default function Home() {
       {/* Feature Sections - Alternating Interactive Blocks */}
       <section className="py-[160px] w-full max-w-[1280px] mx-auto flex flex-col gap-[200px] px-8 md:px-16 mb-20">
         {/* Block 1: Hybrid Retrieval */}
-        <div className="flex flex-col md:flex-row items-center gap-16">
-          <div className="flex-1">
+        <div className="flex flex-col md:flex-row items-stretch gap-16">
+          <div className="flex-1 flex flex-col justify-center py-2">
             <div className="text-[11px] uppercase tracking-widest text-emerald-500 font-semibold mb-4">
               Hybrid Search Engine
             </div>
@@ -417,16 +417,16 @@ export default function Home() {
               Learn about Hybrid Search <ChevronRight size={14} />
             </Link>
           </div>
-          <div className="flex-[1.2] w-full relative">
-            <div className="w-full bg-[#141418] border border-white/10 rounded-[16px] p-6 shadow-2xl relative overflow-hidden group">
+          <div className="flex-[1.2] w-full flex flex-col">
+            <div className="w-full flex-1 bg-[#141418] border border-white/10 rounded-[16px] p-6 shadow-2xl relative overflow-hidden group flex flex-col justify-center">
               <div className="absolute top-0 right-1/4 w-32 h-32 bg-emerald-500/10 blur-[50px] pointer-events-none opacity-50" />
-              <div className="flex items-center gap-2 mb-6 border-b border-white/5 pb-4">
+              <div className="flex items-center gap-2 mb-6 border-b border-white/5 pb-4 absolute top-6 left-6 right-6">
                 <Logo size={16} className="text-zinc-500" />
                 <span className="text-[12px] font-mono text-zinc-500">
                   omni-core hybrid-search
                 </span>
               </div>
-              <div className="font-mono text-[11px] text-zinc-400 flex flex-col gap-3 leading-[1.6]">
+              <div className="font-mono text-[11px] text-zinc-400 flex flex-col justify-center gap-3 leading-[1.6] mt-12">
                 <div>
                   <span className="text-zinc-500">[1]</span> Executing dense
                   search (ONNX embedding)...{" "}
@@ -455,10 +455,9 @@ export default function Home() {
             </div>
           </div>
         </div>
-
         {/* Block 2: Dependency Graph */}
-        <div className="flex flex-col md:flex-row-reverse items-center gap-16">
-          <div className="flex-1">
+        <div className="flex flex-col md:flex-row-reverse items-stretch gap-16">
+          <div className="flex-1 flex flex-col justify-center py-2">
             <div className="text-[11px] uppercase tracking-widest text-emerald-500 font-semibold mb-4">
               Structural Understanding
             </div>
@@ -492,38 +491,40 @@ export default function Home() {
               Explore the Graph API <ChevronRight size={14} />
             </Link>
           </div>
-          <div className="flex-[1.2] w-full relative">
-            <div className="w-full bg-[#0d0a15] border border-blue-500/10 rounded-[16px] p-6 shadow-2xl font-mono text-[12px] leading-[1.8] overflow-hidden">
-              <div className="flex gap-2 mb-6">
+          <div className="flex-[1.2] w-full flex flex-col">
+            <div className="w-full flex-1 bg-[#0d0a15] border border-blue-500/10 rounded-[16px] p-6 shadow-2xl font-mono text-[12px] leading-[1.8] overflow-hidden flex flex-col justify-center">
+              <div className="flex gap-2 mb-6 absolute top-6 left-6">
                 <div className="w-2.5 h-2.5 rounded-full bg-[#555]"></div>
                 <div className="w-2.5 h-2.5 rounded-full bg-[#555]"></div>
                 <div className="w-2.5 h-2.5 rounded-full bg-[#555]"></div>
               </div>
-              <div className="text-indigo-400 font-bold text-[16px] mb-2 tracking-tighter">
-                petgraph Traversal
-              </div>
-              <div className="text-zinc-300 mb-4 text-[11px]">
-                Tracing dependencies for{" "}
-                <span className="text-emerald-400">
-                  UserService::validate()
-                </span>
-              </div>
-              <div className="pl-3 border-l-2 border-indigo-500/30 text-zinc-400 mb-6 flex flex-col gap-2 text-[11px]">
-                <div>
-                  <span className="text-indigo-400">↳</span> (Call)
-                  auth::verify_token
+              <div className="mt-8">
+                <div className="text-indigo-400 font-bold text-[16px] mb-2 tracking-tighter">
+                  petgraph Traversal
                 </div>
-                <div className="pl-4">
-                  <span className="text-indigo-400">↳</span> (Import)
-                  jsonwebtoken::decode
+                <div className="text-zinc-300 mb-4 text-[11px]">
+                  Tracing dependencies for{" "}
+                  <span className="text-emerald-400">
+                    UserService::validate()
+                  </span>
                 </div>
-                <div>
-                  <span className="text-indigo-400">↳</span> (Call)
-                  db::fetch_user
-                </div>
-                <div className="pl-4">
-                  <span className="text-indigo-400">↳</span> (Impl)
-                  CacheManager::get
+                <div className="pl-3 border-l-2 border-indigo-500/30 text-zinc-400 mb-6 flex flex-col justify-center gap-2 text-[11px]">
+                  <div>
+                    <span className="text-indigo-400">↳</span> (Call)
+                    auth::verify_token
+                  </div>
+                  <div className="pl-4">
+                    <span className="text-indigo-400">↳</span> (Import)
+                    jsonwebtoken::decode
+                  </div>
+                  <div>
+                    <span className="text-indigo-400">↳</span> (Call)
+                    db::fetch_user
+                  </div>
+                  <div className="pl-4">
+                    <span className="text-indigo-400">↳</span> (Impl)
+                    CacheManager::get
+                  </div>
                 </div>
               </div>
             </div>
@@ -531,8 +532,8 @@ export default function Home() {
         </div>
 
         {/* Block 3: Native MCP */}
-        <div className="flex flex-col md:flex-row items-center gap-16">
-          <div className="flex-1">
+        <div className="flex flex-col md:flex-row items-stretch gap-16">
+          <div className="flex-1 flex flex-col justify-center py-2">
             <div className="text-[11px] uppercase tracking-widest text-emerald-500 font-semibold mb-4">
               Agent Protocol
             </div>
@@ -565,42 +566,27 @@ export default function Home() {
               View MCP Configuration <ChevronRight size={14} />
             </Link>
           </div>
-          <div className="flex-[1.2] w-full relative">
+          <div className="flex-[1.2] w-full flex flex-col">
             {/* MCP JSON Mockup */}
-            <div className="w-full bg-[#111] border border-white/5 rounded-[16px] shadow-2xl overflow-hidden font-sans">
+            <div className="w-full flex-1 bg-[#111] border border-white/5 rounded-[16px] shadow-2xl overflow-hidden font-sans flex flex-col">
               <div className="bg-[#18181b] p-3 text-[11px] text-zinc-400 flex items-center justify-between border-b border-white/5">
                 <div className="flex items-center gap-2">
                   <div className="w-2 h-2 rounded-full bg-emerald-500" />{" "}
                   claude-mcp-config.json
                 </div>
               </div>
-              <div className="p-5">
-                <pre className="font-mono text-[11px] leading-[1.8] text-zinc-300">
-                  <span className="text-zinc-500">{"{"}</span>
-                  <span className="text-blue-400">&quot;mcpServers&quot;</span>
-                  <span className="text-zinc-500">:</span> {"{"}
-                  <span className="text-blue-400">&quot;omnicontext&quot;</span>
-                  <span className="text-zinc-500">:</span> {"{"}
-                  <span className="text-blue-400">&quot;command&quot;</span>
-                  <span className="text-zinc-500">:</span>{" "}
-                  <span className="text-green-400">
-                    &quot;omnicontext-mcp&quot;
-                  </span>
-                  ,<span className="text-blue-400">&quot;args&quot;</span>
-                  <span className="text-zinc-500">:</span> [
-                  <span className="text-green-400">
-                    &quot;--transport&quot;
-                  </span>
-                  ,<span className="text-green-400">&quot;stdio&quot;</span>,
-                  <span className="text-green-400">&quot;--repo&quot;</span>,
-                  <span className="text-green-400">&quot;.&quot;</span>
-                  ],
-                  <span className="text-blue-400">&quot;env&quot;</span>
-                  <span className="text-zinc-500">:</span> {"{}"}
-                  {"}"}
-                  {"}"}
-                  <span className="text-zinc-500">{"}"}</span>
-                </pre>
+              <div className="p-5 flex-1 flex flex-col justify-center">
+                <div className="font-mono text-[11px] leading-[1.8] text-zinc-300">
+                  <div><span className="text-zinc-500">{"{"}</span></div>
+                  <div>{"  "}<span className="text-blue-400">&quot;mcpServers&quot;</span><span className="text-zinc-500">:</span> {"{"}</div>
+                  <div>{"    "}<span className="text-blue-400">&quot;omnicontext&quot;</span><span className="text-zinc-500">:</span> {"{"}</div>
+                  <div>{"      "}<span className="text-blue-400">&quot;command&quot;</span><span className="text-zinc-500">:</span> <span className="text-green-400">&quot;omnicontext-mcp&quot;</span>,</div>
+                  <div>{"      "}<span className="text-blue-400">&quot;args&quot;</span><span className="text-zinc-500">:</span> [<span className="text-green-400">&quot;--transport&quot;</span>, <span className="text-green-400">&quot;stdio&quot;</span>, <span className="text-green-400">&quot;--repo&quot;</span>, <span className="text-green-400">&quot;.&quot;</span>],</div>
+                  <div>{"      "}<span className="text-blue-400">&quot;env&quot;</span><span className="text-zinc-500">:</span> {"{}"}</div>
+                  <div>{"    "}{"}"}</div>
+                  <div>{"  "}{"}"}</div>
+                  <div><span className="text-zinc-500">{"}"}</span></div>
+                </div>
               </div>
             </div>
           </div>
