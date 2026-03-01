@@ -1,15 +1,17 @@
-//! Comprehensive benchmark suite for OmniContext.
+//! Comprehensive benchmark suite for `OmniContext`.
 //!
 //! Measures:
-//! 1. Low-level performance (vector search, SQLite operations)
+//! 1. Low-level performance (vector search, `SQLite` operations)
 //! 2. Embedding coverage
 //! 3. Reranker performance
 //! 4. End-to-end indexing and search
 //!
-//! Run with: cargo run --package omni-core --bin benchmark [repo_path]
+//! Run with: `cargo run --package omni-core --bin benchmark [repo_path]`
 
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::cast_lossless)]
+#![allow(clippy::uninlined_format_args)]
+#![allow(clippy::ptr_arg)]
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -71,7 +73,7 @@ fn bench_vector_operations() {
             "  {:>6} vectors, dim=384: {:.1}ms total ({:.0} inserts/sec)",
             n,
             ms,
-            f64::from(n) / (ms / 1000.0)
+            (n as f64) / (ms / 1000.0)
         );
     }
     println!();
@@ -106,6 +108,7 @@ fn bench_vector_insert(n: usize, dim: usize) -> f64 {
             eprintln!("Failed to add vector {i}: {e}");
         });
     }
+    let elapsed = start.elapsed();
     elapsed.as_secs_f64() * 1000.0
 }
 

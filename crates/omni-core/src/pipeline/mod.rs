@@ -563,6 +563,7 @@ impl Engine {
             graph_nodes: self.dep_graph.node_count(),
             graph_edges: self.dep_graph.edge_count(),
             has_cycles: self.dep_graph.has_cycles(),
+            language_distribution: self.index.language_distribution().unwrap_or_default(),
             search_mode: if self.embedder.is_available() {
                 "hybrid".into()
             } else {
@@ -634,6 +635,8 @@ pub struct EngineStatus {
     pub graph_edges: usize,
     /// Whether the dependency graph contains cycles.
     pub has_cycles: bool,
+    /// Breakdown of files by language.
+    pub language_distribution: Vec<(String, usize)>,
     /// Current search mode (hybrid or keyword-only).
     pub search_mode: String,
 }

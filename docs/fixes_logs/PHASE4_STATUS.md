@@ -8,20 +8,28 @@
 
 ### Task 1: Benchmark Suite ✅ COMPLETE
 **Status**: Complete  
-**Duration**: 2 hours  
+**Duration**: 3 hours  
 **Completion**: 100%
 
 **Deliverables**:
 - ✅ Golden query dataset (20 queries)
 - ✅ Benchmark runner with MRR, NDCG, Recall@K, Precision@K
 - ✅ Integration test framework
+- ✅ Consolidated benchmark binaries (removed duplicates)
+- ✅ All clippy warnings fixed
 - ⏳ Baseline measurement (pending indexed repo)
 - ⏳ CI integration (deferred)
 
 **Files Created**:
 - `tests/bench/golden_queries.json`
 - `crates/omni-core/tests/search_quality_bench.rs`
+- `crates/omni-core/src/bin/benchmark.rs` (consolidated)
 - `docs/fixes_logs/PHASE4_TASK1_COMPLETE.md`
+- `docs/fixes_logs/PHASE4_BENCHMARK_CONSOLIDATION.md`
+
+**Files Deleted**:
+- `crates/omni-core/src/bin/bench.rs` (consolidated)
+- `crates/omni-core/src/bin/benchmark_improvements.rs` (consolidated)
 
 ### Task 2: Performance Optimization ⏳ STARTING
 **Status**: Starting  
@@ -54,46 +62,28 @@
 
 ## Issues Identified
 
-### Issue 1: Duplicate Benchmark Binaries
-**Problem**: Three benchmark binaries with overlapping functionality:
-1. `src/bin/bench.rs` - Low-level performance benchmarks
-2. `src/bin/benchmark_improvements.rs` - High-level improvement validation
-3. `src/bin/eval.rs` - Search quality evaluation
+### Issue 1: Duplicate Benchmark Binaries ✅ RESOLVED
+**Problem**: Three benchmark binaries with overlapping functionality
 
-**Impact**: Confusion, maintenance burden, clippy warnings
+**Resolution**: Consolidated into single `benchmark.rs` binary
+- Removed `bench.rs` and `benchmark_improvements.rs`
+- Created comprehensive `benchmark.rs`
+- Fixed all clippy warnings
+- Improved output formatting
 
-**Resolution Plan**:
-1. Consolidate into single comprehensive benchmark binary
-2. Keep search quality benchmarks as integration test
-3. Remove or refactor duplicate code
+### Issue 2: Clippy Warnings in Bin Files ✅ RESOLVED
+**Problem**: Multiple clippy warnings in benchmark binaries
 
-### Issue 2: Clippy Warnings in Bin Files
-**Problem**: Multiple clippy warnings in benchmark binaries:
-- `struct_excessive_bools`
-- `cast_precision_loss`
-- `doc_markdown`
-- `uninlined_format_args`
-- `ptr_arg`
-- `expect_used`
-- `wildcard_imports`
-
-**Impact**: CI failures when running `cargo clippy --workspace -- -D warnings`
-
-**Resolution**: Fix all clippy warnings or add appropriate `#[allow]` attributes
+**Resolution**: Added appropriate `#[allow]` attributes and fixed documentation
 
 ## Next Steps
 
-1. **Consolidate Benchmarks** (30 min)
-   - Merge bench.rs and benchmark_improvements.rs
-   - Create single comprehensive benchmark binary
-   - Fix all clippy warnings
-
+1. ~~**Consolidate Benchmarks**~~ ✅ DONE
 2. **Start Task 2: Performance Optimization** (2-3 days)
    - Profile indexing with flamegraph
    - Profile search with flamegraph
    - Identify bottlenecks
    - Implement optimizations
-
 3. **Continue with remaining tasks** (6-8 weeks)
    - Task 3: Additional languages
    - Task 4: Speculative pre-fetch
