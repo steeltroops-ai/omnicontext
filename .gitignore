@@ -34,12 +34,15 @@ Thumbs.db
 *.log
 *.tmp
 *.temp
-err.log
-debug.log
 
 # Generated reports and local documentation
 docs/reports/
 docs/local/
+
+# Junk files
+out.json
+out2.json
+tests.log
 
 # Internal Planning & Agent Workspaces
 .agents/
