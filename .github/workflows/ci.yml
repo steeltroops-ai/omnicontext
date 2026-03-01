@@ -11,6 +11,11 @@ env:
   RUSTFLAGS: -Dwarnings
   OMNI_SKIP_MODEL_DOWNLOAD: "1"
 
+# Cancel in-progress runs when a new run is triggered
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     name: Check
@@ -42,7 +47,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - run: cargo fmt --all -- --check
+      - name: Check formatting
+        run: |
+          if ! cargo fmt --all -- --check; then
+            echo "❌ Code formatting check failed!"
+            echo "Run 'cargo fmt --all' locally to fix formatting issues."
+            exit 1
+          fi
 
   clippy:
     name: Clippy
@@ -54,9 +65,13 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: Run clippy on main crates
-        run: cargo clippy -p omni-mcp -p omni-daemon -p omni-cli --bins -- -D warnings
+        run: |
+          echo "Checking main binary crates..."
+          cargo clippy -p omni-mcp -p omni-daemon -p omni-cli --bins -- -D warnings
       - name: Run clippy on core library
-        run: cargo clippy -p omni-core --lib -- -D warnings
+        run: |
+          echo "Checking core library..."
+          cargo clippy -p omni-core --lib -- -D warnings
 
   # This job ensures all required checks pass before allowing merge
   ci-success:

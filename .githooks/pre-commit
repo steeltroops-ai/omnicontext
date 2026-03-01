@@ -1,0 +1,33 @@
+#!/bin/bash
+# Pre-commit hook to enforce code quality
+# Install: git config core.hooksPath .githooks
+
+set -e
+
+echo "Running pre-commit checks..."
+
+# Check formatting
+echo "Checking code formatting..."
+if ! cargo fmt --all -- --check; then
+    echo "❌ Code formatting check failed!"
+    echo "Run 'cargo fmt --all' to fix formatting issues."
+    exit 1
+fi
+
+# Run clippy on main crates
+echo "Running clippy on main crates..."
+if ! cargo clippy -p omni-mcp -p omni-daemon -p omni-cli --bins -- -D warnings; then
+    echo "❌ Clippy check failed on main crates!"
+    echo "Fix the warnings above before committing."
+    exit 1
+fi
+
+# Run clippy on core library
+echo "Running clippy on core library..."
+if ! cargo clippy -p omni-core --lib -- -D warnings; then
+    echo "❌ Clippy check failed on core library!"
+    echo "Fix the warnings above before committing."
+    exit 1
+fi
+
+echo "✅ All pre-commit checks passed!"
