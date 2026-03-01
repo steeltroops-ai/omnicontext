@@ -2,6 +2,27 @@
 
 Thank you for your interest in contributing to OmniContext! This document provides guidelines and instructions for contributors.
 
+## Commit Message Format
+
+OmniContext uses [Conventional Commits](https://www.conventionalcommits.org/) for automatic version bumping and changelog generation.
+
+**Format**: `<type>[optional scope]: <description>`
+
+**Types**:
+- `feat:` - New feature (triggers minor version bump)
+- `fix:` - Bug fix (triggers patch version bump)
+- `feat!:` or `BREAKING CHANGE:` - Breaking change (triggers major version bump)
+- `chore:`, `docs:`, `style:`, `refactor:`, `perf:`, `test:`, `ci:` - No version bump
+
+**Examples**:
+```bash
+git commit -m "feat: add cross-encoder reranking"
+git commit -m "fix(parser): handle empty files"
+git commit -m "feat!: change MCP API (breaking)"
+```
+
+See [docs/CONVENTIONAL_COMMITS.md](docs/CONVENTIONAL_COMMITS.md) for detailed guide.
+
 ## Development Setup
 
 After cloning the repository, run the setup script to install git hooks:
