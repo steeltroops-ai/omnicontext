@@ -47,3 +47,16 @@ tests.log
 # Internal Planning & Agent Workspaces
 .agents/
 log/local/
+
+# JS/TS and VSCode Extension
+node_modules/
+editors/vscode/node_modules/
+bun.lock
+bun.lockb
+package-lock.json
+yarn.lock
+editors/vscode/out/
+editors/vscode/dist/
+
+# Other tools
+.kiro/
