@@ -79,5 +79,17 @@ indicatif = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 
+[[bin]]
+name = "eval"
+path = "src/bin/eval.rs"
+
+[[bin]]
+name = "bench"
+path = "src/bin/bench.rs"
+
+[[bin]]
+name = "benchmark_improvements"
+path = "src/bin/benchmark_improvements.rs"
+
 [lints]
 workspace = true

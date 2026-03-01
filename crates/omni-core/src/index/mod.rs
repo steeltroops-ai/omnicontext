@@ -743,6 +743,23 @@ impl MetadataIndex {
         )?;
         Ok(count as usize)
     }
+    /// Get ALL dependency edges from the database.
+    ///
+    /// Used to populate the in-memory dependency graph on engine startup.
+    pub fn get_all_dependencies(&self) -> OmniResult<Vec<DependencyEdge>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT source_id, target_id, kind FROM dependencies",
+        )?;
+        let edges = stmt.query_map([], |row| {
+            let kind_str: String = row.get(2)?;
+            Ok(DependencyEdge {
+                source_id: row.get(0)?,
+                target_id: row.get(1)?,
+                kind: DependencyKind::from_str_lossy(&kind_str),
+            })
+        })?;
+        Ok(edges.filter_map(|e| e.ok()).collect())
+    }
 }
 
 /// Aggregate index statistics.

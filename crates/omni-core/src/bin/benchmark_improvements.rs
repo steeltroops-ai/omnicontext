@@ -79,6 +79,10 @@ fn test_embedding_coverage(repo_path: &PathBuf) -> Result<(), Box<dyn std::error
     println!("  Vectors indexed: {}", status.vectors_indexed);
     println!("  Coverage (from status): {:.2}%", status.embedding_coverage_percent);
     println!("  Search mode: {}", status.search_mode);
+    println!("  Graph nodes: {}", status.graph_nodes);
+    println!("  Graph edges: {}", status.graph_edges);
+    println!("  Dependency edges (SQLite): {}", status.dep_edges);
+    println!("  Has cycles: {}", status.has_cycles);
 
     // Evaluate coverage
     if coverage >= 95.0 {

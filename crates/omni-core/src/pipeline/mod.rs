@@ -107,7 +107,7 @@ impl Engine {
             "engine initialized"
         );
 
-        Ok(Self {
+        let mut engine = Self {
             config,
             index,
             vector_index,
@@ -115,7 +115,47 @@ impl Engine {
             search_engine,
             reranker,
             dep_graph,
-        })
+        };
+
+        // Load dependency graph from SQLite index
+        if let Err(e) = engine.load_graph_from_index() {
+            tracing::warn!(error = %e, "failed to load dependency graph from index");
+        }
+
+        Ok(engine)
+    }
+
+    /// Load the dependency graph from the SQLite index.
+    ///
+    /// This populates the in-memory graph with all edges stored in the database.
+    /// Should be called after engine initialization to restore graph state.
+    fn load_graph_from_index(&mut self) -> OmniResult<usize> {
+        let edges = self.index.get_all_dependencies()?;
+        let edge_count = edges.len();
+        
+        if edge_count == 0 {
+            tracing::debug!("no dependency edges found in index");
+            return Ok(0);
+        }
+        
+        tracing::info!(edges = edge_count, "loading dependency graph from index");
+        
+        for edge in edges {
+            // Add nodes for source and target if they don't exist
+            self.dep_graph.add_symbol(edge.source_id)?;
+            self.dep_graph.add_symbol(edge.target_id)?;
+            
+            // Add the edge
+            self.dep_graph.add_edge(&edge)?;
+        }
+        
+        tracing::info!(
+            nodes = self.dep_graph.node_count(),
+            edges = self.dep_graph.edge_count(),
+            "dependency graph loaded"
+        );
+        
+        Ok(edge_count)
     }
 
     /// Start the indexing pipeline.
