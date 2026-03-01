@@ -180,4 +180,4 @@ watcher --> parser --> chunker --> embedder --> index
 OmniContext uses an **Open-Core** licensing model:
 
 - **Base Engine** (`omni-core`, `omni-mcp`, `omni-cli`): Licensed under [Apache 2.0](./LICENSE).
-- **Pro / Enterprise Features**: Licensed under a [Custom Commercial License](./COMMERCIAL_LICENSE.md).
+- **Pro / Enterprise Features**: Licensed under a [Custom Commercial License](docs/COMMERCIAL_LICENSE.md).

@@ -648,6 +648,7 @@ impl SearchEngine {
                 chunk: entry.chunk,
                 score: entry.score,
                 is_graph_neighbor: entry.is_neighbor,
+                priority: None, // Priority not used in this legacy path
             });
         }
 

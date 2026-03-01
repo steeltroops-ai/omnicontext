@@ -465,6 +465,68 @@ pub enum PipelineEvent {
 // Context assembly types
 // ---------------------------------------------------------------------------
 
+/// Priority level for chunks in context assembly.
+///
+/// Used to pack maximum relevant context within token budget by
+/// prioritizing critical chunks and compressing low-priority ones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChunkPriority {
+    /// Critical context: active file, cursor context, direct dependencies.
+    /// Always included, never compressed.
+    Critical = 4,
+    /// High relevance: search results with score >0.8, test files.
+    /// Included if space available, minimal compression.
+    High = 3,
+    /// Medium relevance: search results with score 0.5-0.8, related files.
+    /// Included if space available, moderate compression.
+    Medium = 2,
+    /// Low relevance: architectural context, documentation, distant dependencies.
+    /// Included only if space available, aggressive compression.
+    Low = 1,
+}
+
+impl ChunkPriority {
+    /// Determine priority from search score and context flags.
+    pub fn from_score_and_context(
+        score: f64,
+        is_active_file: bool,
+        is_test: bool,
+        is_graph_neighbor: bool,
+    ) -> Self {
+        if is_active_file {
+            return Self::Critical;
+        }
+
+        if is_test {
+            return Self::High;
+        }
+
+        if is_graph_neighbor {
+            return Self::Medium;
+        }
+
+        // Score-based priority
+        if score >= 0.8 {
+            Self::High
+        } else if score >= 0.5 {
+            Self::Medium
+        } else {
+            Self::Low
+        }
+    }
+
+    /// Compression factor for this priority (0.0 = no compression, 1.0 = maximum).
+    pub fn compression_factor(&self) -> f64 {
+        match self {
+            Self::Critical => 0.0, // Never compress
+            Self::High => 0.1,     // Minimal compression (10%)
+            Self::Medium => 0.3,   // Moderate compression (30%)
+            Self::Low => 0.6,      // Aggressive compression (60%)
+        }
+    }
+}
+
 /// A token-budget-aware context window assembled from search results.
 ///
 /// Groups chunks by file and includes graph-neighbor chunks for
@@ -490,6 +552,9 @@ pub struct ContextEntry {
     pub score: f64,
     /// Whether this chunk was included via graph traversal (not direct search match).
     pub is_graph_neighbor: bool,
+    /// Priority level for this chunk.
+    #[serde(default)]
+    pub priority: Option<ChunkPriority>,
 }
 
 impl ContextWindow {
