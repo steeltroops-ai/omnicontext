@@ -3,20 +3,9 @@ max_width = 100
 tab_spaces = 4
 newline_style = "Unix"
 
-# Import grouping and sorting
-group_imports = "StdExternalCrate"
+# Stable professional settings
 reorder_imports = true
 reorder_modules = true
-
-# Formatting refinements
 use_field_init_shorthand = true
 use_try_shorthand = true
-combine_control_expr = true
-overflow_delimited_expr = true
 short_array_element_width_threshold = 20
-
-# Stability and readability
-struct_field_align_threshold = 20
-struct_lit_single_line = true
-fn_single_line = false
-where_single_line = false
