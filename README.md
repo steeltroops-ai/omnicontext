@@ -20,55 +20,30 @@ OmniContext is a **high-performance, locally-runnable code context engine** that
 
 ## Installation
 
-### One-Line Install (Recommended)
+See [INSTALL.md](INSTALL.md) for detailed installation instructions.
 
-The easiest way to install OmniContext and auto-download the embedding AI model.
+### Quick Install
 
-**macOS / Linux:**
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install/install.sh | bash
-```
-
-**Windows (PowerShell):**
-
+**Windows:**
 ```powershell
 irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install/install.ps1 | iex
 ```
 
-### From Source
-
+**macOS/Linux:**
 ```bash
-# Clone and build
-git clone https://github.com/steeltroops-ai/omnicontext.git
-cd omnicontext
-cargo build --release
-
-# Binaries are in target/release/
-# - omnicontext       (CLI)
-# - omnicontext-mcp   (MCP server)
+curl -sSL https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install/install.sh | bash
 ```
 
 ### Package Managers
 
 ```bash
-# macOS (Homebrew)
+# Homebrew (macOS/Linux)
 brew tap steeltroops-ai/omnicontext
 brew install omnicontext
 
-# Windows (Scoop)
-scoop bucket add omnicontext https://github.com/steeltroops-ai/scoop-omnicontext
+# Scoop (Windows)
+scoop bucket add omnicontext https://github.com/steeltroops-ai/omnicontext
 scoop install omnicontext
-
-# Rust (Cargo)
-cargo install --path crates/omni-cli
-cargo install --path crates/omni-mcp
-```
-
-### Docker
-
-```bash
-docker run -v /path/to/repo:/repo steeltroops/omnicontext:latest
 ```
 
 ## Quick Start
@@ -191,14 +166,13 @@ watcher --> parser --> chunker --> embedder --> index
 
 ## Documentation
 
-- [Product Specification](docs/local/OMNICONTEXT_PRODUCT_SPEC.md)
-- [Development Roadmap](docs/local/DEVELOPMENT_ROADMAP.md)
-- [Architecture Decisions](docs/ADR.md)
-- [Concurrency Architecture](docs/CONCURRENCY_ARCHITECTURE.md)
-- [Error Recovery](docs/ERROR_RECOVERY.md)
-- [Testing Strategy](docs/TESTING_STRATEGY.md)
-- [Security Model](docs/SECURITY_THREAT_MODEL.md)
-- [Embedding Model Evaluation](docs/local/EMBEDDING_MODEL_EVALUATION.md)
+- [Installation Guide](INSTALL.md) - Complete installation instructions
+- [Architecture Decisions](docs/ADR.md) - Design decisions and rationale
+- [Concurrency Architecture](docs/CONCURRENCY_ARCHITECTURE.md) - Thread safety and performance
+- [Error Recovery](docs/ERROR_RECOVERY.md) - Error handling patterns
+- [Testing Strategy](docs/TESTING_STRATEGY.md) - Test coverage and approach
+- [Security Model](docs/SECURITY_THREAT_MODEL.md) - Security considerations
+- [Supported Languages](docs/SUPPORTED_LANGUAGES.md) - Language support matrix
 
 ## License
 
