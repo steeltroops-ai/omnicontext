@@ -2,6 +2,10 @@
 /target/
 debug/
 release/
+*.exe
+*.dll
+*.so
+*.dylib
 
 # ONNX models and runtime binaries
 models/*.onnx
@@ -26,7 +30,17 @@ Thumbs.db
 .env
 .env.local
 
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+err.log
+debug.log
+
+# Generated reports and local documentation
+docs/reports/
+docs/local/
+
 # Internal Planning & Agent Workspaces
 .agents/
-docs/local/
-log/local/\n.agents/\n
+log/local/
