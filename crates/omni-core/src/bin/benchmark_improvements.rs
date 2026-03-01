@@ -77,7 +77,10 @@ fn test_embedding_coverage(repo_path: &PathBuf) -> Result<(), Box<dyn std::error
     println!("\nEngine Status:");
     println!("  Chunks indexed: {}", status.chunks_indexed);
     println!("  Vectors indexed: {}", status.vectors_indexed);
-    println!("  Coverage (from status): {:.2}%", status.embedding_coverage_percent);
+    println!(
+        "  Coverage (from status): {:.2}%",
+        status.embedding_coverage_percent
+    );
     println!("  Search mode: {}", status.search_mode);
     println!("  Graph nodes: {}", status.graph_nodes);
     println!("  Graph edges: {}", status.graph_edges);
@@ -88,7 +91,10 @@ fn test_embedding_coverage(repo_path: &PathBuf) -> Result<(), Box<dyn std::error
     if coverage >= 95.0 {
         println!("\n✅ PASS: Embedding coverage >= 95% (Target: 100%)");
     } else if coverage >= 80.0 {
-        println!("\n⚠️  WARN: Embedding coverage {:.2}% (Target: 100%)", coverage);
+        println!(
+            "\n⚠️  WARN: Embedding coverage {:.2}% (Target: 100%)",
+            coverage
+        );
     } else {
         println!("\n❌ FAIL: Embedding coverage {:.2}% < 80%", coverage);
     }
@@ -135,7 +141,11 @@ fn test_reranker_performance(_repo_path: &PathBuf) -> Result<(), Box<dyn std::er
 
     for (i, (doc, score)) in documents.iter().zip(scores.iter()).enumerate() {
         if let Some(score) = score {
-            println!("  [{i}] Score: {:.4} - {}", score, &doc[..doc.len().min(50)]);
+            println!(
+                "  [{i}] Score: {:.4} - {}",
+                score,
+                &doc[..doc.len().min(50)]
+            );
         } else {
             println!("  [{i}] Score: None - {}", &doc[..doc.len().min(50)]);
         }
@@ -144,12 +154,23 @@ fn test_reranker_performance(_repo_path: &PathBuf) -> Result<(), Box<dyn std::er
     // Check if reranking produced meaningful scores
     let valid_scores: Vec<f32> = scores.iter().filter_map(|s| *s).collect();
     if valid_scores.len() >= documents.len() / 2 {
-        println!("\n✅ PASS: Reranker produced scores for {}/{} documents", valid_scores.len(), documents.len());
+        println!(
+            "\n✅ PASS: Reranker produced scores for {}/{} documents",
+            valid_scores.len(),
+            documents.len()
+        );
     } else {
-        println!("\n⚠️  WARN: Reranker only scored {}/{} documents", valid_scores.len(), documents.len());
+        println!(
+            "\n⚠️  WARN: Reranker only scored {}/{} documents",
+            valid_scores.len(),
+            documents.len()
+        );
     }
 
-    println!("\nBENCHMARK_RESULT: reranker_latency_ms={:.2}", duration.as_secs_f64() * 1000.0);
+    println!(
+        "\nBENCHMARK_RESULT: reranker_latency_ms={:.2}",
+        duration.as_secs_f64() * 1000.0
+    );
     Ok(())
 }
 

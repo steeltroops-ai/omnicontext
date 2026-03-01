@@ -1,4 +1,4 @@
-//! OmniContext MCP Server.
+//! `OmniContext` MCP Server.
 //!
 //! Exposes code intelligence tools to AI coding agents via the
 //! Model Context Protocol (MCP). Supports stdio transport.
@@ -28,9 +28,13 @@ use anyhow::Result;
 use clap::Parser;
 use rmcp::ServiceExt;
 
-/// OmniContext MCP Server
+/// `OmniContext` MCP Server
 #[derive(Parser, Debug)]
-#[command(name = "omnicontext-mcp", version, about = "MCP server for AI code intelligence")]
+#[command(
+    name = "omnicontext-mcp",
+    version,
+    about = "MCP server for AI code intelligence"
+)]
 struct Args {
     /// Path to the repository to serve.
     #[arg(long, default_value = ".")]
@@ -87,7 +91,11 @@ async fn main() -> Result<()> {
                         chunks = result.chunks_created,
                         symbols = result.symbols_extracted,
                         embeddings = result.embeddings_generated,
-                        elapsed_ms = start.elapsed().as_millis() as u64,
+                        elapsed_ms = {
+                            #[allow(clippy::cast_possible_truncation)]
+                            let ms = start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+                            ms
+                        },
                         "auto-index complete"
                     );
                 }

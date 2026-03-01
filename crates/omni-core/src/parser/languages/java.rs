@@ -26,7 +26,8 @@ impl LanguageAnalyzer for JavaAnalyzer {
         file_path: &Path,
     ) -> Vec<StructuralElement> {
         let mut elements = Vec::new();
-        let module_name_str = crate::parser::build_module_name_from_path(file_path).replace("/", ".");
+        let module_name_str =
+            crate::parser::build_module_name_from_path(file_path).replace("/", ".");
         let module_name = &module_name_str;
 
         let root = tree.root_node();
@@ -107,8 +108,8 @@ impl JavaAnalyzer {
                             content: node_text(child, source).to_string(),
                             doc_comment,
                             references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+                            extends: Vec::new(),
+                            implements: Vec::new(),
                         });
 
                         // Recurse into class body
@@ -136,8 +137,8 @@ impl JavaAnalyzer {
                             content: node_text(child, source).to_string(),
                             doc_comment,
                             references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+                            extends: Vec::new(),
+                            implements: Vec::new(),
                         });
                     }
                 }
@@ -148,8 +149,7 @@ impl JavaAnalyzer {
                         if let Some(declarator) = child.child_by_field_name("declarator") {
                             if let Some(name_node) = declarator.child_by_field_name("name") {
                                 let name = node_text(name_node, source).to_string();
-                                let symbol_path =
-                                    build_symbol_path(module_name, scope_path, &name);
+                                let symbol_path = build_symbol_path(module_name, scope_path, &name);
                                 let visibility = extract_java_visibility(child, source);
 
                                 elements.push(StructuralElement {
@@ -162,8 +162,8 @@ impl JavaAnalyzer {
                                     content: node_text(child, source).to_string(),
                                     doc_comment: None,
                                     references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+                                    extends: Vec::new(),
+                                    implements: Vec::new(),
                                 });
                             }
                         }
@@ -250,8 +250,12 @@ public class UserService {
 }
 "#;
         let elements = parse_java(src);
-        assert!(elements.iter().any(|e| e.name == "UserService" && e.kind == ChunkKind::Class));
-        assert!(elements.iter().any(|e| e.name == "getUser" && e.kind == ChunkKind::Function));
+        assert!(elements
+            .iter()
+            .any(|e| e.name == "UserService" && e.kind == ChunkKind::Class));
+        assert!(elements
+            .iter()
+            .any(|e| e.name == "getUser" && e.kind == ChunkKind::Function));
     }
 
     #[test]
@@ -262,7 +266,9 @@ public interface Repository {
 }
 "#;
         let elements = parse_java(src);
-        assert!(elements.iter().any(|e| e.name == "Repository" && e.kind == ChunkKind::Trait));
+        assert!(elements
+            .iter()
+            .any(|e| e.name == "Repository" && e.kind == ChunkKind::Trait));
     }
 
     #[test]

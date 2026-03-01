@@ -133,13 +133,21 @@ impl IndexingConfig {
         512
     }
 
-    fn default_overlap_lines() -> usize { 10 }
+    fn default_overlap_lines() -> usize {
+        10
+    }
 
-    fn default_overlap_tokens() -> u32 { 150 }
+    fn default_overlap_tokens() -> u32 {
+        150
+    }
 
-    fn default_overlap_fraction() -> f64 { 0.12 }
+    fn default_overlap_fraction() -> f64 {
+        0.12
+    }
 
-    fn default_include_module_declarations() -> bool { true }
+    fn default_include_module_declarations() -> bool {
+        true
+    }
 }
 
 /// Search-specific settings.
@@ -179,10 +187,18 @@ impl Default for SearchConfig {
 }
 
 impl SearchConfig {
-    fn default_limit() -> usize { 10 }
-    fn default_max_limit() -> usize { 100 }
-    fn default_rrf_k() -> u32 { 60 }
-    fn default_token_budget() -> u32 { 4000 }
+    fn default_limit() -> usize {
+        10
+    }
+    fn default_max_limit() -> usize {
+        100
+    }
+    fn default_rrf_k() -> u32 {
+        60
+    }
+    fn default_token_budget() -> u32 {
+        4000
+    }
 }
 
 /// Cross-encoder reranker configuration.
@@ -224,11 +240,21 @@ impl Default for RerankerConfig {
 }
 
 impl RerankerConfig {
-    fn default_rrf_weight() -> f64 { 0.35 }
-    fn default_max_candidates() -> usize { 100 }
-    fn default_batch_size() -> usize { 16 }
-    fn default_max_seq_length() -> usize { 512 }
-    fn default_unranked_demotion() -> f64 { 0.5 }
+    fn default_rrf_weight() -> f64 {
+        0.35
+    }
+    fn default_max_candidates() -> usize {
+        100
+    }
+    fn default_batch_size() -> usize {
+        16
+    }
+    fn default_max_seq_length() -> usize {
+        512
+    }
+    fn default_unranked_demotion() -> f64 {
+        0.5
+    }
 }
 
 /// Embedding model configuration.
@@ -269,9 +295,15 @@ impl EmbeddingConfig {
         // Users can override via config or OMNI_MODEL_PATH env var.
         crate::embedder::model_manager::model_path(&crate::embedder::model_manager::DEFAULT_MODEL)
     }
-    fn default_dimensions() -> usize { 768 } // jina-code v2 output dimensions
-    fn default_batch_size() -> usize { 32 }
-    fn default_max_seq_length() -> usize { 512 } // practical limit for code chunks
+    fn default_dimensions() -> usize {
+        768
+    } // jina-code v2 output dimensions
+    fn default_batch_size() -> usize {
+        32
+    }
+    fn default_max_seq_length() -> usize {
+        512
+    } // practical limit for code chunks
 }
 
 /// File watcher configuration.
@@ -296,8 +328,12 @@ impl Default for WatcherConfig {
 }
 
 impl WatcherConfig {
-    fn default_debounce_ms() -> u64 { 100 }
-    fn default_poll_interval_secs() -> u64 { 300 }
+    fn default_debounce_ms() -> u64 {
+        100
+    }
+    fn default_poll_interval_secs() -> u64 {
+        300
+    }
 }
 
 /// Logging configuration.
@@ -378,8 +414,9 @@ impl Config {
     /// Merge values from a TOML config file (non-destructive overlay).
     fn merge_from_file(&mut self, path: &Path) -> OmniResult<()> {
         let content = std::fs::read_to_string(path)?;
-        let overlay: toml::Value = toml::from_str(&content)
-            .map_err(|e| OmniError::Config { details: format!("invalid TOML in {}: {e}", path.display()) })?;
+        let overlay: toml::Value = toml::from_str(&content).map_err(|e| OmniError::Config {
+            details: format!("invalid TOML in {}: {e}", path.display()),
+        })?;
 
         // Override individual sections if present
         if let Some(indexing) = overlay.get("indexing") {
@@ -426,12 +463,10 @@ impl Config {
     /// Normalizes the path to avoid Windows `\\?\` extended path prefix
     /// causing different hashes for the same physical directory.
     fn repo_hash(&self) -> String {
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let path_str = self.repo_path.to_string_lossy();
         // Strip Windows extended path prefix for consistent hashing
-        let normalized = path_str
-            .strip_prefix(r"\\?\")
-            .unwrap_or(&path_str);
+        let normalized = path_str.strip_prefix(r"\\?\").unwrap_or(&path_str);
         let mut hasher = Sha256::new();
         hasher.update(normalized.as_bytes());
         let result = hasher.finalize();

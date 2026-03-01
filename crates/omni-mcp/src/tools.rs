@@ -1,4 +1,4 @@
-//! MCP tool definitions for OmniContext.
+//! MCP tool definitions for `OmniContext`.
 //!
 //! Each tool is annotated with `#[tool]` and exposes a code intelligence
 //! capability to AI agents via the Model Context Protocol.
@@ -12,11 +12,11 @@
 use std::sync::Arc;
 
 use rmcp::{
-    ErrorData as McpError,
     handler::server::tool::ToolRouter,
     handler::server::wrapper::Parameters,
-    model::*,
+    model::{CallToolResult, Content, Implementation, ServerCapabilities, ServerInfo},
     tool, tool_handler, tool_router,
+    ErrorData as McpError,
     ServerHandler,
 };
 use serde::Deserialize;
@@ -28,7 +28,7 @@ use omni_core::Engine;
 // Parameter structs for each tool
 // -----------------------------------------------------------------------
 
-/// Parameters for search_code tool.
+/// Parameters for `search_code` tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SearchCodeParams {
     /// Search query -- natural language or symbol name.
@@ -37,7 +37,7 @@ pub struct SearchCodeParams {
     pub limit: Option<usize>,
 }
 
-/// Parameters for get_symbol tool.
+/// Parameters for `get_symbol` tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct GetSymbolParams {
     /// Symbol name or fully qualified name to look up.
@@ -46,14 +46,14 @@ pub struct GetSymbolParams {
     pub limit: Option<usize>,
 }
 
-/// Parameters for get_file_summary tool.
+/// Parameters for `get_file_summary` tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct GetFileSummaryParams {
     /// File path relative to repository root.
     pub path: String,
 }
 
-/// Parameters for get_dependencies tool.
+/// Parameters for `get_dependencies` tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct GetDependenciesParams {
     /// Fully qualified symbol name.
@@ -62,7 +62,7 @@ pub struct GetDependenciesParams {
     pub direction: Option<String>,
 }
 
-/// Parameters for find_patterns tool.
+/// Parameters for `find_patterns` tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct FindPatternsParams {
     /// Description of the pattern to find.
@@ -71,7 +71,7 @@ pub struct FindPatternsParams {
     pub limit: Option<usize>,
 }
 
-/// Parameters for context_window tool.
+/// Parameters for `context_window` tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ContextWindowParams {
     /// Search query -- natural language or symbol name.
@@ -82,7 +82,7 @@ pub struct ContextWindowParams {
     pub token_budget: Option<u32>,
 }
 
-/// Parameters for get_module_map tool.
+/// Parameters for `get_module_map` tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[allow(dead_code)]
 pub struct GetModuleMapParams {
@@ -90,7 +90,7 @@ pub struct GetModuleMapParams {
     pub max_depth: Option<usize>,
 }
 
-/// Parameters for search_by_intent tool.
+/// Parameters for `search_by_intent` tool.
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SearchByIntentParams {
     /// Natural language query describing what you're looking for.
@@ -105,7 +105,7 @@ pub struct SearchByIntentParams {
 // MCP Server
 // -----------------------------------------------------------------------
 
-/// OmniContext MCP Server.
+/// `OmniContext` MCP Server.
 ///
 /// Exposes code intelligence tools to AI coding agents.
 #[derive(Clone)]
@@ -132,6 +132,8 @@ impl OmniContextServer {
         &self,
         params: Parameters<SearchCodeParams>,
     ) -> Result<CallToolResult, McpError> {
+        use std::fmt::Write;
+        
         let limit = params.0.limit.unwrap_or(10);
         let query = &params.0.query;
         let engine = self.engine.lock().await;
@@ -146,22 +148,27 @@ impl OmniContextServer {
 
                 let mut output = String::new();
                 for (i, result) in results.iter().enumerate() {
-                    output.push_str(&format!(
+                    write!(
+                        output,
                         "## Result {} (score: {:.4})\n**File**: {}\n**Symbol**: {} ({:?})\n**Lines**: {}-{}\n",
                         i + 1, result.score,
                         result.file_path.display(),
                         result.chunk.symbol_path, result.chunk.kind,
                         result.chunk.line_start, result.chunk.line_end,
-                    ));
+                    )
+                    .ok();
                     if let Some(ref doc) = result.chunk.doc_comment {
-                        output.push_str(&format!("**Doc**: {}\n", doc));
+                        writeln!(output, "**Doc**: {doc}").ok();
                     }
-                    output.push_str(&format!("```\n{}\n```\n\n", result.chunk.content));
+                    write!(output, "```\n{}\n```\n\n", result.chunk.content).ok();
                 }
 
                 Ok(CallToolResult::success(vec![Content::text(output)]))
             }
-            Err(e) => Err(McpError::internal_error(format!("search failed: {e}"), None)),
+            Err(e) => Err(McpError::internal_error(
+                format!("search failed: {e}"),
+                None,
+            )),
         }
     }
 
@@ -173,6 +180,8 @@ impl OmniContextServer {
         &self,
         params: Parameters<ContextWindowParams>,
     ) -> Result<CallToolResult, McpError> {
+        use std::fmt::Write;
+        
         let limit = params.0.limit.unwrap_or(20);
         let query = &params.0.query;
         let engine = self.engine.lock().await;
@@ -181,40 +190,57 @@ impl OmniContextServer {
             Ok(ctx) => {
                 if ctx.is_empty() {
                     return Ok(CallToolResult::success(vec![Content::text(
-                        "No results found. Make sure the repository has been indexed."
+                        "No results found. Make sure the repository has been indexed.",
                     )]));
                 }
 
                 let mut output = format!(
                     "# Context Window ({} entries, {}/{} tokens used)\n\n",
-                    ctx.len(), ctx.total_tokens, ctx.token_budget
+                    ctx.len(),
+                    ctx.total_tokens,
+                    ctx.token_budget
                 );
 
                 // Group entries by file for cleaner output
                 let mut current_file: Option<&std::path::Path> = None;
                 for entry in &ctx.entries {
                     if current_file != Some(&entry.file_path) {
-                        output.push_str(&format!(
+                        write!(
+                            output,
                             "\n## {}{}\n",
                             entry.file_path.display(),
-                            if entry.is_graph_neighbor { " (graph neighbor)" } else { "" }
-                        ));
+                            if entry.is_graph_neighbor {
+                                " (graph neighbor)"
+                            } else {
+                                ""
+                            }
+                        )
+                        .ok();
                         current_file = Some(&entry.file_path);
                     }
 
-                    output.push_str(&format!(
+                    write!(
+                        output,
                         "### {} ({:?}, score: {:.4}){}\n```\n{}\n```\n\n",
                         entry.chunk.symbol_path,
                         entry.chunk.kind,
                         entry.score,
-                        if entry.is_graph_neighbor { " [via graph]" } else { "" },
+                        if entry.is_graph_neighbor {
+                            " [via graph]"
+                        } else {
+                            ""
+                        },
                         entry.chunk.content,
-                    ));
+                    )
+                    .ok();
                 }
 
                 Ok(CallToolResult::success(vec![Content::text(output)]))
             }
-            Err(e) => Err(McpError::internal_error(format!("context_window failed: {e}"), None)),
+            Err(e) => Err(McpError::internal_error(
+                format!("context_window failed: {e}"),
+                None,
+            )),
         }
     }
 
@@ -226,6 +252,8 @@ impl OmniContextServer {
         &self,
         params: Parameters<GetSymbolParams>,
     ) -> Result<CallToolResult, McpError> {
+        use std::fmt::Write;
+        
         let name = &params.0.name;
         let limit = params.0.limit.unwrap_or(5);
         let engine = self.engine.lock().await;
@@ -233,42 +261,51 @@ impl OmniContextServer {
 
         match index.get_symbol_by_fqn(name) {
             Ok(Some(symbol)) => {
-                let mut output = format!("## {} ({:?})\n**File ID**: {}\n**Line**: {}\n",
-                    symbol.fqn, symbol.kind, symbol.file_id, symbol.line);
+                let mut output = format!(
+                    "## {} ({:?})\n**File ID**: {}\n**Line**: {}\n",
+                    symbol.fqn, symbol.kind, symbol.file_id, symbol.line
+                );
 
                 if let Some(chunk_id) = symbol.chunk_id {
                     if let Ok(chunks) = index.get_chunks_for_file(symbol.file_id) {
                         if let Some(chunk) = chunks.iter().find(|c| c.id == chunk_id) {
                             if let Some(ref doc) = chunk.doc_comment {
-                                output.push_str(&format!("**Doc**: {}\n", doc));
+                                writeln!(output, "**Doc**: {doc}").ok();
                             }
-                            output.push_str(&format!("```\n{}\n```\n", chunk.content));
+                            write!(output, "```\n{}\n```\n", chunk.content).ok();
                         }
                     }
                 }
                 Ok(CallToolResult::success(vec![Content::text(output)]))
             }
-            Ok(None) => {
-                match index.search_symbols_by_name(name, limit) {
-                    Ok(symbols) if symbols.is_empty() => {
-                        Ok(CallToolResult::success(vec![Content::text(
-                            format!("No symbol found matching '{}'", name),
-                        )]))
-                    }
-                    Ok(symbols) => {
-                        let mut output = format!("## Symbols matching '{}'\n\n", name);
-                        for sym in &symbols {
-                            output.push_str(&format!(
-                                "- **{}** ({:?}) -- file_id: {}, line: {}\n",
-                                sym.fqn, sym.kind, sym.file_id, sym.line
-                            ));
-                        }
-                        Ok(CallToolResult::success(vec![Content::text(output)]))
-                    }
-                    Err(e) => Err(McpError::internal_error(format!("symbol search failed: {e}"), None)),
+            Ok(None) => match index.search_symbols_by_name(name, limit) {
+                Ok(symbols) if symbols.is_empty() => {
+                    Ok(CallToolResult::success(vec![Content::text(format!(
+                        "No symbol found matching '{name}'",
+                    ))]))
                 }
-            }
-            Err(e) => Err(McpError::internal_error(format!("symbol lookup failed: {e}"), None)),
+                Ok(symbols) => {
+                    use std::fmt::Write;
+                    let mut output = format!("## Symbols matching '{name}'\n\n");
+                    for sym in &symbols {
+                        writeln!(
+                            output,
+                            "- **{}** ({:?}) -- file_id: {}, line: {}",
+                            sym.fqn, sym.kind, sym.file_id, sym.line
+                        )
+                        .ok();
+                    }
+                    Ok(CallToolResult::success(vec![Content::text(output)]))
+                }
+                Err(e) => Err(McpError::internal_error(
+                    format!("symbol search failed: {e}"),
+                    None,
+                )),
+            },
+            Err(e) => Err(McpError::internal_error(
+                format!("symbol lookup failed: {e}"),
+                None,
+            )),
         }
     }
 
@@ -280,15 +317,17 @@ impl OmniContextServer {
         &self,
         params: Parameters<GetFileSummaryParams>,
     ) -> Result<CallToolResult, McpError> {
-        let path_str = &params.0.path;
-        let engine = self.engine.lock().await;
-        let index = engine.metadata_index();
-        let repo_root = engine.repo_path();
-
+        use std::fmt::Write;
+        
         // Helper: strip Windows UNC prefix for consistent comparison
         fn normalize_path_str(s: &str) -> &str {
             s.strip_prefix(r"\\?\").unwrap_or(s)
         }
+
+        let path_str = &params.0.path;
+        let engine = self.engine.lock().await;
+        let index = engine.metadata_index();
+        let repo_root = engine.repo_path();
 
         // Build candidate paths to try:
         // 1. As given (relative path)
@@ -302,10 +341,7 @@ impl OmniContextServer {
         };
 
         // Try exact match first, then normalized absolute path
-        let candidates = [
-            file_path.to_path_buf(),
-            absolute_path.clone(),
-        ];
+        let candidates = [file_path.to_path_buf(), absolute_path.clone()];
 
         let mut file_info = None;
         for candidate in &candidates {
@@ -349,29 +385,33 @@ impl OmniContextServer {
 
                 match index.get_chunks_for_file(info.id) {
                     Ok(chunks) => {
-                        output.push_str(&format!("### Structure ({} chunks)\n\n", chunks.len()));
+                        write!(output, "### Structure ({} chunks)\n\n", chunks.len()).ok();
                         for chunk in &chunks {
                             let doc_preview = chunk.doc_comment.as_deref()
                                 .map(|d| {
                                     let first = d.lines().next().unwrap_or("");
                                     if first.len() > 80 { format!(" -- {}...", &first[..80]) }
-                                    else { format!(" -- {}", first) }
+                                    else { format!(" -- {first}") }
                                 })
                                 .unwrap_or_default();
 
-                            output.push_str(&format!(
-                                "- **{:?}** `{}` (L{}-L{}){}\n",
+                            writeln!(
+                                output,
+                                "- **{:?}** `{}` (L{}-L{}){}",
                                 chunk.kind, chunk.symbol_path,
                                 chunk.line_start, chunk.line_end, doc_preview,
-                            ));
+                            )
+                            .ok();
                         }
                     }
-                    Err(e) => output.push_str(&format!("Error loading chunks: {}\n", e)),
+                    Err(e) => {
+                        writeln!(output, "Error loading chunks: {e}").ok();
+                    }
                 }
                 Ok(CallToolResult::success(vec![Content::text(output)]))
             }
             None => Ok(CallToolResult::success(vec![Content::text(
-                format!("File not found in index: '{}'. Try using relative path from repo root or ensure the file has been indexed.", path_str),
+                format!("File not found in index: '{path_str}'. Try using relative path from repo root or ensure the file has been indexed."),
             )])),
         }
     }
@@ -391,16 +431,28 @@ impl OmniContextServer {
                      - Files: {}\n- Chunks: {}\n- Symbols: {}\n- Vectors: {}\n\n\
                      ### Dependency Graph\n\n\
                      - Edges (persisted): {}\n- Graph nodes: {}\n- Graph edges: {}\n",
-                    s.repo_path, s.data_dir, s.search_mode,
-                    s.files_indexed, s.chunks_indexed, s.symbols_indexed, s.vectors_indexed,
-                    s.dep_edges, s.graph_nodes, s.graph_edges,
+                    s.repo_path,
+                    s.data_dir,
+                    s.search_mode,
+                    s.files_indexed,
+                    s.chunks_indexed,
+                    s.symbols_indexed,
+                    s.vectors_indexed,
+                    s.dep_edges,
+                    s.graph_nodes,
+                    s.graph_edges,
                 );
                 if s.has_cycles {
-                    output.push_str("\n> **Warning**: Circular dependencies detected in the graph.\n");
+                    output.push_str(
+                        "\n> **Warning**: Circular dependencies detected in the graph.\n",
+                    );
                 }
                 Ok(CallToolResult::success(vec![Content::text(output)]))
             }
-            Err(e) => Err(McpError::internal_error(format!("status failed: {e}"), None)),
+            Err(e) => Err(McpError::internal_error(
+                format!("status failed: {e}"),
+                None,
+            )),
         }
     }
 
@@ -412,6 +464,8 @@ impl OmniContextServer {
         &self,
         params: Parameters<GetDependenciesParams>,
     ) -> Result<CallToolResult, McpError> {
+        use std::fmt::Write;
+        
         let symbol_name = &params.0.symbol;
         let direction = params.0.direction.as_deref().unwrap_or("both");
         let engine = self.engine.lock().await;
@@ -424,15 +478,24 @@ impl OmniContextServer {
             Ok(None) => {
                 // Try prefix search
                 match index.search_symbols_by_name(symbol_name, 1) {
-                    Ok(syms) if !syms.is_empty() => syms.into_iter().next().unwrap(),
+                    Ok(mut syms) if !syms.is_empty() => {
+                        syms.pop().ok_or_else(|| {
+                            McpError::internal_error("symbol list unexpectedly empty".to_string(), None)
+                        })?
+                    }
                     _ => {
-                        return Ok(CallToolResult::success(vec![Content::text(
-                            format!("Symbol '{}' not found in the index.", symbol_name),
-                        )]));
+                        return Ok(CallToolResult::success(vec![Content::text(format!(
+                            "Symbol '{symbol_name}' not found in the index.",
+                        ))]));
                     }
                 }
             }
-            Err(e) => return Err(McpError::internal_error(format!("lookup failed: {e}"), None)),
+            Err(e) => {
+                return Err(McpError::internal_error(
+                    format!("lookup failed: {e}"),
+                    None,
+                ))
+            }
         };
 
         let mut output = format!("## Dependencies for `{}`\n\n", symbol.fqn);
@@ -449,15 +512,12 @@ impl OmniContextServer {
                     }
                     Ok(edges) => {
                         for edge in &edges {
-                            let target_name = index.get_symbol_by_id(edge.target_id)
+                            let target_name = index
+                                .get_symbol_by_id(edge.target_id)
                                 .ok()
                                 .flatten()
-                                .map(|s| s.fqn)
-                                .unwrap_or_else(|| format!("symbol#{}", edge.target_id));
-                            output.push_str(&format!(
-                                "- `{}` ({:?})\n",
-                                target_name, edge.kind
-                            ));
+                                .map_or_else(|| format!("symbol#{}", edge.target_id), |s| s.fqn);
+                            writeln!(output, "- `{target_name}` ({:?})", edge.kind).ok();
                         }
                         output.push('\n');
                     }
@@ -465,12 +525,12 @@ impl OmniContextServer {
                 }
             } else {
                 for sym_id in &upstream {
-                    let name = index.get_symbol_by_id(*sym_id)
+                    let name = index
+                        .get_symbol_by_id(*sym_id)
                         .ok()
                         .flatten()
-                        .map(|s| s.fqn)
-                        .unwrap_or_else(|| format!("symbol#{}", sym_id));
-                    output.push_str(&format!("- `{}`\n", name));
+                        .map_or_else(|| format!("symbol#{sym_id}"), |s| s.fqn);
+                    writeln!(output, "- `{name}`").ok();
                 }
                 output.push('\n');
             }
@@ -487,15 +547,12 @@ impl OmniContextServer {
                     }
                     Ok(edges) => {
                         for edge in &edges {
-                            let source_name = index.get_symbol_by_id(edge.source_id)
+                            let source_name = index
+                                .get_symbol_by_id(edge.source_id)
                                 .ok()
                                 .flatten()
-                                .map(|s| s.fqn)
-                                .unwrap_or_else(|| format!("symbol#{}", edge.source_id));
-                            output.push_str(&format!(
-                                "- `{}` ({:?})\n",
-                                source_name, edge.kind
-                            ));
+                                .map_or_else(|| format!("symbol#{}", edge.source_id), |s| s.fqn);
+                            writeln!(output, "- `{source_name}` ({:?})", edge.kind).ok();
                         }
                         output.push('\n');
                     }
@@ -503,12 +560,12 @@ impl OmniContextServer {
                 }
             } else {
                 for sym_id in &downstream {
-                    let name = index.get_symbol_by_id(*sym_id)
+                    let name = index
+                        .get_symbol_by_id(*sym_id)
                         .ok()
                         .flatten()
-                        .map(|s| s.fqn)
-                        .unwrap_or_else(|| format!("symbol#{}", sym_id));
-                    output.push_str(&format!("- `{}`\n", name));
+                        .map_or_else(|| format!("symbol#{sym_id}"), |s| s.fqn);
+                    writeln!(output, "- `{name}`").ok();
                 }
                 output.push('\n');
             }
@@ -519,29 +576,35 @@ impl OmniContextServer {
             output.push_str("### Circular Dependencies Detected\n\n");
             if let Ok(cycles) = graph.find_cycles() {
                 for (i, cycle) in cycles.iter().enumerate() {
-                    let names: Vec<String> = cycle.iter()
+                    let names: Vec<String> = cycle
+                        .iter()
                         .map(|id| {
-                            index.get_symbol_by_id(*id)
+                            index
+                                .get_symbol_by_id(*id)
                                 .ok()
                                 .flatten()
-                                .map(|s| s.fqn)
-                                .unwrap_or_else(|| format!("symbol#{}", id))
+                                .map_or_else(|| format!("symbol#{id}"), |s| s.fqn)
                         })
                         .collect();
-                    output.push_str(&format!(
-                        "**Cycle {}**: {} -> ...\n",
+                    writeln!(
+                        output,
+                        "**Cycle {}**: {} -> ...",
                         i + 1,
                         names.join(" -> ")
-                    ));
+                    )
+                    .ok();
                 }
             }
         }
 
         // Graph stats
-        output.push_str(&format!(
+        write!(
+            output,
             "\n### Graph Statistics\n\n- Nodes: {}\n- Edges: {}\n",
-            graph.node_count(), graph.edge_count(),
-        ));
+            graph.node_count(),
+            graph.edge_count(),
+        )
+        .ok();
 
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
@@ -554,6 +617,8 @@ impl OmniContextServer {
         &self,
         params: Parameters<FindPatternsParams>,
     ) -> Result<CallToolResult, McpError> {
+        use std::fmt::Write;
+        
         let limit = params.0.limit.unwrap_or(5);
         let pattern = &params.0.pattern;
         let engine = self.engine.lock().await;
@@ -561,24 +626,32 @@ impl OmniContextServer {
         match engine.search(pattern, limit) {
             Ok(results) => {
                 if results.is_empty() {
-                    return Ok(CallToolResult::success(vec![Content::text(
-                        format!("No patterns matching '{}' found.", pattern),
-                    )]));
+                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                        "No patterns matching '{pattern}' found.",
+                    ))]));
                 }
 
-                let mut output = format!("## Pattern: '{}'\n\nFound {} examples:\n\n", pattern, results.len());
+                let mut output = format!(
+                    "## Pattern: '{pattern}'\n\nFound {} examples:\n\n",
+                    results.len()
+                );
                 for (i, result) in results.iter().enumerate() {
-                    output.push_str(&format!(
+                    write!(
+                        output,
                         "### Example {} -- {} (score: {:.4})\n**{:?}** `{}` (L{}-L{})\n```\n{}\n```\n\n",
                         i + 1, result.file_path.display(), result.score,
                         result.chunk.kind, result.chunk.symbol_path,
                         result.chunk.line_start, result.chunk.line_end,
                         result.chunk.content,
-                    ));
+                    )
+                    .ok();
                 }
                 Ok(CallToolResult::success(vec![Content::text(output)]))
             }
-            Err(e) => Err(McpError::internal_error(format!("pattern search failed: {e}"), None)),
+            Err(e) => Err(McpError::internal_error(
+                format!("pattern search failed: {e}"),
+                None,
+            )),
         }
     }
 
@@ -601,12 +674,21 @@ impl OmniContextServer {
                      - Use `get_symbol` to look up functions or classes\n\
                      - Use `get_file_summary` for file structure\n\
                      - Use `find_patterns` to discover recurring patterns\n",
-                    s.repo_path, s.files_indexed, s.symbols_indexed, s.search_mode,
-                    s.files_indexed, s.chunks_indexed, s.symbols_indexed, s.vectors_indexed,
+                    s.repo_path,
+                    s.files_indexed,
+                    s.symbols_indexed,
+                    s.search_mode,
+                    s.files_indexed,
+                    s.chunks_indexed,
+                    s.symbols_indexed,
+                    s.vectors_indexed,
                 );
                 Ok(CallToolResult::success(vec![Content::text(output)]))
             }
-            Err(e) => Err(McpError::internal_error(format!("architecture failed: {e}"), None)),
+            Err(e) => Err(McpError::internal_error(
+                format!("architecture failed: {e}"),
+                None,
+            )),
         }
     }
 
@@ -629,12 +711,18 @@ impl OmniContextServer {
                      2. **Understand a module**: `get_file_summary \"path/to/file.rs\"`\n\
                      3. **Look up definitions**: `get_symbol \"ClassName\"`\n\
                      4. **Find patterns**: `find_patterns \"error handling\"`\n",
-                    s.repo_path, s.files_indexed, s.chunks_indexed,
-                    s.symbols_indexed, s.vectors_indexed,
+                    s.repo_path,
+                    s.files_indexed,
+                    s.chunks_indexed,
+                    s.symbols_indexed,
+                    s.vectors_indexed,
                 );
                 Ok(CallToolResult::success(vec![Content::text(output)]))
             }
-            Err(e) => Err(McpError::internal_error(format!("explain failed: {e}"), None)),
+            Err(e) => Err(McpError::internal_error(
+                format!("explain failed: {e}"),
+                None,
+            )),
         }
     }
 
@@ -646,6 +734,8 @@ impl OmniContextServer {
         &self,
         #[allow(unused)] params: Parameters<GetModuleMapParams>,
     ) -> Result<CallToolResult, McpError> {
+        use std::fmt::Write;
+        
         let engine = self.engine.lock().await;
         let index = engine.metadata_index();
 
@@ -655,7 +745,7 @@ impl OmniContextServer {
 
         if files.is_empty() {
             return Ok(CallToolResult::success(vec![Content::text(
-                "No files indexed. Run `omnicontext index .` first."
+                "No files indexed. Run `omnicontext index .` first.",
             )]));
         }
 
@@ -674,12 +764,14 @@ impl OmniContextServer {
             let chunks = index.get_chunks_for_file(file.id).unwrap_or_default();
             let symbols: Vec<String> = chunks
                 .iter()
-                .filter(|c| matches!(
-                    c.kind,
-                    omni_core::types::ChunkKind::Function
-                    | omni_core::types::ChunkKind::Class
-                    | omni_core::types::ChunkKind::Trait
-                ))
+                .filter(|c| {
+                    matches!(
+                        c.kind,
+                        omni_core::types::ChunkKind::Function
+                            | omni_core::types::ChunkKind::Class
+                            | omni_core::types::ChunkKind::Trait
+                    )
+                })
                 .map(|c| format!("{} ({:?})", c.symbol_path, c.kind))
                 .collect();
 
@@ -697,11 +789,15 @@ impl OmniContextServer {
             modules.entry(module_key).or_default().push(entry);
         }
 
-        let mut output = format!("## Module Map ({} modules, {} files)\n\n", modules.len(), files.len());
+        let mut output = format!(
+            "## Module Map ({} modules, {} files)\n\n",
+            modules.len(),
+            files.len()
+        );
         for (module, entries) in &modules {
-            output.push_str(&format!("### {}\n", module));
+            writeln!(output, "### {module}").ok();
             for entry in entries {
-                output.push_str(&format!("{}\n", entry));
+                writeln!(output, "{entry}").ok();
             }
             output.push('\n');
         }
@@ -717,6 +813,8 @@ impl OmniContextServer {
         &self,
         params: Parameters<SearchByIntentParams>,
     ) -> Result<CallToolResult, McpError> {
+        use std::fmt::Write;
+        
         let query = &params.0.query;
         let limit = params.0.limit.unwrap_or(10);
         let engine = self.engine.lock().await;
@@ -731,37 +829,47 @@ impl OmniContextServer {
                     // Fall back to original query
                     match engine.search(query, limit) {
                         Ok(results) if results.is_empty() => {
-                            return Ok(CallToolResult::success(vec![Content::text(
-                                format!("No results found for: '{}'\n\nExpanded to: '{}'", query, expanded_query)
-                            )]));
+                            return Ok(CallToolResult::success(vec![Content::text(format!(
+                                "No results found for: '{query}'\n\nExpanded to: '{expanded_query}'",
+                            ))]));
                         }
                         Ok(results) => {
                             let mut output = format!(
-                                "## Search by Intent\n**Query**: {}\n**Expanded**: {}\n**Results**: {}\n\n",
-                                query, expanded_query, results.len()
+                                "## Search by Intent\n**Query**: {query}\n**Expanded**: {expanded_query}\n**Results**: {}\n\n",
+                                results.len()
                             );
                             for (i, r) in results.iter().enumerate() {
-                                output.push_str(&format!(
+                                write!(
+                                    output,
                                     "### {} (score: {:.4})\n**File**: {}\n**Symbol**: {} ({:?})\n```\n{}\n```\n\n",
                                     i + 1, r.score, r.file_path.display(),
                                     r.chunk.symbol_path, r.chunk.kind, r.chunk.content,
-                                ));
+                                )
+                                .ok();
                             }
                             return Ok(CallToolResult::success(vec![Content::text(output)]));
                         }
-                        Err(e) => return Err(McpError::internal_error(format!("search failed: {e}"), None)),
+                        Err(e) => {
+                            return Err(McpError::internal_error(
+                                format!("search failed: {e}"),
+                                None,
+                            ))
+                        }
                     }
                 }
 
                 let mut output = format!(
-                    "## Search by Intent\n**Query**: {}\n**Expanded**: {}\n**Context**: {} entries, {}/{} tokens\n\n",
-                    query, expanded_query, ctx.len(), ctx.total_tokens, ctx.token_budget
+                    "## Search by Intent\n**Query**: {query}\n**Expanded**: {expanded_query}\n**Context**: {} entries, {}/{} tokens\n\n",
+                    ctx.len(), ctx.total_tokens, ctx.token_budget
                 );
                 output.push_str(&ctx.render());
 
                 Ok(CallToolResult::success(vec![Content::text(output)]))
             }
-            Err(e) => Err(McpError::internal_error(format!("search_by_intent failed: {e}"), None)),
+            Err(e) => Err(McpError::internal_error(
+                format!("search_by_intent failed: {e}"),
+                None,
+            )),
         }
     }
 }
@@ -778,9 +886,7 @@ impl ServerHandler for OmniContextServer {
                  and search_by_intent for natural language queries with automatic expansion."
                     .into(),
             ),
-            capabilities: ServerCapabilities::builder()
-                .enable_tools()
-                .build(),
+            capabilities: ServerCapabilities::builder().enable_tools().build(),
             server_info: Implementation::from_build_env(),
             ..Default::default()
         }
@@ -800,25 +906,92 @@ fn expand_query(query: &str) -> Vec<String> {
 
     // Static synonym expansions for common code concepts
     let synonyms: &[(&[&str], &[&str])] = &[
-        (&["auth", "authentication", "login"], &["authenticate", "verify", "credential", "token", "session", "password"]),
-        (&["error", "exception", "failure"], &["error", "err", "fail", "panic", "unwrap", "Result", "anyhow"]),
-        (&["config", "configuration", "settings"], &["config", "Config", "settings", "options", "preferences"]),
-        (&["test", "testing"], &["test", "assert", "mock", "fixture", "expect"]),
-        (&["database", "db", "storage"], &["database", "db", "sql", "query", "insert", "select", "connection"]),
-        (&["api", "endpoint", "route"], &["handler", "route", "endpoint", "request", "response", "middleware"]),
-        (&["cache", "caching"], &["cache", "memoize", "ttl", "invalidate", "evict"]),
-        (&["parse", "parser", "parsing"], &["parse", "lexer", "tokenize", "ast", "syntax", "grammar"]),
-        (&["search", "find", "query"], &["search", "find", "lookup", "retrieve", "index", "match"]),
-        (&["serialize", "serialization"], &["serialize", "deserialize", "json", "serde", "encode", "decode"]),
-        (&["async", "concurrent", "parallel"], &["async", "await", "spawn", "tokio", "future", "thread"]),
-        (&["dependency", "import"], &["import", "use", "require", "include", "depend"]),
+        (
+            &["auth", "authentication", "login"],
+            &[
+                "authenticate",
+                "verify",
+                "credential",
+                "token",
+                "session",
+                "password",
+            ],
+        ),
+        (
+            &["error", "exception", "failure"],
+            &[
+                "error", "err", "fail", "panic", "unwrap", "Result", "anyhow",
+            ],
+        ),
+        (
+            &["config", "configuration", "settings"],
+            &["config", "Config", "settings", "options", "preferences"],
+        ),
+        (
+            &["test", "testing"],
+            &["test", "assert", "mock", "fixture", "expect"],
+        ),
+        (
+            &["database", "db", "storage"],
+            &[
+                "database",
+                "db",
+                "sql",
+                "query",
+                "insert",
+                "select",
+                "connection",
+            ],
+        ),
+        (
+            &["api", "endpoint", "route"],
+            &[
+                "handler",
+                "route",
+                "endpoint",
+                "request",
+                "response",
+                "middleware",
+            ],
+        ),
+        (
+            &["cache", "caching"],
+            &["cache", "memoize", "ttl", "invalidate", "evict"],
+        ),
+        (
+            &["parse", "parser", "parsing"],
+            &["parse", "lexer", "tokenize", "ast", "syntax", "grammar"],
+        ),
+        (
+            &["search", "find", "query"],
+            &["search", "find", "lookup", "retrieve", "index", "match"],
+        ),
+        (
+            &["serialize", "serialization"],
+            &[
+                "serialize",
+                "deserialize",
+                "json",
+                "serde",
+                "encode",
+                "decode",
+            ],
+        ),
+        (
+            &["async", "concurrent", "parallel"],
+            &["async", "await", "spawn", "tokio", "future", "thread"],
+        ),
+        (
+            &["dependency", "import"],
+            &["import", "use", "require", "include", "depend"],
+        ),
     ];
 
     let lower = query.to_lowercase();
     for (triggers, expansions) in synonyms {
         if triggers.iter().any(|t| lower.contains(t)) {
             for exp in *expansions {
-                let term = exp.to_string();
+                let term = (*exp).to_string();
                 if !terms.contains(&term) {
                     terms.push(term);
                 }

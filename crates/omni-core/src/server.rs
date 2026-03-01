@@ -32,8 +32,12 @@ pub struct ServerConfig {
     pub repo_path: PathBuf,
 }
 
-fn default_addr() -> String { "127.0.0.1".into() }
-fn default_port() -> u16 { 9090 }
+fn default_addr() -> String {
+    "127.0.0.1".into()
+}
+fn default_port() -> u16 {
+    9090
+}
 
 /// Authentication and rate-limiting guard (independent of engine).
 pub struct AuthGuard {
@@ -114,7 +118,9 @@ pub struct SearchRequest {
     pub limit: usize,
 }
 
-fn default_limit() -> usize { 10 }
+fn default_limit() -> usize {
+    10
+}
 
 /// Search response.
 #[derive(Debug, serde::Serialize)]
@@ -221,10 +227,7 @@ impl UsageMeter {
     /// Get usage statistics for a key.
     pub async fn stats_for_key(&self, api_key: &str) -> (usize, u64) {
         let records = self.records.lock().await;
-        let matching: Vec<&UsageRecord> = records
-            .iter()
-            .filter(|r| r.api_key == api_key)
-            .collect();
+        let matching: Vec<&UsageRecord> = records.iter().filter(|r| r.api_key == api_key).collect();
         let total_calls = matching.len();
         let total_ms: u64 = matching.iter().map(|r| r.response_ms).sum();
         (total_calls, total_ms)

@@ -71,27 +71,27 @@ pub mod error;
 pub mod types;
 
 // Core subsystems
-pub mod parser;
 pub mod chunker;
 pub mod embedder;
+pub mod graph;
+pub mod index;
+pub mod parser;
+pub mod pipeline;
 #[allow(missing_docs)]
 pub mod reranker;
-pub mod index;
-pub mod vector;
-pub mod graph;
 pub mod search;
+pub mod vector;
 pub mod watcher;
-pub mod pipeline;
 
 // Pro features (Phase 7)
-pub mod workspace;
 pub mod commits;
 pub mod patterns;
+pub mod workspace;
 
 // Enterprise features (Phase 8)
 pub mod server;
 
-/// Re-export the primary engine interface.
-pub use pipeline::Engine;
 pub use config::Config;
 pub use error::OmniError;
+/// Re-export the primary engine interface.
+pub use pipeline::Engine;

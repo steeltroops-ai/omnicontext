@@ -1,16 +1,20 @@
-//! OmniContext CLI.
+//! `OmniContext` CLI.
 //!
 //! Command-line interface for indexing, searching, and managing
-//! OmniContext indexes.
+//! `OmniContext` indexes.
 
 use std::time::Instant;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-/// OmniContext - Universal Code Context Engine
+/// `OmniContext` - Universal Code Context Engine
 #[derive(Parser, Debug)]
-#[command(name = "omnicontext", version, about = "Universal code context engine for AI coding agents")]
+#[command(
+    name = "omnicontext",
+    version,
+    about = "Universal code context engine for AI coding agents"
+)]
 struct Cli {
     /// Subcommand to execute.
     #[command(subcommand)]
@@ -102,13 +106,28 @@ async fn main() -> Result<()> {
         Commands::Index { path, force } => {
             cmd_index(&path, force, cli.json).await?;
         }
-        Commands::Search { query, limit, language, kind } => {
-            cmd_search(&query, limit, language.as_deref(), kind.as_deref(), cli.json)?;
+        Commands::Search {
+            query,
+            limit,
+            language,
+            kind,
+        } => {
+            cmd_search(
+                &query,
+                limit,
+                language.as_deref(),
+                kind.as_deref(),
+                cli.json,
+            )?;
         }
         Commands::Status { path } => {
             cmd_status(&path, cli.json)?;
         }
-        Commands::Mcp { repo, transport, port } => {
+        Commands::Mcp {
+            repo,
+            transport,
+            port,
+        } => {
             cmd_mcp(&repo, &transport, port).await?;
         }
         Commands::Config { show, init } => {
@@ -165,7 +184,13 @@ async fn cmd_index(path: &str, _force: bool, json: bool) -> Result<()> {
 }
 
 /// Search the indexed codebase.
-fn cmd_search(query: &str, limit: usize, _language: Option<&str>, _kind: Option<&str>, json: bool) -> Result<()> {
+fn cmd_search(
+    query: &str,
+    limit: usize,
+    _language: Option<&str>,
+    _kind: Option<&str>,
+    json: bool,
+) -> Result<()> {
     let repo_path = std::env::current_dir()?;
     let engine = omni_core::Engine::new(&repo_path)?;
 
@@ -193,13 +218,18 @@ fn cmd_search(query: &str, limit: usize, _language: Option<&str>, _kind: Option<
     }
 
     if results.is_empty() {
-        println!("No results found for: \"{}\"", query);
+        println!("No results found for: \"{query}\"");
         println!();
         println!("Tip: Make sure you've run `omnicontext index .` first.");
         return Ok(());
     }
 
-    println!("Results for \"{}\" ({} found, {:.1}ms):", query, results.len(), elapsed.as_secs_f64() * 1000.0);
+    println!(
+        "Results for \"{}\" ({} found, {:.1}ms):",
+        query,
+        results.len(),
+        elapsed.as_secs_f64() * 1000.0
+    );
     println!();
 
     for (i, result) in results.iter().enumerate() {
@@ -210,17 +240,19 @@ fn cmd_search(query: &str, limit: usize, _language: Option<&str>, _kind: Option<
         let lines = format!("L{}-L{}", result.chunk.line_start, result.chunk.line_end);
 
         println!("  {}. {} (score: {:.4})", i + 1, path.display(), score);
-        println!("     {} {} [{}]", kind, symbol, lines);
+        println!("     {kind} {symbol} [{lines}]");
 
         // Print a preview of the content (first 2 lines)
-        let preview: String = result.chunk.content
+        let preview: String = result
+            .chunk
+            .content
             .lines()
             .take(2)
-            .map(|l| format!("     | {}", l))
+            .map(|l| format!("     | {l}"))
             .collect::<Vec<_>>()
             .join("\n");
         if !preview.is_empty() {
-            println!("{}", preview);
+            println!("{preview}");
         }
         println!();
     }
@@ -276,8 +308,7 @@ async fn cmd_mcp(repo: &str, _transport: &str, _port: u16) -> Result<()> {
     let current_exe = std::env::current_exe()?;
     let mcp_binary = current_exe
         .parent()
-        .map(|p| p.join("omnicontext-mcp"))
-        .unwrap_or_else(|| std::path::PathBuf::from("omnicontext-mcp"));
+        .map_or_else(|| std::path::PathBuf::from("omnicontext-mcp"), |p| p.join("omnicontext-mcp"));
 
     let status = tokio::process::Command::new(&mcp_binary)
         .arg("--repo")
@@ -290,9 +321,9 @@ async fn cmd_mcp(repo: &str, _transport: &str, _port: u16) -> Result<()> {
 
     match status {
         Ok(s) if s.success() => Ok(()),
-        Ok(s) => anyhow::bail!("MCP server exited with code: {}", s),
+        Ok(s) => anyhow::bail!("MCP server exited with code: {s}"),
         Err(e) => {
-            eprintln!("Failed to launch MCP server binary: {}", e);
+            eprintln!("Failed to launch MCP server binary: {e}");
             eprintln!();
             eprintln!("The MCP server is shipped as a separate binary: omnicontext-mcp");
             eprintln!("Install it with: cargo install --path crates/omni-mcp");
@@ -344,10 +375,16 @@ fn cmd_config(show: bool, init: bool) -> Result<()> {
         println!();
 
         println!("[indexing]");
-        println!("  exclude_patterns = {:?}", config.indexing.exclude_patterns);
+        println!(
+            "  exclude_patterns = {:?}",
+            config.indexing.exclude_patterns
+        );
         println!("  max_file_size = {}", config.indexing.max_file_size);
         println!("  max_chunk_tokens = {}", config.indexing.max_chunk_tokens);
-        println!("  parse_concurrency = {}", config.indexing.parse_concurrency);
+        println!(
+            "  parse_concurrency = {}",
+            config.indexing.parse_concurrency
+        );
         println!();
 
         println!("[search]");

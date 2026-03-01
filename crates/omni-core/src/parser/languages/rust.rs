@@ -79,27 +79,31 @@ impl RustAnalyzer {
         for child in node.children(&mut cursor) {
             match child.kind() {
                 "function_item" => {
-                    if let Some(elem) = self.extract_function(
-                        child,
-                        source,
-                        module_name,
-                        scope_path,
-                        in_test_mod,
-                    ) {
+                    if let Some(elem) =
+                        self.extract_function(child, source, module_name, scope_path, in_test_mod)
+                    {
                         elements.push(elem);
                     }
                 }
                 "struct_item" | "enum_item" => {
-                    if let Some(elem) =
-                        self.extract_type_def(child, source, module_name, scope_path, ChunkKind::Class)
-                    {
+                    if let Some(elem) = self.extract_type_def(
+                        child,
+                        source,
+                        module_name,
+                        scope_path,
+                        ChunkKind::Class,
+                    ) {
                         elements.push(elem);
                     }
                 }
                 "trait_item" => {
-                    if let Some(elem) =
-                        self.extract_type_def(child, source, module_name, scope_path, ChunkKind::Trait)
-                    {
+                    if let Some(elem) = self.extract_type_def(
+                        child,
+                        source,
+                        module_name,
+                        scope_path,
+                        ChunkKind::Trait,
+                    ) {
                         // Recurse into trait body for method signatures
                         let mut inner_scope = scope_path.to_vec();
                         inner_scope.push(elem.name.clone());
@@ -117,9 +121,7 @@ impl RustAnalyzer {
                     }
                 }
                 "impl_item" => {
-                    if let Some(elem) =
-                        self.extract_impl(child, source, module_name, scope_path)
-                    {
+                    if let Some(elem) = self.extract_impl(child, source, module_name, scope_path) {
                         // Recurse into impl body for methods
                         let mut inner_scope = scope_path.to_vec();
                         inner_scope.push(elem.name.clone());
@@ -137,9 +139,7 @@ impl RustAnalyzer {
                     }
                 }
                 "const_item" | "static_item" => {
-                    if let Some(elem) =
-                        self.extract_const(child, source, module_name, scope_path)
-                    {
+                    if let Some(elem) = self.extract_const(child, source, module_name, scope_path) {
                         elements.push(elem);
                     }
                 }
@@ -212,8 +212,8 @@ impl RustAnalyzer {
             content: node_text(node, source).to_string(),
             doc_comment,
             references,
-                extends: Vec::new(),
-                implements: Vec::new(),
+            extends: Vec::new(),
+            implements: Vec::new(),
         })
     }
 
@@ -243,8 +243,8 @@ impl RustAnalyzer {
             content: node_text(node, source).to_string(),
             doc_comment,
             references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+            extends: Vec::new(),
+            implements: Vec::new(),
         })
     }
 
@@ -280,8 +280,8 @@ impl RustAnalyzer {
             content: node_text(node, source).to_string(),
             doc_comment: None,
             references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+            extends: Vec::new(),
+            implements: Vec::new(),
         })
     }
 
@@ -310,8 +310,8 @@ impl RustAnalyzer {
             content: node_text(node, source).to_string(),
             doc_comment,
             references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+            extends: Vec::new(),
+            implements: Vec::new(),
         })
     }
 
@@ -345,15 +345,22 @@ impl RustAnalyzer {
             content: node_text(node, source).to_string(),
             doc_comment: extract_rust_doc_comment(node, source),
             references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+            extends: Vec::new(),
+            implements: Vec::new(),
         });
 
         // If inline module, recurse into body
         if let Some(body) = node.child_by_field_name("body") {
             let mut inner_scope = scope_path.to_vec();
             inner_scope.push(name);
-            self.walk_node(body, source, module_name, &inner_scope, elements, is_test_mod);
+            self.walk_node(
+                body,
+                source,
+                module_name,
+                &inner_scope,
+                elements,
+                is_test_mod,
+            );
         }
     }
 
@@ -385,11 +392,7 @@ impl RustAnalyzer {
                     // Handle scoped imports: `use std::collections::{HashMap, BTreeMap}`
                     if path.contains('{') {
                         let base = path.split('{').next().unwrap_or("").trim_end_matches("::");
-                        let names_part = path
-                            .split('{')
-                            .nth(1)
-                            .unwrap_or("")
-                            .trim_end_matches('}');
+                        let names_part = path.split('{').nth(1).unwrap_or("").trim_end_matches('}');
                         let names: Vec<String> = names_part
                             .split(',')
                             .map(|s| s.trim().to_string())
@@ -662,7 +665,10 @@ impl Config {
 
         let validate_fn = elements.iter().find(|e| e.name == "validate");
         assert!(validate_fn.is_some());
-        assert_eq!(validate_fn.expect("validate").visibility, Visibility::Private);
+        assert_eq!(
+            validate_fn.expect("validate").visibility,
+            Visibility::Private
+        );
     }
 
     #[test]
@@ -739,11 +745,7 @@ mod tests {
 
         let h = elements.iter().find(|e| e.name == "helper");
         assert!(h.is_some());
-        assert!(
-            h.expect("helper")
-                .symbol_path
-                .contains("tests::helper")
-        );
+        assert!(h.expect("helper").symbol_path.contains("tests::helper"));
     }
 
     #[test]
@@ -787,6 +789,9 @@ impl Config {
         assert!(new_fn.is_some());
         let path = &new_fn.expect("new").symbol_path;
         // Rust paths use :: not .
-        assert!(path.contains("::"), "path should use '::' separator: {path}");
+        assert!(
+            path.contains("::"),
+            "path should use '::' separator: {path}"
+        );
     }
 }

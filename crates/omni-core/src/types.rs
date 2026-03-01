@@ -523,4 +523,3 @@ impl ContextWindow {
         self.entries.is_empty()
     }
 }
-

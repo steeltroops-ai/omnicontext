@@ -27,7 +27,8 @@ impl LanguageAnalyzer for CppAnalyzer {
         file_path: &Path,
     ) -> Vec<StructuralElement> {
         let mut elements = Vec::new();
-        let module_name_str = crate::parser::build_module_name_from_path(file_path).replace("/", "::");
+        let module_name_str =
+            crate::parser::build_module_name_from_path(file_path).replace("/", "::");
         let module_name = &module_name_str;
 
         let root = tree.root_node();
@@ -98,8 +99,8 @@ impl CppAnalyzer {
                                 content: node_text(child, source).to_string(),
                                 doc_comment: doc,
                                 references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+                                extends: Vec::new(),
+                                implements: Vec::new(),
                             });
                         }
                     }
@@ -120,8 +121,8 @@ impl CppAnalyzer {
                             content: node_text(child, source).to_string(),
                             doc_comment: doc,
                             references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+                            extends: Vec::new(),
+                            implements: Vec::new(),
                         });
 
                         // Recurse into body
@@ -149,8 +150,8 @@ impl CppAnalyzer {
                             content: node_text(child, source).to_string(),
                             doc_comment: None,
                             references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+                            extends: Vec::new(),
+                            implements: Vec::new(),
                         });
 
                         if let Some(body) = child.child_by_field_name("body") {
@@ -177,8 +178,8 @@ impl CppAnalyzer {
                             content: node_text(child, source).to_string(),
                             doc_comment: None,
                             references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+                            extends: Vec::new(),
+                            implements: Vec::new(),
                         });
                     }
                 }
@@ -195,8 +196,8 @@ impl CppAnalyzer {
                             content: node_text(child, source).to_string(),
                             doc_comment: None,
                             references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+                            extends: Vec::new(),
+                            implements: Vec::new(),
                         });
                     }
                 }
@@ -229,11 +230,9 @@ fn build_path(module: &str, scope: &[String], name: &str) -> String {
 
 fn extract_cpp_name(declarator: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
     match declarator.kind() {
-        "function_declarator" => {
-            declarator
-                .child_by_field_name("declarator")
-                .and_then(|n| extract_cpp_name(n, source))
-        }
+        "function_declarator" => declarator
+            .child_by_field_name("declarator")
+            .and_then(|n| extract_cpp_name(n, source)),
         "qualified_identifier" | "scoped_identifier" => {
             Some(node_text(declarator, source).to_string())
         }
@@ -305,7 +304,9 @@ public:
 };
 "#;
         let elements = parse_cpp(src);
-        assert!(elements.iter().any(|e| e.name == "Vector" && e.kind == ChunkKind::Class));
+        assert!(elements
+            .iter()
+            .any(|e| e.name == "Vector" && e.kind == ChunkKind::Class));
     }
 
     #[test]
@@ -316,7 +317,11 @@ namespace engine {
 }
 "#;
         let elements = parse_cpp(src);
-        assert!(elements.iter().any(|e| e.name == "engine" && e.kind == ChunkKind::Module));
-        assert!(elements.iter().any(|e| e.name == "init" && e.kind == ChunkKind::Function));
+        assert!(elements
+            .iter()
+            .any(|e| e.name == "engine" && e.kind == ChunkKind::Module));
+        assert!(elements
+            .iter()
+            .any(|e| e.name == "init" && e.kind == ChunkKind::Function));
     }
 }

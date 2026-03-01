@@ -1,6 +1,6 @@
-//! OmniContext Daemon -- Persistent background engine with IPC.
+//! `OmniContext` Daemon -- Persistent background engine with IPC.
 //!
-//! Provides a long-running process that keeps the OmniContext engine
+//! Provides a long-running process that keeps the `OmniContext` engine
 //! hot in memory and exposes a JSON-RPC interface over named pipes
 //! (Windows) or Unix domain sockets (Linux/macOS).
 //!
@@ -20,13 +20,13 @@
 //! # The VS Code extension connects automatically via named pipe
 //! ```
 
-mod protocol;
 mod ipc;
+mod protocol;
 
 use anyhow::Result;
 use clap::Parser;
 
-/// OmniContext Daemon -- persistent background engine
+/// `OmniContext` Daemon -- persistent background engine
 #[derive(Parser, Debug)]
 #[command(
     name = "omnicontext-daemon",
@@ -85,7 +85,11 @@ async fn main() -> Result<()> {
                         files = result.files_processed,
                         chunks = result.chunks_created,
                         symbols = result.symbols_extracted,
-                        elapsed_ms = start.elapsed().as_millis() as u64,
+                        elapsed_ms = {
+                            #[allow(clippy::cast_possible_truncation)]
+                            let ms = start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+                            ms
+                        },
                         "auto-index complete"
                     );
                 }
@@ -94,17 +98,14 @@ async fn main() -> Result<()> {
                 }
             }
         } else {
-            tracing::info!(
-                files = status.files_indexed,
-                "using existing index"
-            );
+            tracing::info!(files = status.files_indexed, "using existing index");
         }
     }
 
     // Derive pipe name from repo path hash
-    let pipe_name = args.pipe_name.unwrap_or_else(|| {
-        ipc::default_pipe_name(&repo_path)
-    });
+    let pipe_name = args
+        .pipe_name
+        .unwrap_or_else(|| ipc::default_pipe_name(&repo_path));
 
     tracing::info!(pipe = %pipe_name, "starting IPC server");
 

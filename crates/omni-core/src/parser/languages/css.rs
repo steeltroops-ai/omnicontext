@@ -42,7 +42,8 @@ impl LanguageAnalyzer for CssAnalyzer {
                         .or_else(|| {
                             // Fallback: first named child that isn't a block
                             let mut inner = child.walk();
-                            let result = child.named_children(&mut inner)
+                            let result = child
+                                .named_children(&mut inner)
                                 .find(|c| c.kind() != "block")
                                 .map(|c| node_text(c, source).to_string());
                             result
@@ -54,7 +55,12 @@ impl LanguageAnalyzer for CssAnalyzer {
                         });
 
                     if let Some(sel_text) = selector_text {
-                        let name = sel_text.lines().next().unwrap_or(&sel_text).trim().to_string();
+                        let name = sel_text
+                            .lines()
+                            .next()
+                            .unwrap_or(&sel_text)
+                            .trim()
+                            .to_string();
                         if !name.is_empty() {
                             elements.push(StructuralElement {
                                 symbol_path: format!("{module_name}.{name}"),
@@ -66,8 +72,8 @@ impl LanguageAnalyzer for CssAnalyzer {
                                 content: node_text(child, source).to_string(),
                                 doc_comment: None,
                                 references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+                                extends: Vec::new(),
+                                implements: Vec::new(),
                             });
                         }
                     }
@@ -90,8 +96,8 @@ impl LanguageAnalyzer for CssAnalyzer {
                         content: node_text(child, source).to_string(),
                         doc_comment: None,
                         references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+                        extends: Vec::new(),
+                        implements: Vec::new(),
                     });
                 }
                 _ => {}

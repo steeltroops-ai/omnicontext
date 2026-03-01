@@ -47,8 +47,8 @@ impl DocumentAnalyzer {
                         content: current_content.clone(),
                         doc_comment: None,
                         references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+                        extends: Vec::new(),
+                        implements: Vec::new(),
                     });
                 }
 
@@ -79,8 +79,8 @@ impl DocumentAnalyzer {
                     content: current_content,
                     doc_comment: None,
                     references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+                    extends: Vec::new(),
+                    implements: Vec::new(),
                 });
             }
         } else if !source.trim().is_empty() {
@@ -128,8 +128,8 @@ impl DocumentAnalyzer {
                         content: current_content.clone(),
                         doc_comment: None,
                         references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+                        extends: Vec::new(),
+                        implements: Vec::new(),
                     });
                 }
 
@@ -157,8 +157,8 @@ impl DocumentAnalyzer {
                         content: current_content.clone(),
                         doc_comment: None,
                         references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+                        extends: Vec::new(),
+                        implements: Vec::new(),
                     });
                 }
 
@@ -192,8 +192,8 @@ impl DocumentAnalyzer {
                     content: current_content,
                     doc_comment: None,
                     references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+                    extends: Vec::new(),
+                    implements: Vec::new(),
                 });
             }
         } else if !source.trim().is_empty() {
@@ -239,8 +239,8 @@ impl DocumentAnalyzer {
                     content: block.clone(),
                     doc_comment: None,
                     references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+                    extends: Vec::new(),
+                    implements: Vec::new(),
                 });
                 block.clear();
                 block_start = line_num + 1;

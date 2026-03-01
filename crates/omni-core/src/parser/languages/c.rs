@@ -26,7 +26,8 @@ impl LanguageAnalyzer for CAnalyzer {
         file_path: &Path,
     ) -> Vec<StructuralElement> {
         let mut elements = Vec::new();
-        let module_name_str = crate::parser::build_module_name_from_path(file_path).replace("/", "::");
+        let module_name_str =
+            crate::parser::build_module_name_from_path(file_path).replace("/", "::");
         let module_name = &module_name_str;
 
         let root = tree.root_node();
@@ -99,8 +100,8 @@ impl CAnalyzer {
                                 content: node_text(child, source).to_string(),
                                 doc_comment: doc,
                                 references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+                                extends: Vec::new(),
+                                implements: Vec::new(),
                             });
                         }
                     }
@@ -124,8 +125,8 @@ impl CAnalyzer {
                             content: node_text(child, source).to_string(),
                             doc_comment: doc,
                             references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+                            extends: Vec::new(),
+                            implements: Vec::new(),
                         });
                     }
                 }
@@ -146,8 +147,8 @@ impl CAnalyzer {
                                 content: text,
                                 doc_comment: None,
                                 references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+                                extends: Vec::new(),
+                                implements: Vec::new(),
                             });
                         }
                     }
@@ -165,8 +166,8 @@ impl CAnalyzer {
                             content: node_text(child, source).to_string(),
                             doc_comment: None,
                             references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+                            extends: Vec::new(),
+                            implements: Vec::new(),
                         });
                     }
                 }
@@ -191,11 +192,9 @@ fn node_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'a str {
 fn extract_function_name(declarator: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
     // function_declarator -> declarator (identifier)
     match declarator.kind() {
-        "function_declarator" => {
-            declarator
-                .child_by_field_name("declarator")
-                .map(|n| node_text(n, source).to_string())
-        }
+        "function_declarator" => declarator
+            .child_by_field_name("declarator")
+            .map(|n| node_text(n, source).to_string()),
         "pointer_declarator" => {
             // *func_name(...)
             let mut cursor = declarator.walk();
@@ -252,20 +251,26 @@ mod tests {
     fn test_c_function() {
         let src = "int main(int argc, char **argv) { return 0; }";
         let elements = parse_c(src);
-        assert!(elements.iter().any(|e| e.name == "main" && e.kind == ChunkKind::Function));
+        assert!(elements
+            .iter()
+            .any(|e| e.name == "main" && e.kind == ChunkKind::Function));
     }
 
     #[test]
     fn test_c_struct() {
         let src = "struct Point { int x; int y; };";
         let elements = parse_c(src);
-        assert!(elements.iter().any(|e| e.name == "Point" && e.kind == ChunkKind::Class));
+        assert!(elements
+            .iter()
+            .any(|e| e.name == "Point" && e.kind == ChunkKind::Class));
     }
 
     #[test]
     fn test_c_macro() {
         let src = "#define MAX_SIZE 1024";
         let elements = parse_c(src);
-        assert!(elements.iter().any(|e| e.name == "MAX_SIZE" && e.kind == ChunkKind::Const));
+        assert!(elements
+            .iter()
+            .any(|e| e.name == "MAX_SIZE" && e.kind == ChunkKind::Const));
     }
 }

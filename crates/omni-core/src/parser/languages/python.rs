@@ -35,7 +35,8 @@ impl LanguageAnalyzer for PythonAnalyzer {
         file_path: &Path,
     ) -> Vec<StructuralElement> {
         let mut elements = Vec::new();
-        let module_name_str = crate::parser::build_module_name_from_path(file_path).replace("/", ".");
+        let module_name_str =
+            crate::parser::build_module_name_from_path(file_path).replace("/", ".");
         let module_name = &module_name_str;
 
         let root = tree.root_node();
@@ -61,10 +62,12 @@ impl LanguageAnalyzer for PythonAnalyzer {
                 "import_statement" => {
                     let mut inner = child.walk();
                     for name_node in child.children(&mut inner) {
-                        if name_node.kind() == "dotted_name" || name_node.kind() == "aliased_import" {
+                        if name_node.kind() == "dotted_name" || name_node.kind() == "aliased_import"
+                        {
                             let text = if name_node.kind() == "aliased_import" {
                                 // `import foo as f` -> extract "foo"
-                                name_node.child_by_field_name("name")
+                                name_node
+                                    .child_by_field_name("name")
                                     .map(|n| node_text(n, source))
                                     .unwrap_or("")
                             } else {
@@ -83,7 +86,8 @@ impl LanguageAnalyzer for PythonAnalyzer {
                 }
                 // `from foo import bar, baz` or `from foo.bar import *`
                 "import_from_statement" => {
-                    let module_path = child.child_by_field_name("module_name")
+                    let module_path = child
+                        .child_by_field_name("module_name")
                         .map(|n| node_text(n, source).to_string())
                         .unwrap_or_default();
 
@@ -95,7 +99,10 @@ impl LanguageAnalyzer for PythonAnalyzer {
                     let mut inner = child.walk();
                     for name_node in child.children(&mut inner) {
                         if name_node.kind() == "dotted_name"
-                            && name_node != child.child_by_field_name("module_name").unwrap_or(name_node)
+                            && name_node
+                                != child
+                                    .child_by_field_name("module_name")
+                                    .unwrap_or(name_node)
                         {
                             names.push(node_text(name_node, source).to_string());
                         } else if name_node.kind() == "aliased_import" {
@@ -192,10 +199,8 @@ impl PythonAnalyzer {
                                     }
                                     // Use the decorated_definition's span for full content
                                     let mut elem = elem;
-                                    elem.line_start =
-                                        child.start_position().row as u32 + 1;
-                                    elem.content =
-                                        node_text(child, source).to_string();
+                                    elem.line_start = child.start_position().row as u32 + 1;
+                                    elem.content = node_text(child, source).to_string();
                                     elements.push(elem);
                                 }
                             }
@@ -219,10 +224,8 @@ impl PythonAnalyzer {
                                         );
                                     }
                                     let mut elem = elem;
-                                    elem.line_start =
-                                        child.start_position().row as u32 + 1;
-                                    elem.content =
-                                        node_text(child, source).to_string();
+                                    elem.line_start = child.start_position().row as u32 + 1;
+                                    elem.content = node_text(child, source).to_string();
                                     elements.push(elem);
                                 }
                             }
@@ -273,8 +276,8 @@ impl PythonAnalyzer {
             content: node_text(node, source).to_string(),
             doc_comment,
             references,
-                extends: Vec::new(),
-                implements: Vec::new(),
+            extends: Vec::new(),
+            implements: Vec::new(),
         })
     }
 
@@ -315,17 +318,13 @@ impl PythonAnalyzer {
             content: node_text(node, source).to_string(),
             doc_comment,
             references,
-                extends: Vec::new(),
-                implements: Vec::new(),
+            extends: Vec::new(),
+            implements: Vec::new(),
         })
     }
 
     /// Extract decorator names from a `decorated_definition` node.
-    fn extract_decorators(
-        &self,
-        node: tree_sitter::Node<'_>,
-        source: &[u8],
-    ) -> Vec<String> {
+    fn extract_decorators(&self, node: tree_sitter::Node<'_>, source: &[u8]) -> Vec<String> {
         let mut decorators = Vec::new();
         let mut cursor = node.walk();
 
@@ -352,11 +351,7 @@ impl PythonAnalyzer {
     ///
     /// Python docstrings are the first `expression_statement` containing
     /// a string literal in the body block.
-    fn extract_docstring(
-        &self,
-        node: tree_sitter::Node<'_>,
-        source: &[u8],
-    ) -> Option<String> {
+    fn extract_docstring(&self, node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
         let body = node.child_by_field_name("body")?;
         let first_stmt = body.child(0)?;
 
@@ -392,12 +387,7 @@ impl PythonAnalyzer {
     }
 
     /// Recursively collect function call targets.
-    fn collect_calls(
-        &self,
-        node: tree_sitter::Node<'_>,
-        source: &[u8],
-        refs: &mut Vec<String>,
-    ) {
+    fn collect_calls(&self, node: tree_sitter::Node<'_>, source: &[u8], refs: &mut Vec<String>) {
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if child.kind() == "call" {
@@ -596,19 +586,13 @@ def helper_function():
         let elements = parse_python(src);
 
         let test_add = elements.iter().find(|e| e.name == "test_addition");
-        assert_eq!(
-            test_add.expect("test_addition").kind,
-            ChunkKind::Test
-        );
+        assert_eq!(test_add.expect("test_addition").kind, ChunkKind::Test);
 
         let test_bare = elements.iter().find(|e| e.name == "test");
         assert_eq!(test_bare.expect("test").kind, ChunkKind::Test);
 
         let helper = elements.iter().find(|e| e.name == "helper_function");
-        assert_eq!(
-            helper.expect("helper_function").kind,
-            ChunkKind::Function
-        );
+        assert_eq!(helper.expect("helper_function").kind, ChunkKind::Function);
     }
 
     #[test]
@@ -628,10 +612,7 @@ def list_users():
 
         assert_eq!(elements[0].name, "create_default");
         assert_eq!(elements[1].name, "list_users");
-        assert_eq!(
-            elements[1].doc_comment.as_deref(),
-            Some("List all users.")
-        );
+        assert_eq!(elements[1].doc_comment.as_deref(), Some("List all users."));
     }
 
     #[test]
@@ -648,9 +629,7 @@ class ServiceError(ValueError, CustomMixin):
 
         let dog = elements.iter().find(|e| e.name == "Dog");
         assert!(dog.is_some());
-        assert!(
-            dog.expect("Dog").references.contains(&"Animal".to_string())
-        );
+        assert!(dog.expect("Dog").references.contains(&"Animal".to_string()));
 
         let err = elements.iter().find(|e| e.name == "ServiceError");
         assert!(err.is_some());
@@ -670,21 +649,14 @@ class Outer:
 
         let inner = elements.iter().find(|e| e.name == "Inner");
         assert!(inner.is_some());
-        assert!(
-            inner
-                .expect("Inner")
-                .symbol_path
-                .contains("Outer.Inner")
-        );
+        assert!(inner.expect("Inner").symbol_path.contains("Outer.Inner"));
 
         let method = elements.iter().find(|e| e.name == "method");
         assert!(method.is_some());
-        assert!(
-            method
-                .expect("method")
-                .symbol_path
-                .contains("Outer.Inner.method")
-        );
+        assert!(method
+            .expect("method")
+            .symbol_path
+            .contains("Outer.Inner.method"));
     }
 
     #[test]
@@ -773,9 +745,6 @@ def process_data(items):
     fn test_clean_docstring() {
         assert_eq!(clean_docstring(r#""""hello""""#), "hello");
         assert_eq!(clean_docstring("'''hello'''"), "hello");
-        assert_eq!(
-            clean_docstring("\"\"\"  spaced  \"\"\""),
-            "spaced"
-        );
+        assert_eq!(clean_docstring("\"\"\"  spaced  \"\"\""), "spaced");
     }
 }

@@ -27,7 +27,9 @@ use std::path::Path;
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::error::OmniResult;
-use crate::types::{Chunk, ChunkKind, DependencyEdge, DependencyKind, FileInfo, Language, Symbol, Visibility};
+use crate::types::{
+    Chunk, ChunkKind, DependencyEdge, DependencyKind, FileInfo, Language, Symbol, Visibility,
+};
 
 /// Current database schema version. Increment when schema changes.
 const SCHEMA_VERSION: i64 = 1;
@@ -75,14 +77,16 @@ impl MetadataIndex {
             "CREATE TABLE IF NOT EXISTS schema_version (
                 version INTEGER NOT NULL,
                 migrated_at TEXT NOT NULL DEFAULT (datetime('now'))
-            );"
+            );",
         )?;
 
-        let current: Option<i64> = self.conn.query_row(
-            "SELECT MAX(version) FROM schema_version",
-            [],
-            |row| row.get(0),
-        ).optional()?.flatten();
+        let current: Option<i64> = self
+            .conn
+            .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
+                row.get(0)
+            })
+            .optional()?
+            .flatten();
 
         match current {
             None => {
@@ -155,32 +159,36 @@ impl MetadataIndex {
 
     /// Get a file record by path.
     pub fn get_file_by_path(&self, path: &Path) -> OmniResult<Option<FileInfo>> {
-        let result = self.conn.query_row(
-            "SELECT id, path, language, hash, size_bytes FROM files WHERE path = ?1",
-            params![path.to_string_lossy().as_ref()],
-            |row| {
-                Ok(FileInfo {
-                    id: row.get(0)?,
-                    path: std::path::PathBuf::from(row.get::<_, String>(1)?),
-                    language: Language::from_extension(
-                        &row.get::<_, String>(2)?
-                    ),
-                    content_hash: row.get(3)?,
-                    size_bytes: row.get(4)?,
-                })
-            },
-        ).optional()?;
+        let result = self
+            .conn
+            .query_row(
+                "SELECT id, path, language, hash, size_bytes FROM files WHERE path = ?1",
+                params![path.to_string_lossy().as_ref()],
+                |row| {
+                    Ok(FileInfo {
+                        id: row.get(0)?,
+                        path: std::path::PathBuf::from(row.get::<_, String>(1)?),
+                        language: Language::from_extension(&row.get::<_, String>(2)?),
+                        content_hash: row.get(3)?,
+                        size_bytes: row.get(4)?,
+                    })
+                },
+            )
+            .optional()?;
 
         Ok(result)
     }
 
     /// Get the hash of an indexed file (for change detection).
     pub fn get_file_hash(&self, path: &Path) -> OmniResult<Option<String>> {
-        let hash = self.conn.query_row(
-            "SELECT hash FROM files WHERE path = ?1",
-            params![path.to_string_lossy().as_ref()],
-            |row| row.get(0),
-        ).optional()?;
+        let hash = self
+            .conn
+            .query_row(
+                "SELECT hash FROM files WHERE path = ?1",
+                params![path.to_string_lossy().as_ref()],
+                |row| row.get(0),
+            )
+            .optional()?;
 
         Ok(hash)
     }
@@ -196,17 +204,15 @@ impl MetadataIndex {
 
     /// Get all indexed files.
     pub fn get_all_files(&self) -> OmniResult<Vec<FileInfo>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, path, language, hash, size_bytes FROM files ORDER BY path",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, path, language, hash, size_bytes FROM files ORDER BY path")?;
 
         let files = stmt.query_map([], |row| {
             Ok(FileInfo {
                 id: row.get(0)?,
                 path: std::path::PathBuf::from(row.get::<_, String>(1)?),
-                language: Language::from_extension(
-                    &row.get::<_, String>(2)?
-                ),
+                language: Language::from_extension(&row.get::<_, String>(2)?),
                 content_hash: row.get(3)?,
                 size_bytes: row.get(4)?,
             })
@@ -221,11 +227,9 @@ impl MetadataIndex {
 
     /// Count total indexed files.
     pub fn file_count(&self) -> OmniResult<usize> {
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM files",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))?;
         Ok(count as usize)
     }
 
@@ -259,10 +263,9 @@ impl MetadataIndex {
 
     /// Delete all chunks belonging to a file.
     pub fn delete_chunks_for_file(&self, file_id: i64) -> OmniResult<usize> {
-        let changes = self.conn.execute(
-            "DELETE FROM chunks WHERE file_id = ?1",
-            params![file_id],
-        )?;
+        let changes = self
+            .conn
+            .execute("DELETE FROM chunks WHERE file_id = ?1", params![file_id])?;
         Ok(changes)
     }
 
@@ -309,11 +312,9 @@ impl MetadataIndex {
 
     /// Count total chunks across all files.
     pub fn chunk_count(&self) -> OmniResult<usize> {
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM chunks",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))?;
         Ok(count as usize)
     }
 
@@ -341,44 +342,50 @@ impl MetadataIndex {
 
     /// Look up a symbol by its fully qualified name.
     pub fn get_symbol_by_fqn(&self, fqn: &str) -> OmniResult<Option<Symbol>> {
-        let result = self.conn.query_row(
-            "SELECT id, name, fqn, kind, file_id, line, chunk_id
+        let result = self
+            .conn
+            .query_row(
+                "SELECT id, name, fqn, kind, file_id, line, chunk_id
              FROM symbols WHERE fqn = ?1",
-            params![fqn],
-            |row| {
-                Ok(Symbol {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    fqn: row.get(2)?,
-                    kind: parse_chunk_kind(&row.get::<_, String>(3)?),
-                    file_id: row.get(4)?,
-                    line: row.get(5)?,
-                    chunk_id: row.get(6)?,
-                })
-            },
-        ).optional()?;
+                params![fqn],
+                |row| {
+                    Ok(Symbol {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        fqn: row.get(2)?,
+                        kind: parse_chunk_kind(&row.get::<_, String>(3)?),
+                        file_id: row.get(4)?,
+                        line: row.get(5)?,
+                        chunk_id: row.get(6)?,
+                    })
+                },
+            )
+            .optional()?;
 
         Ok(result)
     }
 
     /// Look up a symbol by its database ID.
     pub fn get_symbol_by_id(&self, id: i64) -> OmniResult<Option<Symbol>> {
-        let result = self.conn.query_row(
-            "SELECT id, name, fqn, kind, file_id, line, chunk_id
+        let result = self
+            .conn
+            .query_row(
+                "SELECT id, name, fqn, kind, file_id, line, chunk_id
              FROM symbols WHERE id = ?1",
-            params![id],
-            |row| {
-                Ok(Symbol {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    fqn: row.get(2)?,
-                    kind: parse_chunk_kind(&row.get::<_, String>(3)?),
-                    file_id: row.get(4)?,
-                    line: row.get(5)?,
-                    chunk_id: row.get(6)?,
-                })
-            },
-        ).optional()?;
+                params![id],
+                |row| {
+                    Ok(Symbol {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        fqn: row.get(2)?,
+                        kind: parse_chunk_kind(&row.get::<_, String>(3)?),
+                        file_id: row.get(4)?,
+                        line: row.get(5)?,
+                        chunk_id: row.get(6)?,
+                    })
+                },
+            )
+            .optional()?;
 
         Ok(result)
     }
@@ -412,20 +419,17 @@ impl MetadataIndex {
 
     /// Delete all symbols belonging to a file.
     pub fn delete_symbols_for_file(&self, file_id: i64) -> OmniResult<usize> {
-        let changes = self.conn.execute(
-            "DELETE FROM symbols WHERE file_id = ?1",
-            params![file_id],
-        )?;
+        let changes = self
+            .conn
+            .execute("DELETE FROM symbols WHERE file_id = ?1", params![file_id])?;
         Ok(changes)
     }
 
     /// Count total symbols.
     pub fn symbol_count(&self) -> OmniResult<usize> {
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM symbols",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM symbols", [], |row| row.get(0))?;
         Ok(count as usize)
     }
 
@@ -433,22 +437,25 @@ impl MetadataIndex {
     ///
     /// Used as the source node for import-based dependency edges.
     pub fn get_first_symbol_for_file(&self, file_id: i64) -> OmniResult<Option<Symbol>> {
-        let result = self.conn.query_row(
-            "SELECT id, name, fqn, kind, file_id, line, chunk_id
+        let result = self
+            .conn
+            .query_row(
+                "SELECT id, name, fqn, kind, file_id, line, chunk_id
              FROM symbols WHERE file_id = ?1 ORDER BY line LIMIT 1",
-            params![file_id],
-            |row| {
-                Ok(Symbol {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    fqn: row.get(2)?,
-                    kind: parse_chunk_kind(&row.get::<_, String>(3)?),
-                    file_id: row.get(4)?,
-                    line: row.get(5)?,
-                    chunk_id: row.get(6)?,
-                })
-            },
-        ).optional()?;
+                params![file_id],
+                |row| {
+                    Ok(Symbol {
+                        id: row.get(0)?,
+                        name: row.get(1)?,
+                        fqn: row.get(2)?,
+                        kind: parse_chunk_kind(&row.get::<_, String>(3)?),
+                        file_id: row.get(4)?,
+                        line: row.get(5)?,
+                        chunk_id: row.get(6)?,
+                    })
+                },
+            )
+            .optional()?;
 
         Ok(result)
     }
@@ -457,7 +464,11 @@ impl MetadataIndex {
     ///
     /// This is the core of import resolution: `config::Config` should match
     /// `crate::config::Config` or `my_module.config.Config`.
-    pub fn search_symbols_by_fqn_suffix(&self, suffix: &str, limit: usize) -> OmniResult<Vec<Symbol>> {
+    pub fn search_symbols_by_fqn_suffix(
+        &self,
+        suffix: &str,
+        limit: usize,
+    ) -> OmniResult<Vec<Symbol>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, fqn, kind, file_id, line, chunk_id
              FROM symbols WHERE fqn LIKE ?1 ORDER BY length(fqn) ASC LIMIT ?2",
@@ -520,11 +531,7 @@ impl MetadataIndex {
     /// Search chunks using FTS5 full-text search.
     ///
     /// Returns (chunk_id, bm25_score) pairs, ordered by relevance.
-    pub fn keyword_search(
-        &self,
-        query: &str,
-        limit: usize,
-    ) -> OmniResult<Vec<(i64, f64)>> {
+    pub fn keyword_search(&self, query: &str, limit: usize) -> OmniResult<Vec<(i64, f64)>> {
         // FTS5 uses BM25 for relevance ranking.
         // We search across content, doc_comment, and symbol_path.
         // Quote the query so FTS5 treats it as a phrase literal
@@ -653,11 +660,9 @@ impl MetadataIndex {
 
     /// Run an integrity check on the database.
     pub fn check_integrity(&self) -> OmniResult<bool> {
-        let result: String = self.conn.query_row(
-            "PRAGMA integrity_check",
-            [],
-            |row| row.get(0),
-        )?;
+        let result: String = self
+            .conn
+            .query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
         Ok(result == "ok")
     }
 
@@ -691,9 +696,9 @@ impl MetadataIndex {
 
     /// Get all dependencies FROM a given symbol (outgoing edges = what it depends on).
     pub fn get_upstream_dependencies(&self, symbol_id: i64) -> OmniResult<Vec<DependencyEdge>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT source_id, target_id, kind FROM dependencies WHERE source_id = ?1",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT source_id, target_id, kind FROM dependencies WHERE source_id = ?1")?;
         let edges = stmt.query_map(params![symbol_id], |row| {
             let kind_str: String = row.get(2)?;
             Ok(DependencyEdge {
@@ -707,9 +712,9 @@ impl MetadataIndex {
 
     /// Get all dependencies TO a given symbol (incoming edges = what depends on it).
     pub fn get_downstream_dependencies(&self, symbol_id: i64) -> OmniResult<Vec<DependencyEdge>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT source_id, target_id, kind FROM dependencies WHERE target_id = ?1",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT source_id, target_id, kind FROM dependencies WHERE target_id = ?1")?;
         let edges = stmt.query_map(params![symbol_id], |row| {
             let kind_str: String = row.get(2)?;
             Ok(DependencyEdge {
@@ -736,20 +741,18 @@ impl MetadataIndex {
 
     /// Count total dependency edges.
     pub fn dependency_count(&self) -> OmniResult<usize> {
-        let count: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM dependencies",
-            [],
-            |row| row.get(0),
-        )?;
+        let count: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM dependencies", [], |row| row.get(0))?;
         Ok(count as usize)
     }
     /// Get ALL dependency edges from the database.
     ///
     /// Used to populate the in-memory dependency graph on engine startup.
     pub fn get_all_dependencies(&self) -> OmniResult<Vec<DependencyEdge>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT source_id, target_id, kind FROM dependencies",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT source_id, target_id, kind FROM dependencies")?;
         let edges = stmt.query_map([], |row| {
             let kind_str: String = row.get(2)?;
             Ok(DependencyEdge {
@@ -892,7 +895,9 @@ mod tests {
         let hash = index.get_file_hash(&file.path).expect("get hash");
         assert_eq!(hash, Some("abc123def456".to_string()));
 
-        let missing = index.get_file_hash(Path::new("nonexistent.py")).expect("get hash");
+        let missing = index
+            .get_file_hash(Path::new("nonexistent.py"))
+            .expect("get hash");
         assert_eq!(missing, None);
     }
 
@@ -923,7 +928,10 @@ mod tests {
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].symbol_path, "main.hello");
         assert_eq!(chunks[0].kind, ChunkKind::Function);
-        assert_eq!(chunks[0].doc_comment.as_deref(), Some("A greeting function."));
+        assert_eq!(
+            chunks[0].doc_comment.as_deref(),
+            Some("A greeting function.")
+        );
     }
 
     #[test]
@@ -980,9 +988,33 @@ mod tests {
         let file_id = index.upsert_file(&file).expect("upsert file");
 
         let symbols = vec![
-            Symbol { id: 0, name: "hello".into(), fqn: "main.hello".into(), kind: ChunkKind::Function, file_id, line: 1, chunk_id: None },
-            Symbol { id: 0, name: "help_me".into(), fqn: "main.help_me".into(), kind: ChunkKind::Function, file_id, line: 10, chunk_id: None },
-            Symbol { id: 0, name: "goodbye".into(), fqn: "main.goodbye".into(), kind: ChunkKind::Function, file_id, line: 20, chunk_id: None },
+            Symbol {
+                id: 0,
+                name: "hello".into(),
+                fqn: "main.hello".into(),
+                kind: ChunkKind::Function,
+                file_id,
+                line: 1,
+                chunk_id: None,
+            },
+            Symbol {
+                id: 0,
+                name: "help_me".into(),
+                fqn: "main.help_me".into(),
+                kind: ChunkKind::Function,
+                file_id,
+                line: 10,
+                chunk_id: None,
+            },
+            Symbol {
+                id: 0,
+                name: "goodbye".into(),
+                fqn: "main.goodbye".into(),
+                kind: ChunkKind::Function,
+                file_id,
+                line: 20,
+                chunk_id: None,
+            },
         ];
 
         for s in &symbols {
@@ -1001,17 +1033,23 @@ mod tests {
         let file_id = index.upsert_file(&file).expect("upsert file");
 
         let mut chunk1 = test_chunk(file_id);
-        chunk1.content = "def authenticate_user(username, password):\n    return check_db(username, password)".to_string();
+        chunk1.content =
+            "def authenticate_user(username, password):\n    return check_db(username, password)"
+                .to_string();
         chunk1.symbol_path = "auth.authenticate_user".to_string();
         index.insert_chunk(&chunk1).expect("insert");
 
         let mut chunk2 = test_chunk(file_id);
-        chunk2.content = "def list_users():\n    return db.query('SELECT * FROM users')".to_string();
+        chunk2.content =
+            "def list_users():\n    return db.query('SELECT * FROM users')".to_string();
         chunk2.symbol_path = "users.list_users".to_string();
         index.insert_chunk(&chunk2).expect("insert");
 
         let results = index.keyword_search("authenticate", 10).expect("search");
-        assert!(!results.is_empty(), "should find results for 'authenticate'");
+        assert!(
+            !results.is_empty(),
+            "should find results for 'authenticate'"
+        );
     }
 
     #[test]
@@ -1022,7 +1060,9 @@ mod tests {
         // First indexing
         let chunks = vec![test_chunk(0)];
         let symbols = vec![test_symbol(0)];
-        let (file_id, chunk_ids) = index.reindex_file(&file, &chunks, &symbols).expect("reindex");
+        let (file_id, chunk_ids) = index
+            .reindex_file(&file, &chunks, &symbols)
+            .expect("reindex");
 
         assert!(file_id > 0);
         assert_eq!(chunk_ids.len(), 1);
@@ -1032,15 +1072,41 @@ mod tests {
         // Re-index with different data
         let new_chunks = vec![test_chunk(0), test_chunk(0)];
         let new_symbols = vec![
-            Symbol { id: 0, name: "a".into(), fqn: "main.a".into(), kind: ChunkKind::Function, file_id: 0, line: 1, chunk_id: None },
-            Symbol { id: 0, name: "b".into(), fqn: "main.b".into(), kind: ChunkKind::Function, file_id: 0, line: 10, chunk_id: None },
+            Symbol {
+                id: 0,
+                name: "a".into(),
+                fqn: "main.a".into(),
+                kind: ChunkKind::Function,
+                file_id: 0,
+                line: 1,
+                chunk_id: None,
+            },
+            Symbol {
+                id: 0,
+                name: "b".into(),
+                fqn: "main.b".into(),
+                kind: ChunkKind::Function,
+                file_id: 0,
+                line: 10,
+                chunk_id: None,
+            },
         ];
-        let (file_id2, chunk_ids2) = index.reindex_file(&file, &new_chunks, &new_symbols).expect("reindex");
+        let (file_id2, chunk_ids2) = index
+            .reindex_file(&file, &new_chunks, &new_symbols)
+            .expect("reindex");
 
         assert_eq!(file_id, file_id2, "same file should get same ID");
         assert_eq!(chunk_ids2.len(), 2);
-        assert_eq!(index.chunk_count().expect("count"), 2, "old chunks should be replaced");
-        assert_eq!(index.symbol_count().expect("count"), 2, "old symbols should be replaced");
+        assert_eq!(
+            index.chunk_count().expect("count"),
+            2,
+            "old chunks should be replaced"
+        );
+        assert_eq!(
+            index.symbol_count().expect("count"),
+            2,
+            "old symbols should be replaced"
+        );
     }
 
     #[test]
@@ -1049,16 +1115,28 @@ mod tests {
         let file = test_file_info();
         let file_id = index.upsert_file(&file).expect("upsert");
 
-        index.insert_chunk(&test_chunk(file_id)).expect("insert chunk");
-        index.insert_symbol(&test_symbol(file_id)).expect("insert symbol");
+        index
+            .insert_chunk(&test_chunk(file_id))
+            .expect("insert chunk");
+        index
+            .insert_symbol(&test_symbol(file_id))
+            .expect("insert symbol");
 
         assert_eq!(index.chunk_count().expect("count"), 1);
         assert_eq!(index.symbol_count().expect("count"), 1);
 
         index.delete_file(&file.path).expect("delete");
 
-        assert_eq!(index.chunk_count().expect("count"), 0, "chunks should cascade");
-        assert_eq!(index.symbol_count().expect("count"), 0, "symbols should cascade");
+        assert_eq!(
+            index.chunk_count().expect("count"),
+            0,
+            "chunks should cascade"
+        );
+        assert_eq!(
+            index.symbol_count().expect("count"),
+            0,
+            "symbols should cascade"
+        );
     }
 
     #[test]

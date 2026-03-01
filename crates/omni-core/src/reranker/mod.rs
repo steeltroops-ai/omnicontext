@@ -26,7 +26,8 @@ pub struct ModelSpec {
 pub const DEFAULT_MODEL: ModelSpec = ModelSpec {
     name: "ms-marco-MiniLM-L-6-v2",
     model_url: "https://huggingface.co/Xenova/ms-marco-MiniLM-L-6-v2/resolve/main/onnx/model.onnx",
-    tokenizer_url: "https://huggingface.co/Xenova/ms-marco-MiniLM-L-6-v2/resolve/main/tokenizer.json",
+    tokenizer_url:
+        "https://huggingface.co/Xenova/ms-marco-MiniLM-L-6-v2/resolve/main/tokenizer.json",
 };
 
 pub struct Reranker {

@@ -46,10 +46,8 @@ impl Workspace {
     pub fn open(config_path: &Path) -> OmniResult<Self> {
         let ws_config = if config_path.exists() {
             let content = std::fs::read_to_string(config_path)?;
-            toml::from_str::<WorkspaceConfig>(&content).map_err(|e| {
-                OmniError::Config {
-                    details: format!("invalid workspace config: {e}"),
-                }
+            toml::from_str::<WorkspaceConfig>(&content).map_err(|e| OmniError::Config {
+                details: format!("invalid workspace config: {e}"),
             })?
         } else {
             WorkspaceConfig {
@@ -175,11 +173,15 @@ impl Workspace {
     fn save_config(&self) -> OmniResult<()> {
         let config = WorkspaceConfig {
             name: self.name.clone(),
-            repos: self.engines.keys().map(|p| LinkedRepo {
-                path: p.clone(),
-                alias: None,
-                auto_index: true,
-            }).collect(),
+            repos: self
+                .engines
+                .keys()
+                .map(|p| LinkedRepo {
+                    path: p.clone(),
+                    alias: None,
+                    auto_index: true,
+                })
+                .collect(),
         };
 
         let content = toml::to_string_pretty(&config).map_err(|e| {

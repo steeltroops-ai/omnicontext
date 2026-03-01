@@ -7,8 +7,8 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use crate::types::Language;
 use super::LanguageAnalyzer;
+use crate::types::Language;
 
 /// Global registry instance.
 static REGISTRY: OnceLock<Registry> = OnceLock::new();
@@ -29,26 +29,74 @@ impl Registry {
         let mut analyzers: HashMap<Language, Box<dyn LanguageAnalyzer>> = HashMap::new();
 
         // Phase 1 languages (code -- full tree-sitter AST)
-        analyzers.insert(Language::Python, Box::new(super::languages::python::PythonAnalyzer));
-        analyzers.insert(Language::Rust, Box::new(super::languages::rust::RustAnalyzer));
-        analyzers.insert(Language::TypeScript, Box::new(super::languages::typescript::TypeScriptAnalyzer));
-        analyzers.insert(Language::JavaScript, Box::new(super::languages::javascript::JavaScriptAnalyzer));
+        analyzers.insert(
+            Language::Python,
+            Box::new(super::languages::python::PythonAnalyzer),
+        );
+        analyzers.insert(
+            Language::Rust,
+            Box::new(super::languages::rust::RustAnalyzer),
+        );
+        analyzers.insert(
+            Language::TypeScript,
+            Box::new(super::languages::typescript::TypeScriptAnalyzer),
+        );
+        analyzers.insert(
+            Language::JavaScript,
+            Box::new(super::languages::javascript::JavaScriptAnalyzer),
+        );
         analyzers.insert(Language::Go, Box::new(super::languages::go::GoAnalyzer));
 
         // Phase 2 languages (code -- full tree-sitter AST)
-        analyzers.insert(Language::Java, Box::new(super::languages::java::JavaAnalyzer));
+        analyzers.insert(
+            Language::Java,
+            Box::new(super::languages::java::JavaAnalyzer),
+        );
         analyzers.insert(Language::C, Box::new(super::languages::c::CAnalyzer));
         analyzers.insert(Language::Cpp, Box::new(super::languages::cpp::CppAnalyzer));
-        analyzers.insert(Language::CSharp, Box::new(super::languages::csharp::CSharpAnalyzer));
+        analyzers.insert(
+            Language::CSharp,
+            Box::new(super::languages::csharp::CSharpAnalyzer),
+        );
         analyzers.insert(Language::Css, Box::new(super::languages::css::CssAnalyzer));
 
         // Document and config formats (section-based text chunking)
-        analyzers.insert(Language::Markdown, Box::new(super::languages::document::DocumentAnalyzer::new(Language::Markdown)));
-        analyzers.insert(Language::Toml, Box::new(super::languages::document::DocumentAnalyzer::new(Language::Toml)));
-        analyzers.insert(Language::Yaml, Box::new(super::languages::document::DocumentAnalyzer::new(Language::Yaml)));
-        analyzers.insert(Language::Json, Box::new(super::languages::document::DocumentAnalyzer::new(Language::Json)));
-        analyzers.insert(Language::Html, Box::new(super::languages::document::DocumentAnalyzer::new(Language::Html)));
-        analyzers.insert(Language::Shell, Box::new(super::languages::document::DocumentAnalyzer::new(Language::Shell)));
+        analyzers.insert(
+            Language::Markdown,
+            Box::new(super::languages::document::DocumentAnalyzer::new(
+                Language::Markdown,
+            )),
+        );
+        analyzers.insert(
+            Language::Toml,
+            Box::new(super::languages::document::DocumentAnalyzer::new(
+                Language::Toml,
+            )),
+        );
+        analyzers.insert(
+            Language::Yaml,
+            Box::new(super::languages::document::DocumentAnalyzer::new(
+                Language::Yaml,
+            )),
+        );
+        analyzers.insert(
+            Language::Json,
+            Box::new(super::languages::document::DocumentAnalyzer::new(
+                Language::Json,
+            )),
+        );
+        analyzers.insert(
+            Language::Html,
+            Box::new(super::languages::document::DocumentAnalyzer::new(
+                Language::Html,
+            )),
+        );
+        analyzers.insert(
+            Language::Shell,
+            Box::new(super::languages::document::DocumentAnalyzer::new(
+                Language::Shell,
+            )),
+        );
 
         Self { analyzers }
     }

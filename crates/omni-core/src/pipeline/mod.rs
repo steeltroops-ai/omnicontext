@@ -38,7 +38,9 @@ use crate::index::MetadataIndex;
 use crate::parser;
 use crate::reranker::Reranker;
 use crate::search::SearchEngine;
-use crate::types::{DependencyEdge, DependencyKind, FileInfo, Language, PipelineEvent, SearchResult, Symbol};
+use crate::types::{
+    DependencyEdge, DependencyKind, FileInfo, Language, PipelineEvent, SearchResult, Symbol,
+};
 use crate::vector::VectorIndex;
 use crate::watcher::FileWatcher;
 
@@ -90,10 +92,7 @@ impl Engine {
         let embedder = Embedder::new(&config.embedding)?;
 
         // Initialize search engine
-        let search_engine = SearchEngine::new(
-            config.search.rrf_k,
-            config.search.token_budget,
-        );
+        let search_engine = SearchEngine::new(config.search.rrf_k, config.search.token_budget);
 
         let reranker = Reranker::new(&config.search.reranker)?;
 
@@ -132,29 +131,29 @@ impl Engine {
     fn load_graph_from_index(&mut self) -> OmniResult<usize> {
         let edges = self.index.get_all_dependencies()?;
         let edge_count = edges.len();
-        
+
         if edge_count == 0 {
             tracing::debug!("no dependency edges found in index");
             return Ok(0);
         }
-        
+
         tracing::info!(edges = edge_count, "loading dependency graph from index");
-        
+
         for edge in edges {
             // Add nodes for source and target if they don't exist
             self.dep_graph.add_symbol(edge.source_id)?;
             self.dep_graph.add_symbol(edge.target_id)?;
-            
+
             // Add the edge
             self.dep_graph.add_edge(&edge)?;
         }
-        
+
         tracing::info!(
             nodes = self.dep_graph.node_count(),
             edges = self.dep_graph.edge_count(),
             "dependency graph loaded"
         );
-        
+
         Ok(edge_count)
     }
 
@@ -168,11 +167,7 @@ impl Engine {
         let (tx, mut rx) = mpsc::channel::<PipelineEvent>(1024);
 
         // Create file watcher for scanning
-        let watcher = FileWatcher::new(
-            &repo_path,
-            &self.config.watcher,
-            &self.config.indexing,
-        );
+        let watcher = FileWatcher::new(&repo_path, &self.config.watcher, &self.config.indexing);
 
         // Full directory scan
         let file_count = watcher.full_scan(&tx)?;
@@ -186,24 +181,22 @@ impl Engine {
         // Process each event
         while let Some(event) = rx.recv().await {
             match event {
-                PipelineEvent::FileChanged { path } => {
-                    match self.process_file(&path) {
-                        Ok(stats) => {
-                            result.files_processed += 1;
-                            result.chunks_created += stats.chunks;
-                            result.symbols_extracted += stats.symbols;
-                            result.embeddings_generated += stats.embeddings;
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                path = %path.display(),
-                                error = %e,
-                                "failed to process file"
-                            );
-                            result.files_failed += 1;
-                        }
+                PipelineEvent::FileChanged { path } => match self.process_file(&path) {
+                    Ok(stats) => {
+                        result.files_processed += 1;
+                        result.chunks_created += stats.chunks;
+                        result.symbols_extracted += stats.symbols;
+                        result.embeddings_generated += stats.embeddings;
                     }
-                }
+                    Err(e) => {
+                        tracing::warn!(
+                            path = %path.display(),
+                            error = %e,
+                            "failed to process file"
+                        );
+                        result.files_failed += 1;
+                    }
+                },
                 PipelineEvent::FileDeleted { path } => {
                     if let Err(e) = self.index.delete_file(&path) {
                         tracing::warn!(
@@ -246,15 +239,11 @@ impl Engine {
         let mut stats = FileProcessStats::default();
 
         // Read file content
-        let content = std::fs::read_to_string(path).map_err(|e| {
-            OmniError::Internal(format!("failed to read {}: {e}", path.display()))
-        })?;
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| OmniError::Internal(format!("failed to read {}: {e}", path.display())))?;
 
         // Detect language
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("");
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         let language = Language::from_extension(ext);
 
         if matches!(language, Language::Unknown) {
@@ -264,9 +253,7 @@ impl Engine {
             });
         }
 
-        let rel_path = path
-            .strip_prefix(&self.config.repo_path)
-            .unwrap_or(path);
+        let rel_path = path.strip_prefix(&self.config.repo_path).unwrap_or(path);
 
         // Compute file hash for change detection
         let hash = compute_file_hash(&content);
@@ -295,11 +282,17 @@ impl Engine {
         let file_id = self.index.upsert_file(&file_info)?;
 
         // Parse imports early so we can enrich chunks with them
-        let imports = parser::parse_imports(path, content.as_bytes(), language)
-            .unwrap_or_default();
+        let imports = parser::parse_imports(path, content.as_bytes(), language).unwrap_or_default();
 
         // Chunk the elements (returns Vec<Chunk>)
-        let chunks = chunker::chunk_elements(&elements, &file_info, &imports, file_id, &self.config, &content);
+        let chunks = chunker::chunk_elements(
+            &elements,
+            &file_info,
+            &imports,
+            file_id,
+            &self.config,
+            &content,
+        );
 
         // Build Symbol records from the chunks
         let symbols: Vec<Symbol> = chunks
@@ -351,8 +344,7 @@ impl Engine {
                                 tracing::warn!(error = %e, "failed to add vector");
                                 continue;
                             }
-                            if let Err(e) =
-                                self.index.set_chunk_vector_id(chunk_ids[i], vector_id)
+                            if let Err(e) = self.index.set_chunk_vector_id(chunk_ids[i], vector_id)
                             {
                                 tracing::warn!(error = %e, "failed to set vector_id");
                             }
@@ -386,12 +378,12 @@ impl Engine {
             // Resolve each reference to a target symbol
             for ref_name in &element.references {
                 // Try to find target symbol by FQN match or name prefix
-                let target = self.index.get_symbol_by_fqn(ref_name)?
-                    .or_else(|| {
-                        self.index.search_symbols_by_name(ref_name, 1)
-                            .ok()
-                            .and_then(|v| v.into_iter().next())
-                    });
+                let target = self.index.get_symbol_by_fqn(ref_name)?.or_else(|| {
+                    self.index
+                        .search_symbols_by_name(ref_name, 1)
+                        .ok()
+                        .and_then(|v| v.into_iter().next())
+                });
 
                 if let Some(target_sym) = target {
                     if target_sym.id != source_id {
@@ -418,7 +410,9 @@ impl Engine {
         //         using the multi-strategy import resolution engine
         // ---------------------------------------------------------------
         if !imports.is_empty() {
-            let file_source_id = self.index.get_first_symbol_for_file(file_id)
+            let file_source_id = self
+                .index
+                .get_first_symbol_for_file(file_id)
                 .unwrap_or(None)
                 .map(|s| s.id);
 
@@ -430,11 +424,8 @@ impl Engine {
                         }
 
                         // Use multi-strategy resolution instead of naive name search
-                        let target_id = DependencyGraph::resolve_import(
-                            &self.index,
-                            &import.import_path,
-                            name,
-                        );
+                        let target_id =
+                            DependencyGraph::resolve_import(&self.index, &import.import_path, name);
 
                         if let Some(target) = target_id {
                             if target != source_id {
@@ -452,11 +443,8 @@ impl Engine {
                     }
 
                     // Resolve the module path itself
-                    let target_id = DependencyGraph::resolve_import(
-                        &self.index,
-                        "",
-                        &import.import_path,
-                    );
+                    let target_id =
+                        DependencyGraph::resolve_import(&self.index, "", &import.import_path);
 
                     if let Some(target) = target_id {
                         if let Some(source_id) = file_source_id {
@@ -480,7 +468,9 @@ impl Engine {
         // ---------------------------------------------------------------
         // Step 7: Build call graph edges from element references
         // ---------------------------------------------------------------
-        let call_edges = self.dep_graph.build_call_edges(&self.index, file_id, &elements);
+        let call_edges = self
+            .dep_graph
+            .build_call_edges(&self.index, file_id, &elements);
         for edge in &call_edges {
             if let Err(e) = self.index.insert_dependency(edge) {
                 tracing::trace!(error = %e, "failed to insert call edge");
@@ -491,7 +481,9 @@ impl Engine {
         // ---------------------------------------------------------------
         // Step 8: Build type hierarchy edges from element structures
         // ---------------------------------------------------------------
-        let type_edges = self.dep_graph.build_type_edges(&self.index, file_id, &elements);
+        let type_edges = self
+            .dep_graph
+            .build_type_edges(&self.index, file_id, &elements);
         for edge in &type_edges {
             if let Err(e) = self.index.insert_dependency(edge) {
                 tracing::trace!(error = %e, "failed to insert type edge");
@@ -513,11 +505,7 @@ impl Engine {
     }
 
     /// Execute a search query.
-    pub fn search(
-        &self,
-        query: &str,
-        limit: usize,
-    ) -> OmniResult<Vec<SearchResult>> {
+    pub fn search(&self, query: &str, limit: usize) -> OmniResult<Vec<SearchResult>> {
         self.search_engine.search(
             query,
             limit,
@@ -560,14 +548,14 @@ impl Engine {
         let dep_edges = self.index.dependency_count().unwrap_or(0);
         let vectors_indexed = self.vector_index.len();
         let chunks_indexed = stats.chunk_count;
-        
+
         // Calculate embedding coverage percentage
         let embedding_coverage_percent = if chunks_indexed > 0 {
             (vectors_indexed as f64 / chunks_indexed as f64) * 100.0
         } else {
             0.0
         };
-        
+
         Ok(EngineStatus {
             repo_path: self.config.repo_path.display().to_string(),
             data_dir: self.config.data_dir().display().to_string(),

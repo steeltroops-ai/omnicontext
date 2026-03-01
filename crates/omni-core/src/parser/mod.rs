@@ -15,8 +15,8 @@
 //! The parser is stateless and can be invoked from multiple threads
 //! via `spawn_blocking`.
 
-pub mod registry;
 pub mod languages;
+pub mod registry;
 
 use std::path::Path;
 
@@ -93,12 +93,12 @@ pub fn parse_file(
 ) -> OmniResult<Vec<StructuralElement>> {
     let registry = registry::global_registry();
 
-    let analyzer = registry.get(language).ok_or_else(|| {
-        crate::error::OmniError::Parse {
+    let analyzer = registry
+        .get(language)
+        .ok_or_else(|| crate::error::OmniError::Parse {
             path: file_path.to_path_buf(),
             message: format!("no analyzer registered for language: {language}"),
-        }
-    })?;
+        })?;
 
     let mut parser = tree_sitter::Parser::new();
     parser
@@ -108,12 +108,12 @@ pub fn parse_file(
             message: format!("failed to set tree-sitter language: {e}"),
         })?;
 
-    let tree = parser.parse(source, None).ok_or_else(|| {
-        crate::error::OmniError::Parse {
+    let tree = parser
+        .parse(source, None)
+        .ok_or_else(|| crate::error::OmniError::Parse {
             path: file_path.to_path_buf(),
             message: "tree-sitter returned None (parse timeout or cancellation)".into(),
-        }
-    })?;
+        })?;
 
     Ok(analyzer.extract_structure(&tree, source, file_path))
 }
@@ -128,12 +128,12 @@ pub fn parse_imports(
 ) -> OmniResult<Vec<ImportStatement>> {
     let registry = registry::global_registry();
 
-    let analyzer = registry.get(language).ok_or_else(|| {
-        crate::error::OmniError::Parse {
+    let analyzer = registry
+        .get(language)
+        .ok_or_else(|| crate::error::OmniError::Parse {
             path: file_path.to_path_buf(),
             message: format!("no analyzer registered for language: {language}"),
-        }
-    })?;
+        })?;
 
     let mut parser = tree_sitter::Parser::new();
     parser
@@ -143,12 +143,12 @@ pub fn parse_imports(
             message: format!("failed to set tree-sitter language: {e}"),
         })?;
 
-    let tree = parser.parse(source, None).ok_or_else(|| {
-        crate::error::OmniError::Parse {
+    let tree = parser
+        .parse(source, None)
+        .ok_or_else(|| crate::error::OmniError::Parse {
             path: file_path.to_path_buf(),
             message: "tree-sitter returned None".into(),
-        }
-    })?;
+        })?;
 
     Ok(analyzer.extract_imports(&tree, source, file_path))
 }
@@ -196,18 +196,13 @@ pub fn build_module_name_from_path(path: &Path) -> String {
     parts.join("/") // Callers will `.replace("/", delimiter)` if needed
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_parse_file_unknown_language_returns_error() {
-        let result = parse_file(
-            Path::new("test.xyz"),
-            b"hello world",
-            Language::Unknown,
-        );
+        let result = parse_file(Path::new("test.xyz"), b"hello world", Language::Unknown);
         assert!(result.is_err());
     }
 }

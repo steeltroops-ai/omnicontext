@@ -52,7 +52,7 @@ use ort::session::Session;
 use crate::config::EmbeddingConfig;
 use crate::error::{OmniError, OmniResult};
 
-pub use model_manager::{DEFAULT_MODEL, FALLBACK_MODEL, ModelSpec};
+pub use model_manager::{ModelSpec, DEFAULT_MODEL, FALLBACK_MODEL};
 
 /// Embedding engine that uses ONNX Runtime for local inference.
 pub struct Embedder {
@@ -71,7 +71,7 @@ impl Embedder {
     /// already cached. On failure, returns Ok with the embedder in
     /// degraded mode (keyword-only search).
     pub fn new(config: &EmbeddingConfig) -> OmniResult<Self> {
-        // In test environments where ONNX might not be available or 
+        // In test environments where ONNX might not be available or
         // we want to skip downloading completely, return a degraded embedder.
         if std::env::var("OMNI_SKIP_MODEL_DOWNLOAD").is_ok() {
             tracing::info!("OMNI_SKIP_MODEL_DOWNLOAD is set, skipping embedding model loading");
@@ -88,25 +88,23 @@ impl Embedder {
         // Try to load the ONNX model
         let session = if model_path.exists() {
             match Session::builder() {
-                Ok(builder) => {
-                    match builder.commit_from_file(&model_path) {
-                        Ok(session) => {
-                            tracing::info!(
-                                model = %model_path.display(),
-                                "loaded ONNX embedding model"
-                            );
-                            Some(std::sync::Mutex::new(session))
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                model = %model_path.display(),
-                                error = %e,
-                                "failed to load embedding model, operating in keyword-only mode"
-                            );
-                            None
-                        }
+                Ok(builder) => match builder.commit_from_file(&model_path) {
+                    Ok(session) => {
+                        tracing::info!(
+                            model = %model_path.display(),
+                            "loaded ONNX embedding model"
+                        );
+                        Some(std::sync::Mutex::new(session))
                     }
-                }
+                    Err(e) => {
+                        tracing::warn!(
+                            model = %model_path.display(),
+                            error = %e,
+                            "failed to load embedding model, operating in keyword-only mode"
+                        );
+                        None
+                    }
+                },
                 Err(e) => {
                     tracing::warn!(
                         error = %e,
@@ -155,7 +153,9 @@ impl Embedder {
     /// 2. If model is already cached, use the cached version
     /// 3. If OMNI_SKIP_MODEL_DOWNLOAD is set, skip download (CI/testing/offline)
     /// 4. Otherwise, download the model from HuggingFace
-    fn resolve_model_files(config: &EmbeddingConfig) -> OmniResult<(std::path::PathBuf, std::path::PathBuf)> {
+    fn resolve_model_files(
+        config: &EmbeddingConfig,
+    ) -> OmniResult<(std::path::PathBuf, std::path::PathBuf)> {
         // Check if the user has manually specified a model path that exists
         if config.model_path.exists() {
             let tokenizer_path = config.model_path.with_file_name("tokenizer.json");
@@ -254,10 +254,7 @@ impl Embedder {
         let mut all_embeddings = Vec::with_capacity(chunks.len());
 
         // Sanitize chunks before processing
-        let sanitized: Vec<String> = chunks
-            .iter()
-            .map(|c| sanitize_for_embedding(c))
-            .collect();
+        let sanitized: Vec<String> = chunks.iter().map(|c| sanitize_for_embedding(c)).collect();
         let sanitized_refs: Vec<&str> = sanitized.iter().map(String::as_str).collect();
 
         // Process in batches
@@ -296,11 +293,7 @@ impl Embedder {
     }
 
     /// Embed a single chunk with automatic retry and truncation.
-    fn embed_single_with_retry(
-        &self,
-        text: &str,
-        session: &mut Session,
-    ) -> Option<Vec<f32>> {
+    fn embed_single_with_retry(&self, text: &str, session: &mut Session) -> Option<Vec<f32>> {
         // Try with full text first
         match self.run_inference(session, &[text]) {
             Ok(mut embs) => return Some(embs.remove(0)),
@@ -352,7 +345,9 @@ impl Embedder {
         if let Some(Some(emb)) = results.pop() {
             Ok(emb)
         } else {
-            Err(OmniError::Internal("embed_batch failed or returned None".into()))
+            Err(OmniError::Internal(
+                "embed_batch failed or returned None".into(),
+            ))
         }
     }
 
@@ -362,11 +357,7 @@ impl Embedder {
     }
 
     /// Run ONNX inference on a batch of texts.
-    fn run_inference(
-        &self,
-        session: &mut Session,
-        texts: &[&str],
-    ) -> OmniResult<Vec<Vec<f32>>> {
+    fn run_inference(&self, session: &mut Session, texts: &[&str]) -> OmniResult<Vec<Vec<f32>>> {
         let batch_size = texts.len();
         let max_len = self.config.max_seq_length;
 
@@ -376,44 +367,60 @@ impl Embedder {
         // Create ort tensors using (shape, data) tuple API
         let shape = vec![batch_size as i64, max_len as i64];
 
-        let ids_value = ort::value::Tensor::from_array(
-            (shape.clone(), input_ids)
-        ).map_err(|e| OmniError::Internal(format!("ONNX tensor error: {e}")))?;
+        let ids_value = ort::value::Tensor::from_array((shape.clone(), input_ids))
+            .map_err(|e| OmniError::Internal(format!("ONNX tensor error: {e}")))?;
 
-        let mask_value = ort::value::Tensor::from_array(
-            (shape.clone(), attention_mask.clone())
-        ).map_err(|e| OmniError::Internal(format!("ONNX tensor error: {e}")))?;
+        let mask_value = ort::value::Tensor::from_array((shape.clone(), attention_mask.clone()))
+            .map_err(|e| OmniError::Internal(format!("ONNX tensor error: {e}")))?;
 
         // Build inputs dynamically based on what the model expects
         use std::borrow::Cow;
         let mut inputs: Vec<(Cow<'_, str>, ort::session::SessionInputValue<'_>)> = vec![
-            (Cow::Borrowed("input_ids"), ort::session::SessionInputValue::from(ids_value)),
-            (Cow::Borrowed("attention_mask"), ort::session::SessionInputValue::from(mask_value)),
+            (
+                Cow::Borrowed("input_ids"),
+                ort::session::SessionInputValue::from(ids_value),
+            ),
+            (
+                Cow::Borrowed("attention_mask"),
+                ort::session::SessionInputValue::from(mask_value),
+            ),
         ];
 
         // Only add token_type_ids if the model expects it (Jina doesn't, BGE might)
-        let expects_token_type = session.inputs().iter().any(|i| i.name() == "token_type_ids");
+        let expects_token_type = session
+            .inputs()
+            .iter()
+            .any(|i| i.name() == "token_type_ids");
         if expects_token_type {
-            let type_value = ort::value::Tensor::from_array(
-                (shape.clone(), token_type_ids)
-            ).map_err(|e| OmniError::Internal(format!("ONNX tensor error (token_type_ids): {e}")))?;
-            inputs.push((Cow::Borrowed("token_type_ids"), ort::session::SessionInputValue::from(type_value)));
+            let type_value = ort::value::Tensor::from_array((shape.clone(), token_type_ids))
+                .map_err(|e| {
+                    OmniError::Internal(format!("ONNX tensor error (token_type_ids): {e}"))
+                })?;
+            inputs.push((
+                Cow::Borrowed("token_type_ids"),
+                ort::session::SessionInputValue::from(type_value),
+            ));
         }
 
         // Get output name before running (session.outputs() borrows &self)
-        let output_name = session.outputs().first()
+        let output_name = session
+            .outputs()
+            .first()
             .map(|o| o.name().to_string())
             .ok_or_else(|| OmniError::Internal("model has no outputs".into()))?;
 
         // Run inference (requires &mut self)
-        let outputs = session.run(inputs)
+        let outputs = session
+            .run(inputs)
             .map_err(|e| OmniError::Internal(format!("ONNX inference error: {e}")))?;
 
         // Extract first output tensor
-        let output_value = outputs.get(&output_name)
+        let output_value = outputs
+            .get(&output_name)
             .ok_or_else(|| OmniError::Internal("no output tensor found".into()))?;
 
-        let (output_shape, output_data) = output_value.try_extract_tensor::<f32>()
+        let (output_shape, output_data) = output_value
+            .try_extract_tensor::<f32>()
             .map_err(|e| OmniError::Internal(format!("output extraction error: {e}")))?;
 
         let dims: Vec<usize> = output_shape.iter().map(|&d| d as usize).collect();
@@ -475,9 +482,10 @@ impl Embedder {
         texts: &[&str],
         max_len: usize,
     ) -> OmniResult<(Vec<i64>, Vec<i64>, Vec<i64>)> {
-        let tokenizer = self.tokenizer.as_ref().ok_or_else(|| {
-            OmniError::Internal("tokenizer not loaded".into())
-        })?;
+        let tokenizer = self
+            .tokenizer
+            .as_ref()
+            .ok_or_else(|| OmniError::Internal("tokenizer not loaded".into()))?;
 
         let mut all_input_ids = Vec::with_capacity(texts.len() * max_len);
         let mut all_attention_mask = Vec::with_capacity(texts.len() * max_len);
@@ -495,16 +503,15 @@ impl Embedder {
                 continue;
             }
 
-            let encoding = tokenizer.encode(*text, true)
-                .map_err(|e| {
-                    OmniError::Internal(format!(
-                        "tokenization error at index {}: {} (text length: {}, first 100 chars: {})",
-                        idx,
-                        e,
-                        text.len(),
-                        &text.chars().take(100).collect::<String>()
-                    ))
-                })?;
+            let encoding = tokenizer.encode(*text, true).map_err(|e| {
+                OmniError::Internal(format!(
+                    "tokenization error at index {}: {} (text length: {}, first 100 chars: {})",
+                    idx,
+                    e,
+                    text.len(),
+                    &text.chars().take(100).collect::<String>()
+                ))
+            })?;
 
             let ids = encoding.get_ids();
             let mask = encoding.get_attention_mask();
@@ -534,7 +541,7 @@ impl Embedder {
 /// Format a chunk for embedding.
 ///
 /// Under OmniContext v2, chunks are enriched at chunking time (the context header
-/// is directly included in `chunk.content`). This method serves as a no-op 
+/// is directly included in `chunk.content`). This method serves as a no-op
 /// wrapper, kept only for backwards compatibility or future dynamic formatting.
 pub fn format_chunk_for_embedding(
     _language: &str,
@@ -554,7 +561,7 @@ pub fn format_chunk_for_embedding(
 /// - Truncates extremely long lines that might cause issues
 fn sanitize_for_embedding(text: &str) -> String {
     let mut sanitized = String::with_capacity(text.len());
-    
+
     for line in text.lines() {
         // Skip extremely long lines (> 10k chars) that might cause tokenizer issues
         if line.len() > 10000 {
@@ -562,7 +569,7 @@ fn sanitize_for_embedding(text: &str) -> String {
             sanitized.push_str(" [truncated]\n");
             continue;
         }
-        
+
         // Replace problematic characters
         for ch in line.chars() {
             match ch {
@@ -576,7 +583,7 @@ fn sanitize_for_embedding(text: &str) -> String {
         }
         sanitized.push('\n');
     }
-    
+
     // Trim excessive whitespace
     sanitized.trim().to_string()
 }
@@ -641,10 +648,16 @@ mod tests {
 
     #[test]
     fn test_format_multiple_languages() {
-        let rust = format_chunk_for_embedding("rust", "lib::Config::new", "function", "pub fn new() {}");
+        let rust =
+            format_chunk_for_embedding("rust", "lib::Config::new", "function", "pub fn new() {}");
         assert_eq!(rust, "pub fn new() {}");
 
-        let ts = format_chunk_for_embedding("typescript", "UserService.getUser", "function", "getUser() {}");
+        let ts = format_chunk_for_embedding(
+            "typescript",
+            "UserService.getUser",
+            "function",
+            "getUser() {}",
+        );
         assert_eq!(ts, "getUser() {}");
     }
 }

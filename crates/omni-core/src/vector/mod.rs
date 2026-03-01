@@ -112,7 +112,9 @@ impl VectorIndex {
         }
 
         // Compute cosine similarity against all vectors
-        let mut scores: Vec<(u64, f32)> = self.vectors.iter()
+        let mut scores: Vec<(u64, f32)> = self
+            .vectors
+            .iter()
             .map(|(&id, vec)| (id, dot_product(query, vec)))
             .collect();
 
@@ -172,14 +174,15 @@ impl VectorIndex {
 
         let data = VectorData {
             dimensions: self.dimensions,
-            entries: self.vectors.iter()
+            entries: self
+                .vectors
+                .iter()
                 .map(|(&id, vec)| (id, vec.clone()))
                 .collect(),
         };
 
-        let encoded = bincode::serialize(&data).map_err(|e| {
-            OmniError::Internal(format!("failed to serialize vector index: {e}"))
-        })?;
+        let encoded = bincode::serialize(&data)
+            .map_err(|e| OmniError::Internal(format!("failed to serialize vector index: {e}")))?;
 
         // Write to temp file alongside target, then atomic rename
         let tmp_path = path.with_extension("bin.tmp");
@@ -203,9 +206,8 @@ impl VectorIndex {
         };
 
         let data = std::fs::read(&path)?;
-        let decoded: VectorData = bincode::deserialize(&data).map_err(|e| {
-            OmniError::Internal(format!("failed to deserialize vector index: {e}"))
-        })?;
+        let decoded: VectorData = bincode::deserialize(&data)
+            .map_err(|e| OmniError::Internal(format!("failed to deserialize vector index: {e}")))?;
 
         if decoded.dimensions != self.dimensions {
             return Err(OmniError::Internal(format!(
@@ -268,8 +270,7 @@ mod tests {
     #[test]
     fn test_vector_index_creation() {
         let dir = tempfile::tempdir().expect("create temp dir");
-        let index = VectorIndex::open(&dir.path().join("vectors.bin"), 384)
-            .expect("create index");
+        let index = VectorIndex::open(&dir.path().join("vectors.bin"), 384).expect("create index");
         assert_eq!(index.dimensions(), 384);
         assert!(index.is_empty());
     }

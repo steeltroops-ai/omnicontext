@@ -60,7 +60,8 @@ pub fn chunk_elements(
         );
 
         let estimated_tokens = estimate_tokens(&elem.content) + estimate_tokens(&backward_context);
-        let mut context_header = build_context_header(elem, file_info, imports, &module_declarations);
+        let mut context_header =
+            build_context_header(elem, file_info, imports, &module_declarations);
 
         if !backward_context.is_empty() {
             context_header.push_str("// -- surrounding context --\n");
@@ -70,9 +71,15 @@ pub fn chunk_elements(
         let total_tokens = estimated_tokens + estimate_tokens(&context_header);
 
         if total_tokens <= max_tokens {
-            chunks.push(element_to_chunk(elem, file_id, total_tokens, &context_header));
+            chunks.push(element_to_chunk(
+                elem,
+                file_id,
+                total_tokens,
+                &context_header,
+            ));
         } else {
-            let split_chunks = split_element(elem, file_id, max_tokens, overlap_fraction, &context_header);
+            let split_chunks =
+                split_element(elem, file_id, max_tokens, overlap_fraction, &context_header);
             chunks.extend(split_chunks);
         }
     }
@@ -191,10 +198,24 @@ fn build_context_header(
     module_declarations: &str,
 ) -> String {
     let mut header = String::new();
-    header.push_str(&format!("[{}] {}\n", file_info.language.as_str(), elem.symbol_path));
-    header.push_str(&format!("Kind: {:?} | Visibility: {:?} | File: {}\n", elem.kind, elem.visibility, file_info.path.display()));
+    header.push_str(&format!(
+        "[{}] {}\n",
+        file_info.language.as_str(),
+        elem.symbol_path
+    ));
+    header.push_str(&format!(
+        "Kind: {:?} | Visibility: {:?} | File: {}\n",
+        elem.kind,
+        elem.visibility,
+        file_info.path.display()
+    ));
 
-    if let Some(parent) = elem.symbol_path.rsplit_once("::").map(|x| x.0).or_else(|| elem.symbol_path.rsplit_once('.').map(|x| x.0)) {
+    if let Some(parent) = elem
+        .symbol_path
+        .rsplit_once("::")
+        .map(|x| x.0)
+        .or_else(|| elem.symbol_path.rsplit_once('.').map(|x| x.0))
+    {
         if !parent.is_empty() {
             header.push_str(&format!("Parent: {}\n", parent));
         }
@@ -207,7 +228,11 @@ fn build_context_header(
     }
 
     if !imports.is_empty() {
-        let import_list: Vec<&str> = imports.iter().take(8).map(|i| i.import_path.as_str()).collect();
+        let import_list: Vec<&str> = imports
+            .iter()
+            .take(8)
+            .map(|i| i.import_path.as_str())
+            .collect();
         let mut import_str = import_list.join(", ");
         if imports.len() > 8 {
             import_str.push_str(", ...");
@@ -215,7 +240,12 @@ fn build_context_header(
         header.push_str(&format!("Imports: {}\n", import_str));
     }
     if !elem.references.is_empty() {
-        let refs: Vec<&str> = elem.references.iter().take(10).map(|r| r.as_str()).collect();
+        let refs: Vec<&str> = elem
+            .references
+            .iter()
+            .take(10)
+            .map(|r| r.as_str())
+            .collect();
         let mut ref_str = refs.join(", ");
         if elem.references.len() > 10 {
             ref_str.push_str(", ...");
@@ -227,7 +257,12 @@ fn build_context_header(
 }
 
 /// Convert an element that fits within the token budget to a Chunk.
-fn element_to_chunk(elem: &StructuralElement, file_id: i64, token_count: u32, context_header: &str) -> Chunk {
+fn element_to_chunk(
+    elem: &StructuralElement,
+    file_id: i64,
+    token_count: u32,
+    context_header: &str,
+) -> Chunk {
     let content = format!("{}{}", context_header, elem.content);
     Chunk {
         id: 0,
@@ -277,18 +312,21 @@ fn split_element(
 
     // Find split points based on element kind
     let split_points = match elem.kind {
-        ChunkKind::Class | ChunkKind::Trait | ChunkKind::Impl => {
-            find_class_split_points(&lines)
-        }
-        ChunkKind::Function | ChunkKind::Test => {
-            find_function_split_points(&lines)
-        }
-        _ => {
-            find_line_split_points(&lines, max_tokens)
-        }
+        ChunkKind::Class | ChunkKind::Trait | ChunkKind::Impl => find_class_split_points(&lines),
+        ChunkKind::Function | ChunkKind::Test => find_function_split_points(&lines),
+        _ => find_line_split_points(&lines, max_tokens),
     };
 
-    create_chunks_from_splits(elem, file_id, &lines, &split_points, &header, max_tokens, overlap_fraction, context_header)
+    create_chunks_from_splits(
+        elem,
+        file_id,
+        &lines,
+        &split_points,
+        &header,
+        max_tokens,
+        overlap_fraction,
+        context_header,
+    )
 }
 
 /// Extract a header line for context when splitting.
@@ -515,7 +553,7 @@ fn create_chunks_from_splits(
 
         // Build chunk content
         let mut content_parts = Vec::new();
-        
+
         // Add the cross-chunk contextual header FIRST
         content_parts.push(context_header.trim_end().to_string());
 

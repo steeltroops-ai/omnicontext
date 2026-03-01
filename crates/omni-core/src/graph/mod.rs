@@ -19,8 +19,8 @@
     clippy::unnecessary_wraps
 )]
 
-use crate::types::{DependencyEdge, DependencyKind};
 use crate::error::OmniResult;
+use crate::types::{DependencyEdge, DependencyKind};
 
 use petgraph::algo::is_cyclic_directed;
 use petgraph::graph::{DiGraph, NodeIndex};
@@ -52,9 +52,10 @@ impl DependencyGraph {
 
     /// Add a symbol node to the graph. Returns the node index.
     pub fn add_symbol(&self, symbol_id: i64) -> OmniResult<()> {
-        let mut inner = self.inner.write().map_err(|e| {
-            crate::error::OmniError::Internal(format!("graph lock poisoned: {e}"))
-        })?;
+        let mut inner = self
+            .inner
+            .write()
+            .map_err(|e| crate::error::OmniError::Internal(format!("graph lock poisoned: {e}")))?;
 
         if !inner.symbol_to_node.contains_key(&symbol_id) {
             let idx = inner.graph.add_node(symbol_id);
@@ -66,9 +67,10 @@ impl DependencyGraph {
 
     /// Add a dependency edge between two symbols.
     pub fn add_edge(&self, edge: &DependencyEdge) -> OmniResult<()> {
-        let mut inner = self.inner.write().map_err(|e| {
-            crate::error::OmniError::Internal(format!("graph lock poisoned: {e}"))
-        })?;
+        let mut inner = self
+            .inner
+            .write()
+            .map_err(|e| crate::error::OmniError::Internal(format!("graph lock poisoned: {e}")))?;
 
         // Ensure source node exists
         if !inner.symbol_to_node.contains_key(&edge.source_id) {
@@ -91,9 +93,10 @@ impl DependencyGraph {
     /// Get all symbols that the given symbol depends on (upstream / outgoing edges).
     /// BFS traversal up to `depth` hops.
     pub fn upstream(&self, symbol_id: i64, depth: usize) -> OmniResult<Vec<i64>> {
-        let inner = self.inner.read().map_err(|e| {
-            crate::error::OmniError::Internal(format!("graph lock poisoned: {e}"))
-        })?;
+        let inner = self
+            .inner
+            .read()
+            .map_err(|e| crate::error::OmniError::Internal(format!("graph lock poisoned: {e}")))?;
 
         let Some(&node) = inner.symbol_to_node.get(&symbol_id) else {
             return Ok(Vec::new());
@@ -106,9 +109,10 @@ impl DependencyGraph {
     /// Get all symbols that depend on the given symbol (downstream / incoming edges).
     /// BFS traversal up to `depth` hops.
     pub fn downstream(&self, symbol_id: i64, depth: usize) -> OmniResult<Vec<i64>> {
-        let inner = self.inner.read().map_err(|e| {
-            crate::error::OmniError::Internal(format!("graph lock poisoned: {e}"))
-        })?;
+        let inner = self
+            .inner
+            .read()
+            .map_err(|e| crate::error::OmniError::Internal(format!("graph lock poisoned: {e}")))?;
 
         let Some(&node) = inner.symbol_to_node.get(&symbol_id) else {
             return Ok(Vec::new());
@@ -129,9 +133,10 @@ impl DependencyGraph {
     /// Find all strongly connected components with more than one node (cycles).
     /// Returns groups of symbol IDs that form circular dependencies.
     pub fn find_cycles(&self) -> OmniResult<Vec<Vec<i64>>> {
-        let inner = self.inner.read().map_err(|e| {
-            crate::error::OmniError::Internal(format!("graph lock poisoned: {e}"))
-        })?;
+        let inner = self
+            .inner
+            .read()
+            .map_err(|e| crate::error::OmniError::Internal(format!("graph lock poisoned: {e}")))?;
 
         let sccs = petgraph::algo::tarjan_scc(&inner.graph);
         let cycles: Vec<Vec<i64>> = sccs
@@ -146,9 +151,10 @@ impl DependencyGraph {
     /// Compute the shortest graph distance between two symbols.
     /// Returns None if they are not connected.
     pub fn distance(&self, from: i64, to: i64) -> OmniResult<Option<usize>> {
-        let inner = self.inner.read().map_err(|e| {
-            crate::error::OmniError::Internal(format!("graph lock poisoned: {e}"))
-        })?;
+        let inner = self
+            .inner
+            .read()
+            .map_err(|e| crate::error::OmniError::Internal(format!("graph lock poisoned: {e}")))?;
 
         let (Some(&from_node), Some(&to_node)) = (
             inner.symbol_to_node.get(&from),
@@ -213,7 +219,10 @@ impl DependencyGraph {
             .ok()
             .and_then(|inner| {
                 inner.symbol_to_node.get(&symbol_id).map(|&node| {
-                    inner.graph.neighbors_directed(node, Direction::Incoming).count()
+                    inner
+                        .graph
+                        .neighbors_directed(node, Direction::Incoming)
+                        .count()
                 })
             })
             .unwrap_or(0)
@@ -333,10 +342,15 @@ impl DependencyGraph {
 
                 // Try to resolve: first check local file symbols, then global
                 let target_id = if let Some(&local_id) = name_to_symbol.get(ref_name) {
-                    if local_id != source_id { Some(local_id) } else { None }
+                    if local_id != source_id {
+                        Some(local_id)
+                    } else {
+                        None
+                    }
                 } else {
                     // Global resolution via index
-                    index.search_symbols_by_name(ref_name, 1)
+                    index
+                        .search_symbols_by_name(ref_name, 1)
                         .ok()
                         .and_then(|v| v.into_iter().next())
                         .map(|s| s.id)
@@ -387,13 +401,13 @@ impl DependencyGraph {
             };
 
             for type_name in &elem.extends {
-                let target_id = name_to_symbol.get(type_name).copied()
-                    .or_else(|| {
-                        index.search_symbols_by_name(type_name, 1)
-                            .ok()
-                            .and_then(|v| v.into_iter().next())
-                            .map(|s| s.id)
-                    });
+                let target_id = name_to_symbol.get(type_name).copied().or_else(|| {
+                    index
+                        .search_symbols_by_name(type_name, 1)
+                        .ok()
+                        .and_then(|v| v.into_iter().next())
+                        .map(|s| s.id)
+                });
 
                 if let Some(target) = target_id {
                     let edge = DependencyEdge {
@@ -407,13 +421,13 @@ impl DependencyGraph {
             }
 
             for type_name in &elem.implements {
-                let target_id = name_to_symbol.get(type_name).copied()
-                    .or_else(|| {
-                        index.search_symbols_by_name(type_name, 1)
-                            .ok()
-                            .and_then(|v| v.into_iter().next())
-                            .map(|s| s.id)
-                    });
+                let target_id = name_to_symbol.get(type_name).copied().or_else(|| {
+                    index
+                        .search_symbols_by_name(type_name, 1)
+                        .ok()
+                        .and_then(|v| v.into_iter().next())
+                        .map(|s| s.id)
+                });
 
                 if let Some(target) = target_id {
                     let edge = DependencyEdge {
@@ -473,11 +487,13 @@ mod tests {
         let graph = DependencyGraph::new();
         graph.add_symbol(1).expect("add symbol 1");
         graph.add_symbol(2).expect("add symbol 2");
-        graph.add_edge(&DependencyEdge {
-            source_id: 1,
-            target_id: 2,
-            kind: DependencyKind::Calls,
-        }).expect("add edge");
+        graph
+            .add_edge(&DependencyEdge {
+                source_id: 1,
+                target_id: 2,
+                kind: DependencyKind::Calls,
+            })
+            .expect("add edge");
 
         let upstream = graph.upstream(1, 1).expect("query upstream");
         assert_eq!(upstream, vec![2]);
@@ -493,16 +509,20 @@ mod tests {
     #[test]
     fn test_downstream_dependencies() {
         let graph = DependencyGraph::new();
-        graph.add_edge(&DependencyEdge {
-            source_id: 1,
-            target_id: 2,
-            kind: DependencyKind::Calls,
-        }).expect("add edge 1->2");
-        graph.add_edge(&DependencyEdge {
-            source_id: 3,
-            target_id: 2,
-            kind: DependencyKind::Imports,
-        }).expect("add edge 3->2");
+        graph
+            .add_edge(&DependencyEdge {
+                source_id: 1,
+                target_id: 2,
+                kind: DependencyKind::Calls,
+            })
+            .expect("add edge 1->2");
+        graph
+            .add_edge(&DependencyEdge {
+                source_id: 3,
+                target_id: 2,
+                kind: DependencyKind::Imports,
+            })
+            .expect("add edge 3->2");
 
         let downstream = graph.downstream(2, 1).expect("downstream of 2");
         assert_eq!(downstream.len(), 2);
@@ -513,21 +533,27 @@ mod tests {
     #[test]
     fn test_cycle_detection() {
         let graph = DependencyGraph::new();
-        graph.add_edge(&DependencyEdge {
-            source_id: 1,
-            target_id: 2,
-            kind: DependencyKind::Imports,
-        }).expect("edge");
-        graph.add_edge(&DependencyEdge {
-            source_id: 2,
-            target_id: 3,
-            kind: DependencyKind::Imports,
-        }).expect("edge");
-        graph.add_edge(&DependencyEdge {
-            source_id: 3,
-            target_id: 1,
-            kind: DependencyKind::Imports,
-        }).expect("edge");
+        graph
+            .add_edge(&DependencyEdge {
+                source_id: 1,
+                target_id: 2,
+                kind: DependencyKind::Imports,
+            })
+            .expect("edge");
+        graph
+            .add_edge(&DependencyEdge {
+                source_id: 2,
+                target_id: 3,
+                kind: DependencyKind::Imports,
+            })
+            .expect("edge");
+        graph
+            .add_edge(&DependencyEdge {
+                source_id: 3,
+                target_id: 1,
+                kind: DependencyKind::Imports,
+            })
+            .expect("edge");
 
         assert!(graph.has_cycles());
         let cycles = graph.find_cycles().expect("find cycles");
@@ -538,16 +564,20 @@ mod tests {
     #[test]
     fn test_no_cycles() {
         let graph = DependencyGraph::new();
-        graph.add_edge(&DependencyEdge {
-            source_id: 1,
-            target_id: 2,
-            kind: DependencyKind::Imports,
-        }).expect("edge");
-        graph.add_edge(&DependencyEdge {
-            source_id: 2,
-            target_id: 3,
-            kind: DependencyKind::Imports,
-        }).expect("edge");
+        graph
+            .add_edge(&DependencyEdge {
+                source_id: 1,
+                target_id: 2,
+                kind: DependencyKind::Imports,
+            })
+            .expect("edge");
+        graph
+            .add_edge(&DependencyEdge {
+                source_id: 2,
+                target_id: 3,
+                kind: DependencyKind::Imports,
+            })
+            .expect("edge");
 
         assert!(!graph.has_cycles());
         let cycles = graph.find_cycles().expect("find cycles");
@@ -557,16 +587,20 @@ mod tests {
     #[test]
     fn test_distance() {
         let graph = DependencyGraph::new();
-        graph.add_edge(&DependencyEdge {
-            source_id: 1,
-            target_id: 2,
-            kind: DependencyKind::Calls,
-        }).expect("edge");
-        graph.add_edge(&DependencyEdge {
-            source_id: 2,
-            target_id: 3,
-            kind: DependencyKind::Calls,
-        }).expect("edge");
+        graph
+            .add_edge(&DependencyEdge {
+                source_id: 1,
+                target_id: 2,
+                kind: DependencyKind::Calls,
+            })
+            .expect("edge");
+        graph
+            .add_edge(&DependencyEdge {
+                source_id: 2,
+                target_id: 3,
+                kind: DependencyKind::Calls,
+            })
+            .expect("edge");
 
         assert_eq!(graph.distance(1, 3).expect("dist"), Some(2));
         assert_eq!(graph.distance(1, 2).expect("dist"), Some(1));

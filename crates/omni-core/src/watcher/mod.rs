@@ -154,13 +154,13 @@ impl FileWatcher {
         let (notify_tx, notify_rx) = std::sync::mpsc::channel();
 
         // Create debounced watcher
-        let mut debouncer = new_debouncer(
-            Duration::from_millis(debounce_ms),
-            notify_tx,
-        ).map_err(|e| OmniError::Internal(format!("failed to create file watcher: {e}")))?;
+        let mut debouncer = new_debouncer(Duration::from_millis(debounce_ms), notify_tx)
+            .map_err(|e| OmniError::Internal(format!("failed to create file watcher: {e}")))?;
 
         // Start watching
-        debouncer.watcher().watch(&root, RecursiveMode::Recursive)
+        debouncer
+            .watcher()
+            .watch(&root, RecursiveMode::Recursive)
             .map_err(|e| OmniError::Internal(format!("failed to watch directory: {e}")))?;
 
         // Process events in a blocking task
@@ -232,7 +232,6 @@ impl FileWatcher {
     fn is_excluded(&self, path: &Path) -> bool {
         is_excluded_static(path, &self.indexing_config.exclude_patterns)
     }
-
 }
 
 /// Check if a path matches any exclude pattern.
@@ -271,23 +270,25 @@ mod tests {
 
     #[test]
     fn test_is_excluded_directory() {
-        let excludes = vec![
-            ".git".into(),
-            "node_modules".into(),
-            "target".into(),
-        ];
+        let excludes = vec![".git".into(), "node_modules".into(), "target".into()];
         assert!(is_excluded_static(Path::new("/repo/.git/HEAD"), &excludes));
-        assert!(is_excluded_static(Path::new("/repo/node_modules/foo/bar.js"), &excludes));
-        assert!(is_excluded_static(Path::new("/repo/target/debug/bin"), &excludes));
-        assert!(!is_excluded_static(Path::new("/repo/src/main.rs"), &excludes));
+        assert!(is_excluded_static(
+            Path::new("/repo/node_modules/foo/bar.js"),
+            &excludes
+        ));
+        assert!(is_excluded_static(
+            Path::new("/repo/target/debug/bin"),
+            &excludes
+        ));
+        assert!(!is_excluded_static(
+            Path::new("/repo/src/main.rs"),
+            &excludes
+        ));
     }
 
     #[test]
     fn test_is_excluded_glob() {
-        let excludes = vec![
-            "*.lock".into(),
-            "*.min.js".into(),
-        ];
+        let excludes = vec!["*.lock".into(), "*.min.js".into()];
         assert!(is_excluded_static(Path::new("/repo/Cargo.lock"), &excludes));
         assert!(is_excluded_static(Path::new("/repo/app.min.js"), &excludes));
         assert!(!is_excluded_static(Path::new("/repo/app.js"), &excludes));
@@ -368,7 +369,11 @@ mod tests {
         // Create a file that's "too large"
         let mut config = IndexingConfig::default();
         config.max_file_size = 10; // 10 bytes max
-        std::fs::write(root.join("big.rs"), "fn large_function() { /* lots of code */ }").expect("write");
+        std::fs::write(
+            root.join("big.rs"),
+            "fn large_function() { /* lots of code */ }",
+        )
+        .expect("write");
         std::fs::write(root.join("small.rs"), "fn x(){}").expect("write");
 
         let watcher_config = WatcherConfig::default();

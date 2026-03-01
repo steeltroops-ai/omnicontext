@@ -40,14 +40,14 @@ impl CommitEngine {
     }
 
     /// Index recent git history from the repository.
-    pub fn index_history(
-        &self,
-        repo_path: &Path,
-        index: &MetadataIndex,
-    ) -> OmniResult<usize> {
+    pub fn index_history(&self, repo_path: &Path, index: &MetadataIndex) -> OmniResult<usize> {
         let output = std::process::Command::new("git")
-            .args(["log", "--format=%H%n%s%n%an%n%aI", "--name-only",
-                   &format!("-{}", self.max_commits)])
+            .args([
+                "log",
+                "--format=%H%n%s%n%an%n%aI",
+                "--name-only",
+                &format!("-{}", self.max_commits),
+            ])
             .current_dir(repo_path)
             .output()
             .map_err(|e| OmniError::Internal(format!("git log failed: {e}")))?;
@@ -155,24 +155,25 @@ impl CommitEngine {
              FROM commits
              WHERE files_changed LIKE ?1
              ORDER BY timestamp DESC
-             LIMIT ?2"
+             LIMIT ?2",
         )?;
 
         let pattern = format!("%\"{file_path}\"%");
-        let commits = stmt.query_map(rusqlite::params![pattern, limit], |row| {
-            let files_json: String = row.get(5)?;
-            let files: Vec<String> = serde_json::from_str(&files_json).unwrap_or_default();
-            Ok(CommitInfo {
-                hash: row.get(0)?,
-                message: row.get(1)?,
-                author: row.get(2)?,
-                timestamp: row.get(3)?,
-                summary: row.get(4)?,
-                files_changed: files,
-            })
-        })?
-        .filter_map(std::result::Result::ok)
-        .collect();
+        let commits = stmt
+            .query_map(rusqlite::params![pattern, limit], |row| {
+                let files_json: String = row.get(5)?;
+                let files: Vec<String> = serde_json::from_str(&files_json).unwrap_or_default();
+                Ok(CommitInfo {
+                    hash: row.get(0)?,
+                    message: row.get(1)?,
+                    author: row.get(2)?,
+                    timestamp: row.get(3)?,
+                    summary: row.get(4)?,
+                    files_changed: files,
+                })
+            })?
+            .filter_map(std::result::Result::ok)
+            .collect();
 
         Ok(commits)
     }
@@ -185,7 +186,8 @@ impl CommitEngine {
         limit: usize,
     ) -> OmniResult<Vec<(String, usize)>> {
         let commits = Self::commits_for_file(index, file_path, 100)?;
-        let mut author_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut author_counts: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
 
         for commit in &commits {
             *author_counts.entry(commit.author.clone()).or_default() += 1;

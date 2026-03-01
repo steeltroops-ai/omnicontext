@@ -117,11 +117,10 @@ impl Config {{
     .unwrap();
 
     // Create the engine on a blocking thread to avoid nested runtime issues
-    let engine = tokio::task::spawn_blocking(move || {
-        Engine::new(&dir_path).expect("create engine")
-    })
-    .await
-    .expect("spawn_blocking join");
+    let engine =
+        tokio::task::spawn_blocking(move || Engine::new(&dir_path).expect("create engine"))
+            .await
+            .expect("spawn_blocking join");
 
     (engine, dir)
 }
@@ -153,7 +152,10 @@ async fn test_search_finds_relevant_code() {
     let (engine, _dir) = create_indexed_engine().await;
 
     let results = engine.search("authentication", 5).expect("search");
-    assert!(!results.is_empty(), "should find results for 'authentication'");
+    assert!(
+        !results.is_empty(),
+        "should find results for 'authentication'"
+    );
 
     // The auth.py file should be in the results
     let has_auth_file = results

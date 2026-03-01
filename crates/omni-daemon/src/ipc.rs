@@ -1,4 +1,4 @@
-//! IPC transport layer for the OmniContext daemon.
+//! IPC transport layer for the `OmniContext` daemon.
 //!
 //! Uses named pipes on Windows and Unix domain sockets on Linux/macOS.
 //! Communication is newline-delimited JSON-RPC 2.0 over the pipe.
@@ -20,7 +20,7 @@ use crate::protocol::{self, error_codes, Response};
 
 /// Derive a deterministic pipe/socket name from the repository path.
 pub fn default_pipe_name(repo_path: &Path) -> String {
-    use sha2::{Sha256, Digest};
+    use sha2::{Digest, Sha256};
     let normalized = repo_path
         .to_string_lossy()
         .replace(r"\\?\", "")
@@ -31,14 +31,13 @@ pub fn default_pipe_name(repo_path: &Path) -> String {
 
     #[cfg(windows)]
     {
-        format!(r"\\.\pipe\omnicontext-{}", hash)
+        format!(r"\\.\pipe\omnicontext-{hash}")
     }
 
     #[cfg(not(windows))]
     {
-        let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
-            .unwrap_or_else(|_| "/tmp".to_string());
-        format!("{}/omnicontext-{}.sock", runtime_dir, hash)
+        let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
+        format!("{runtime_dir}/omnicontext-{hash}.sock")
     }
 }
 
@@ -62,10 +61,7 @@ pub async fn serve(engine: Engine, pipe_name: &str) -> anyhow::Result<()> {
 // ---------------------------------------------------------------------------
 
 #[cfg(windows)]
-async fn serve_named_pipe(
-    engine: Arc<Mutex<Engine>>,
-    pipe_name: &str,
-) -> anyhow::Result<()> {
+async fn serve_named_pipe(engine: Arc<Mutex<Engine>>, pipe_name: &str) -> anyhow::Result<()> {
     use tokio::net::windows::named_pipe::ServerOptions;
 
     tracing::info!(pipe = %pipe_name, "listening on named pipe");
@@ -97,10 +93,7 @@ async fn serve_named_pipe(
 // ---------------------------------------------------------------------------
 
 #[cfg(not(windows))]
-async fn serve_unix_socket(
-    engine: Arc<Mutex<Engine>>,
-    socket_path: &str,
-) -> anyhow::Result<()> {
+async fn serve_unix_socket(engine: Arc<Mutex<Engine>>, socket_path: &str) -> anyhow::Result<()> {
     use tokio::net::UnixListener;
 
     // Remove stale socket file
@@ -168,10 +161,7 @@ where
 }
 
 /// Dispatch a JSON-RPC request to the appropriate handler.
-async fn dispatch(
-    engine: Arc<Mutex<Engine>>,
-    req: protocol::Request,
-) -> Response {
+async fn dispatch(engine: Arc<Mutex<Engine>>, req: protocol::Request) -> Response {
     let start = std::time::Instant::now();
 
     let result = match req.method.as_str() {
@@ -224,7 +214,8 @@ async fn dispatch(
         )),
     };
 
-    let elapsed_ms = start.elapsed().as_millis() as u64;
+    #[allow(clippy::cast_possible_truncation)]
+    let elapsed_ms = start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
     tracing::debug!(
         method = %req.method,
         elapsed_ms = elapsed_ms,
@@ -238,10 +229,12 @@ async fn dispatch(
 }
 
 /// Parse params from a request, returning an error response if invalid.
-fn parse_params<T: serde::de::DeserializeOwned>(
-    req: &protocol::Request,
-) -> Result<T, Response> {
-    let params = req.params.clone().unwrap_or(serde_json::Value::Object(Default::default()));
+#[allow(clippy::result_large_err)]
+fn parse_params<T: serde::de::DeserializeOwned>(req: &protocol::Request) -> Result<T, Response> {
+    let params = req
+        .params
+        .clone()
+        .unwrap_or(serde_json::Value::Object(serde_json::Map::default()));
     serde_json::from_value(params).map_err(|e| {
         Response::error(
             req.id,
@@ -305,7 +298,12 @@ async fn handle_context_window(
                 "rendered": ctx.render(),
             })
         })
-        .map_err(|e| (error_codes::ENGINE_ERROR, format!("context_window failed: {e}")))
+        .map_err(|e| {
+            (
+                error_codes::ENGINE_ERROR,
+                format!("context_window failed: {e}"),
+            )
+        })
 }
 
 async fn handle_preflight(
@@ -313,12 +311,19 @@ async fn handle_preflight(
     params: protocol::PreflightParams,
     start: std::time::Instant,
 ) -> Result<serde_json::Value, (i32, String)> {
+    use std::fmt::Write;
+    
     let eng = engine.lock().await;
 
     // Build the context window from the user's prompt
     let ctx = eng
         .search_context_window(&params.prompt, 20, Some(params.token_budget))
-        .map_err(|e| (error_codes::ENGINE_ERROR, format!("preflight search failed: {e}")))?;
+        .map_err(|e| {
+            (
+                error_codes::ENGINE_ERROR,
+                format!("preflight search failed: {e}"),
+            )
+        })?;
 
     // Get engine status for architecture overview
     let status = eng
@@ -337,16 +342,18 @@ async fn handle_preflight(
     );
 
     // Architecture overview
-    system_context.push_str(&format!(
+    write!(
+        system_context,
         "## Repository\n- Files: {}\n- Symbols: {}\n- Intent: {}\n\n",
         status.files_indexed, status.symbols_indexed, intent_label,
-    ));
+    )
+    .ok();
 
     // Active file context
     if let Some(ref active) = params.active_file {
-        system_context.push_str(&format!("## Active File\n{}\n", active));
+        write!(system_context, "## Active File\n{active}\n").ok();
         if let Some(line) = params.cursor_line {
-            system_context.push_str(&format!("Cursor at line: {}\n", line));
+            writeln!(system_context, "Cursor at line: {line}").ok();
         }
         system_context.push('\n');
     }
@@ -357,7 +364,8 @@ async fn handle_preflight(
 
     system_context.push_str("\n</context_engine>\n");
 
-    let elapsed_ms = start.elapsed().as_millis() as u64;
+    #[allow(clippy::cast_possible_truncation)]
+    let elapsed_ms = start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
 
     let response = protocol::PreflightResponse {
         system_context,
@@ -367,8 +375,12 @@ async fn handle_preflight(
         elapsed_ms,
     };
 
-    serde_json::to_value(response)
-        .map_err(|e| (error_codes::INTERNAL_ERROR, format!("serialization failed: {e}")))
+    serde_json::to_value(response).map_err(|e| {
+        (
+            error_codes::INTERNAL_ERROR,
+            format!("serialization failed: {e}"),
+        )
+    })
 }
 
 async fn handle_module_map(
@@ -379,9 +391,12 @@ async fn handle_module_map(
     let index = eng.metadata_index();
 
     // Build module map from indexed files
-    let files = index
-        .get_all_files()
-        .map_err(|e| (error_codes::ENGINE_ERROR, format!("failed to get files: {e}")))?;
+    let files = index.get_all_files().map_err(|e| {
+        (
+            error_codes::ENGINE_ERROR,
+            format!("failed to get files: {e}"),
+        )
+    })?;
 
     let mut modules: std::collections::BTreeMap<String, Vec<serde_json::Value>> =
         std::collections::BTreeMap::new();
@@ -432,12 +447,15 @@ async fn handle_index(engine: Arc<Mutex<Engine>>) -> Result<serde_json::Value, (
     eng.run_index()
         .await
         .map(|result| {
+            #[allow(clippy::cast_possible_truncation)]
+            let elapsed_ms = start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+            
             serde_json::json!({
                 "files_processed": result.files_processed,
                 "chunks_created": result.chunks_created,
                 "symbols_extracted": result.symbols_extracted,
                 "embeddings_generated": result.embeddings_generated,
-                "elapsed_ms": start.elapsed().as_millis() as u64,
+                "elapsed_ms": elapsed_ms,
             })
         })
         .map_err(|e| (error_codes::ENGINE_ERROR, format!("indexing failed: {e}")))

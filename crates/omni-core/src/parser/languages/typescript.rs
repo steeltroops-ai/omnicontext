@@ -64,16 +64,12 @@ pub(crate) fn walk_ts_node(
     for child in node.children(&mut cursor) {
         match child.kind() {
             "function_declaration" => {
-                if let Some(elem) =
-                    extract_function_decl(child, source, module_name, scope_path)
-                {
+                if let Some(elem) = extract_function_decl(child, source, module_name, scope_path) {
                     elements.push(elem);
                 }
             }
             "class_declaration" => {
-                if let Some(elem) =
-                    extract_class_decl(child, source, module_name, scope_path)
-                {
+                if let Some(elem) = extract_class_decl(child, source, module_name, scope_path) {
                     let mut inner_scope = scope_path.to_vec();
                     inner_scope.push(elem.name.clone());
                     if let Some(body) = child.child_by_field_name("body") {
@@ -83,16 +79,12 @@ pub(crate) fn walk_ts_node(
                 }
             }
             "interface_declaration" => {
-                if let Some(elem) =
-                    extract_interface(child, source, module_name, scope_path)
-                {
+                if let Some(elem) = extract_interface(child, source, module_name, scope_path) {
                     elements.push(elem);
                 }
             }
             "type_alias_declaration" => {
-                if let Some(elem) =
-                    extract_type_alias(child, source, module_name, scope_path)
-                {
+                if let Some(elem) = extract_type_alias(child, source, module_name, scope_path) {
                     elements.push(elem);
                 }
             }
@@ -121,13 +113,7 @@ pub(crate) fn walk_ts_node(
                                 let mut inner_scope = scope_path.to_vec();
                                 inner_scope.push(elem.name.clone());
                                 if let Some(body) = inner.child_by_field_name("body") {
-                                    walk_ts_node(
-                                        body,
-                                        source,
-                                        module_name,
-                                        &inner_scope,
-                                        elements,
-                                    );
+                                    walk_ts_node(body, source, module_name, &inner_scope, elements);
                                 }
                                 elements.push(elem);
                             }
@@ -174,9 +160,7 @@ pub(crate) fn walk_ts_node(
                 );
             }
             "method_definition" => {
-                if let Some(elem) =
-                    extract_method(child, source, module_name, scope_path)
-                {
+                if let Some(elem) = extract_method(child, source, module_name, scope_path) {
                     elements.push(elem);
                 }
             }
@@ -220,8 +204,8 @@ pub(crate) fn extract_function_decl(
         content: node_text(node, source).to_string(),
         doc_comment,
         references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+        extends: Vec::new(),
+        implements: Vec::new(),
     })
 }
 
@@ -266,8 +250,8 @@ pub(crate) fn extract_class_decl(
         content: node_text(node, source).to_string(),
         doc_comment,
         references,
-                extends: Vec::new(),
-                implements: Vec::new(),
+        extends: Vec::new(),
+        implements: Vec::new(),
     })
 }
 
@@ -294,8 +278,8 @@ fn extract_interface(
         content: node_text(node, source).to_string(),
         doc_comment,
         references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+        extends: Vec::new(),
+        implements: Vec::new(),
     })
 }
 
@@ -321,8 +305,8 @@ fn extract_type_alias(
         content: node_text(node, source).to_string(),
         doc_comment: None,
         references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+        extends: Vec::new(),
+        implements: Vec::new(),
     })
 }
 
@@ -349,8 +333,8 @@ pub(crate) fn extract_method(
         content: node_text(node, source).to_string(),
         doc_comment,
         references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+        extends: Vec::new(),
+        implements: Vec::new(),
     })
 }
 
@@ -478,11 +462,7 @@ pub(crate) fn collect_ts_imports(
 }
 
 /// Collect named imports from an import clause node.
-fn collect_import_names(
-    node: tree_sitter::Node<'_>,
-    source: &[u8],
-    names: &mut Vec<String>,
-) {
+fn collect_import_names(node: tree_sitter::Node<'_>, source: &[u8], names: &mut Vec<String>) {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         match child.kind() {
@@ -524,11 +504,7 @@ pub(crate) fn node_text<'a>(node: tree_sitter::Node<'_>, source: &'a [u8]) -> &'
 }
 
 /// Build a symbol path with `.` separator (JS/TS convention).
-pub(crate) fn build_symbol_path(
-    module_name: &str,
-    scope_path: &[String],
-    name: &str,
-) -> String {
+pub(crate) fn build_symbol_path(module_name: &str, scope_path: &[String], name: &str) -> String {
     let mut parts = vec![module_name.to_string()];
     parts.extend_from_slice(scope_path);
     parts.push(name.to_string());
@@ -562,7 +538,10 @@ fn extract_jsdoc(node: tree_sitter::Node<'_>, source: &[u8]) -> Option<String> {
         .lines()
         .map(|line| {
             let trimmed = line.trim();
-            trimmed.strip_prefix("* ").or_else(|| trimmed.strip_prefix('*')).unwrap_or(trimmed)
+            trimmed
+                .strip_prefix("* ")
+                .or_else(|| trimmed.strip_prefix('*'))
+                .unwrap_or(trimmed)
         })
         .collect();
 
@@ -581,8 +560,12 @@ mod tests {
     use crate::types::Language;
 
     fn parse_ts(source: &str) -> Vec<StructuralElement> {
-        parse_file(Path::new("test.ts"), source.as_bytes(), Language::TypeScript)
-            .expect("parse should succeed")
+        parse_file(
+            Path::new("test.ts"),
+            source.as_bytes(),
+            Language::TypeScript,
+        )
+        .expect("parse should succeed")
     }
 
     #[test]

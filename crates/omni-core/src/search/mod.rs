@@ -31,11 +31,11 @@
 )]
 
 use crate::embedder::Embedder;
-use crate::index::MetadataIndex;
-use crate::types::{Chunk, SearchResult, ScoreBreakdown, ContextWindow, ContextEntry};
-use crate::reranker::Reranker;
-use crate::vector::VectorIndex;
 use crate::error::OmniResult;
+use crate::index::MetadataIndex;
+use crate::reranker::Reranker;
+use crate::types::{Chunk, ContextEntry, ContextWindow, ScoreBreakdown, SearchResult};
+use crate::vector::VectorIndex;
 
 /// Hybrid search engine that fuses multiple retrieval signals.
 pub struct SearchEngine {
@@ -99,7 +99,9 @@ impl SearchEngine {
                 tracing::warn!(error = %e, "keyword search failed");
                 // Fallback: try original query if expansion failed
                 if expanded_query != query {
-                    index.keyword_search(query, self.retrieval_limit).unwrap_or_default()
+                    index
+                        .keyword_search(query, self.retrieval_limit)
+                        .unwrap_or_default()
                 } else {
                     Vec::new()
                 }
@@ -109,15 +111,13 @@ impl SearchEngine {
         // ---- Signal 2: Semantic (Vector) ----
         let semantic_results = if embedder.is_available() && query_type != QueryType::Symbol {
             match embedder.embed_single(query) {
-                Ok(query_vec) => {
-                    match vector_index.search(&query_vec, self.retrieval_limit) {
-                        Ok(results) => results,
-                        Err(e) => {
-                            tracing::warn!(error = %e, "vector search failed");
-                            Vec::new()
-                        }
+                Ok(query_vec) => match vector_index.search(&query_vec, self.retrieval_limit) {
+                    Ok(results) => results,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "vector search failed");
+                        Vec::new()
                     }
-                }
+                },
                 Err(e) => {
                     tracing::warn!(error = %e, "query embedding failed");
                     Vec::new()
@@ -130,7 +130,8 @@ impl SearchEngine {
         // ---- Signal 3: Symbol lookup ----
         let symbol_results = if query_type == QueryType::Symbol || query_type == QueryType::Mixed {
             match index.search_symbols_by_name(query, self.retrieval_limit) {
-                Ok(symbols) => symbols.into_iter()
+                Ok(symbols) => symbols
+                    .into_iter()
                     .filter_map(|s| s.chunk_id)
                     .collect::<Vec<_>>(),
                 Err(e) => {
@@ -143,11 +144,7 @@ impl SearchEngine {
         };
 
         // ---- RRF Fusion ----
-        let mut fused = self.fuse_results(
-            &keyword_results,
-            &semantic_results,
-            &symbol_results,
-        );
+        let mut fused = self.fuse_results(&keyword_results, &semantic_results, &symbol_results);
 
         if let Some(reranker) = reranker {
             if reranker.is_available() && !fused.is_empty() {
@@ -195,7 +192,8 @@ impl SearchEngine {
                         for item in &mut fused {
                             if let Some(&norm) = score_map.get(&item.chunk_id) {
                                 item.breakdown.reranker_score = Some(norm);
-                                item.final_score = item.final_score * rrf_weight + norm * reranker_weight;
+                                item.final_score =
+                                    item.final_score * rrf_weight + norm * reranker_weight;
                             } else {
                                 item.final_score *= unranked_demotion;
                             }
@@ -282,7 +280,8 @@ impl SearchEngine {
             total_tokens += chunk.token_count;
 
             // Get file path for the result
-            let file_path = self.get_file_path_for_chunk(index, &chunk)
+            let file_path = self
+                .get_file_path_for_chunk(index, &chunk)
                 .unwrap_or_default();
 
             let mut breakdown = scored.breakdown.clone();
@@ -334,8 +333,8 @@ impl SearchEngine {
     fn fuse_results(
         &self,
         keyword_results: &[(i64, f64)],  // (chunk_id, bm25_score)
-        semantic_results: &[(u64, f32)],  // (vector_id, similarity)
-        symbol_results: &[i64],           // chunk_ids from symbol match
+        semantic_results: &[(u64, f32)], // (vector_id, similarity)
+        symbol_results: &[i64],          // chunk_ids from symbol match
     ) -> Vec<ScoredChunk> {
         use std::collections::HashMap;
 
@@ -400,8 +399,7 @@ impl SearchEngine {
     /// Apply structural and graph boosts once we have the actual chunk data.
     /// Called during result assembly when chunks are fetched from the DB.
     fn apply_structural_boost(score: f64, chunk: &Chunk, graph_boost: f64) -> (f64, f64) {
-        let struct_weight = chunk.kind.default_weight()
-            * chunk.visibility.weight_multiplier();
+        let struct_weight = chunk.kind.default_weight() * chunk.visibility.weight_multiplier();
         let boosted = score * (0.4 + 0.6 * struct_weight) * graph_boost;
         (boosted, struct_weight)
     }
@@ -454,7 +452,8 @@ impl SearchEngine {
                     vector_id: row.get::<_, Option<i64>>(11)?.map(|v| v as u64),
                 })
             },
-        ).ok()
+        )
+        .ok()
     }
 
     /// Get the file path for a chunk's parent file.
@@ -471,7 +470,8 @@ impl SearchEngine {
                 let path: String = row.get(0)?;
                 Ok(std::path::PathBuf::from(path))
             },
-        ).ok()
+        )
+        .ok()
     }
 
     /// Compute RRF score from rank positions.
@@ -499,8 +499,8 @@ impl SearchEngine {
         dep_graph: Option<&crate::graph::DependencyGraph>,
         token_budget: u32,
     ) -> ContextWindow {
-        use std::collections::{HashMap, HashSet, BinaryHeap};
         use std::cmp::Ordering;
+        use std::collections::{BinaryHeap, HashMap, HashSet};
 
         // Priority queue entry
         #[derive(Debug)]
@@ -512,7 +512,9 @@ impl SearchEngine {
         }
 
         impl PartialEq for ScoredEntry {
-            fn eq(&self, other: &Self) -> bool { self.score == other.score }
+            fn eq(&self, other: &Self) -> bool {
+                self.score == other.score
+            }
         }
         impl Eq for ScoredEntry {}
         impl PartialOrd for ScoredEntry {
@@ -532,7 +534,8 @@ impl SearchEngine {
         // Step 1: Group search results by file
         let mut file_groups: HashMap<i64, Vec<&SearchResult>> = HashMap::new();
         for result in search_results {
-            file_groups.entry(result.chunk.file_id)
+            file_groups
+                .entry(result.chunk.file_id)
                 .or_default()
                 .push(result);
         }
@@ -543,7 +546,8 @@ impl SearchEngine {
                 // This file is highly relevant -- include all its chunks
                 if let Ok(all_chunks) = index.get_chunks_for_file(file_id) {
                     let file_path = results[0].file_path.clone();
-                    let avg_score = results.iter().map(|r| r.score).sum::<f64>() / results.len() as f64;
+                    let avg_score =
+                        results.iter().map(|r| r.score).sum::<f64>() / results.len() as f64;
                     for chunk in all_chunks {
                         if !seen_chunk_ids.contains(&chunk.id) {
                             seen_chunk_ids.insert(chunk.id);
@@ -586,7 +590,8 @@ impl SearchEngine {
                                 if let Some(chunk_id) = dep_sym.chunk_id {
                                     if !seen_chunk_ids.contains(&chunk_id) {
                                         if let Some(chunk) = self.get_chunk_by_id(index, chunk_id) {
-                                            let fp = self.get_file_path_for_chunk(index, &chunk)
+                                            let fp = self
+                                                .get_file_path_for_chunk(index, &chunk)
                                                 .unwrap_or_default();
                                             seen_chunk_ids.insert(chunk_id);
                                             heap.push(ScoredEntry {
@@ -608,7 +613,8 @@ impl SearchEngine {
                                 if let Some(chunk_id) = dep_sym.chunk_id {
                                     if !seen_chunk_ids.contains(&chunk_id) {
                                         if let Some(chunk) = self.get_chunk_by_id(index, chunk_id) {
-                                            let fp = self.get_file_path_for_chunk(index, &chunk)
+                                            let fp = self
+                                                .get_file_path_for_chunk(index, &chunk)
                                                 .unwrap_or_default();
                                             seen_chunk_ids.insert(chunk_id);
                                             heap.push(ScoredEntry {
@@ -732,18 +738,15 @@ struct ScoredChunk {
 
 /// Stop words to strip from natural language queries for FTS5.
 const STOP_WORDS: &[&str] = &[
-    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
-    "have", "has", "had", "do", "does", "did", "will", "would", "shall",
-    "should", "may", "might", "can", "could", "must", "to", "of", "in",
-    "for", "on", "with", "at", "by", "from", "as", "into", "through",
-    "during", "before", "after", "above", "below", "and", "but", "or",
-    "not", "no", "if", "then", "than", "that", "this", "these", "those",
-    "it", "its", "i", "me", "my", "we", "our", "you", "your", "he",
-    "she", "they", "them", "their", "what", "which", "who", "whom",
-    "how", "when", "where", "why", "all", "each", "every", "both",
-    "few", "more", "most", "other", "some", "such", "only", "own",
-    "same", "so", "very", "just", "about", "there", "here",
-    "find", "show", "get", "list", "explain", "describe",
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being", "have", "has", "had",
+    "do", "does", "did", "will", "would", "shall", "should", "may", "might", "can", "could",
+    "must", "to", "of", "in", "for", "on", "with", "at", "by", "from", "as", "into", "through",
+    "during", "before", "after", "above", "below", "and", "but", "or", "not", "no", "if", "then",
+    "than", "that", "this", "these", "those", "it", "its", "i", "me", "my", "we", "our", "you",
+    "your", "he", "she", "they", "them", "their", "what", "which", "who", "whom", "how", "when",
+    "where", "why", "all", "each", "every", "both", "few", "more", "most", "other", "some", "such",
+    "only", "own", "same", "so", "very", "just", "about", "there", "here", "find", "show", "get",
+    "list", "explain", "describe",
 ];
 
 /// Expand a natural language query into better FTS5 tokens.
@@ -898,10 +901,22 @@ mod tests {
 
     #[test]
     fn test_analyze_query_natural_language() {
-        assert_eq!(analyze_query("how does authentication work?"), QueryType::NaturalLanguage);
-        assert_eq!(analyze_query("what is the user service"), QueryType::NaturalLanguage);
-        assert_eq!(analyze_query("find all database queries"), QueryType::NaturalLanguage);
-        assert_eq!(analyze_query("where is session management implemented"), QueryType::NaturalLanguage);
+        assert_eq!(
+            analyze_query("how does authentication work?"),
+            QueryType::NaturalLanguage
+        );
+        assert_eq!(
+            analyze_query("what is the user service"),
+            QueryType::NaturalLanguage
+        );
+        assert_eq!(
+            analyze_query("find all database queries"),
+            QueryType::NaturalLanguage
+        );
+        assert_eq!(
+            analyze_query("where is session management implemented"),
+            QueryType::NaturalLanguage
+        );
     }
 
     #[test]

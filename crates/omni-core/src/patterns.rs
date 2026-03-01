@@ -193,11 +193,8 @@ impl PatternEngine {
             |row| row.get(0),
         )?;
 
-        let total_symbols: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM symbols",
-            [],
-            |row| row.get(0),
-        )?;
+        let total_symbols: i64 =
+            conn.query_row("SELECT COUNT(*) FROM symbols", [], |row| row.get(0))?;
 
         if total_symbols > 0 {
             let ratio = snake_case as f64 / total_symbols as f64;
@@ -277,7 +274,9 @@ impl PatternEngine {
                 id: "documentation_coverage".into(),
                 description: format!(
                     "{:.0}% of functions/classes have doc comments ({}/{})",
-                    ratio * 100.0, documented, total
+                    ratio * 100.0,
+                    documented,
+                    total
                 ),
                 category: PatternCategory::Documentation,
                 file_count: documented as usize,

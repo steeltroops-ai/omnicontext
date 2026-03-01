@@ -61,9 +61,7 @@ impl LanguageAnalyzer for GoAnalyzer {
                             self.collect_import_specs(spec, source, &mut imports);
                         } else if spec.kind() == "interpreted_string_literal" {
                             // single import: `import "fmt"`
-                            let path = node_text(spec, source)
-                                .trim_matches('"')
-                                .to_string();
+                            let path = node_text(spec, source).trim_matches('"').to_string();
                             if !path.is_empty() {
                                 imports.push(ImportStatement {
                                     import_path: path,
@@ -104,8 +102,7 @@ impl GoAnalyzer {
                     }
                 }
                 "method_declaration" => {
-                    if let Some(elem) =
-                        self.extract_method(child, source, module_name, scope_path)
+                    if let Some(elem) = self.extract_method(child, source, module_name, scope_path)
                     {
                         elements.push(elem);
                     }
@@ -167,8 +164,8 @@ impl GoAnalyzer {
             content: node_text(node, source).to_string(),
             doc_comment,
             references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+            extends: Vec::new(),
+            implements: Vec::new(),
         })
     }
 
@@ -216,8 +213,8 @@ impl GoAnalyzer {
             content: node_text(node, source).to_string(),
             doc_comment,
             references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+            extends: Vec::new(),
+            implements: Vec::new(),
         })
     }
 
@@ -261,8 +258,8 @@ impl GoAnalyzer {
                     content: node_text(node, source).to_string(),
                     doc_comment,
                     references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+                    extends: Vec::new(),
+                    implements: Vec::new(),
                 });
             }
         }
@@ -297,8 +294,8 @@ impl GoAnalyzer {
                     content: node_text(child, source).to_string(),
                     doc_comment: None,
                     references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+                    extends: Vec::new(),
+                    implements: Vec::new(),
                 });
             }
         }
@@ -316,11 +313,10 @@ impl GoAnalyzer {
                 let line = child.start_position().row as u32 + 1;
                 // Get the path (string literal)
                 if let Some(path_node) = child.child_by_field_name("path") {
-                    let path = node_text(path_node, source)
-                        .trim_matches('"')
-                        .to_string();
+                    let path = node_text(path_node, source).trim_matches('"').to_string();
                     // Get optional alias
-                    let alias = child.child_by_field_name("name")
+                    let alias = child
+                        .child_by_field_name("name")
                         .map(|n| node_text(n, source).to_string());
                     let names = alias.into_iter().collect();
                     if !path.is_empty() {
@@ -334,9 +330,7 @@ impl GoAnalyzer {
                 }
             } else if child.kind() == "interpreted_string_literal" {
                 let line = child.start_position().row as u32 + 1;
-                let path = node_text(child, source)
-                    .trim_matches('"')
-                    .to_string();
+                let path = node_text(child, source).trim_matches('"').to_string();
                 if !path.is_empty() {
                     imports.push(ImportStatement {
                         import_path: path,
@@ -418,7 +412,8 @@ mod tests {
 
     #[test]
     fn test_go_function() {
-        let src = "package main\n\nfunc hello(name string) string {\n\treturn \"Hello, \" + name\n}\n";
+        let src =
+            "package main\n\nfunc hello(name string) string {\n\treturn \"Hello, \" + name\n}\n";
         let elements = parse_go(src);
         let func = elements.iter().find(|e| e.name == "hello");
         assert!(func.is_some());
@@ -447,7 +442,8 @@ mod tests {
 
     #[test]
     fn test_go_interface() {
-        let src = "package main\n\ntype Reader interface {\n\tRead(p []byte) (n int, err error)\n}\n";
+        let src =
+            "package main\n\ntype Reader interface {\n\tRead(p []byte) (n int, err error)\n}\n";
         let elements = parse_go(src);
         let i = elements.iter().find(|e| e.name == "Reader");
         assert!(i.is_some());
@@ -460,11 +456,7 @@ mod tests {
         let elements = parse_go(src);
         let m = elements.iter().find(|e| e.name == "Validate");
         assert!(m.is_some());
-        assert!(
-            m.expect("Validate")
-                .symbol_path
-                .contains("Config.Validate")
-        );
+        assert!(m.expect("Validate").symbol_path.contains("Config.Validate"));
     }
 
     #[test]

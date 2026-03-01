@@ -51,8 +51,10 @@ pub struct ModelSpec {
 pub const DEFAULT_MODEL: ModelSpec = ModelSpec {
     name: "jina-embeddings-v2-base-code",
     hf_repo: "jinaai/jina-embeddings-v2-base-code",
-    model_url: "https://huggingface.co/jinaai/jina-embeddings-v2-base-code/resolve/main/onnx/model.onnx",
-    tokenizer_url: "https://huggingface.co/jinaai/jina-embeddings-v2-base-code/resolve/main/tokenizer.json",
+    model_url:
+        "https://huggingface.co/jinaai/jina-embeddings-v2-base-code/resolve/main/onnx/model.onnx",
+    tokenizer_url:
+        "https://huggingface.co/jinaai/jina-embeddings-v2-base-code/resolve/main/tokenizer.json",
     dimensions: 768,
     max_seq_length: 8192,
     approx_size_bytes: 550_000_000, // ~550MB
@@ -142,7 +144,11 @@ pub fn ensure_model(spec: &ModelSpec) -> OmniResult<(PathBuf, PathBuf)> {
     );
 
     // Download model file
-    if !model.exists() || std::fs::metadata(&model).map(|m| m.len() < 1_000_000).unwrap_or(true) {
+    if !model.exists()
+        || std::fs::metadata(&model)
+            .map(|m| m.len() < 1_000_000)
+            .unwrap_or(true)
+    {
         download_file(
             spec.model_url,
             &model,
@@ -214,10 +220,7 @@ fn download_file(
         )));
     }
 
-    let total_size = response
-        .content_length()
-        .or(expected_size)
-        .unwrap_or(0);
+    let total_size = response.content_length().or(expected_size).unwrap_or(0);
 
     // Create progress bar
     let pb = if total_size > 0 {
@@ -241,9 +244,9 @@ fn download_file(
     let mut downloaded: u64 = 0;
 
     // Read in chunks
-    let bytes = response.bytes().map_err(|e| {
-        OmniError::Internal(format!("download stream error: {e}"))
-    })?;
+    let bytes = response
+        .bytes()
+        .map_err(|e| OmniError::Internal(format!("download stream error: {e}")))?;
 
     let chunk_size = 8192;
     for chunk in bytes.chunks(chunk_size) {

@@ -26,7 +26,8 @@ impl LanguageAnalyzer for CSharpAnalyzer {
         file_path: &Path,
     ) -> Vec<StructuralElement> {
         let mut elements = Vec::new();
-        let module_name_str = crate::parser::build_module_name_from_path(file_path).replace("/", ".");
+        let module_name_str =
+            crate::parser::build_module_name_from_path(file_path).replace("/", ".");
         let module_name = &module_name_str;
 
         let root = tree.root_node();
@@ -83,16 +84,44 @@ impl CSharpAnalyzer {
         for child in node.children(&mut cursor) {
             match child.kind() {
                 "class_declaration" | "record_declaration" => {
-                    self.extract_type_decl(child, source, module_name, scope_path, ChunkKind::Class, elements);
+                    self.extract_type_decl(
+                        child,
+                        source,
+                        module_name,
+                        scope_path,
+                        ChunkKind::Class,
+                        elements,
+                    );
                 }
                 "interface_declaration" => {
-                    self.extract_type_decl(child, source, module_name, scope_path, ChunkKind::Trait, elements);
+                    self.extract_type_decl(
+                        child,
+                        source,
+                        module_name,
+                        scope_path,
+                        ChunkKind::Trait,
+                        elements,
+                    );
                 }
                 "struct_declaration" => {
-                    self.extract_type_decl(child, source, module_name, scope_path, ChunkKind::Class, elements);
+                    self.extract_type_decl(
+                        child,
+                        source,
+                        module_name,
+                        scope_path,
+                        ChunkKind::Class,
+                        elements,
+                    );
                 }
                 "enum_declaration" => {
-                    self.extract_type_decl(child, source, module_name, scope_path, ChunkKind::TypeDef, elements);
+                    self.extract_type_decl(
+                        child,
+                        source,
+                        module_name,
+                        scope_path,
+                        ChunkKind::TypeDef,
+                        elements,
+                    );
                 }
                 "namespace_declaration" => {
                     let name = child
@@ -111,8 +140,8 @@ impl CSharpAnalyzer {
                             content: node_text(child, source).to_string(),
                             doc_comment: None,
                             references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+                            extends: Vec::new(),
+                            implements: Vec::new(),
                         });
 
                         if let Some(body) = child.child_by_field_name("body") {
@@ -138,8 +167,8 @@ impl CSharpAnalyzer {
                             content: node_text(child, source).to_string(),
                             doc_comment: doc,
                             references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+                            extends: Vec::new(),
+                            implements: Vec::new(),
                         });
                     }
                 }
@@ -158,8 +187,8 @@ impl CSharpAnalyzer {
                             content: node_text(child, source).to_string(),
                             doc_comment: None,
                             references: Vec::new(),
-                extends: Vec::new(),
-                implements: Vec::new(),
+                            extends: Vec::new(),
+                            implements: Vec::new(),
                         });
                     }
                 }
@@ -281,8 +310,12 @@ public class UserService {
 }
 "#;
         let elements = parse_cs(src);
-        assert!(elements.iter().any(|e| e.name == "UserService" && e.kind == ChunkKind::Class));
-        assert!(elements.iter().any(|e| e.name == "GetUser" && e.kind == ChunkKind::Function));
+        assert!(elements
+            .iter()
+            .any(|e| e.name == "UserService" && e.kind == ChunkKind::Class));
+        assert!(elements
+            .iter()
+            .any(|e| e.name == "GetUser" && e.kind == ChunkKind::Function));
     }
 
     #[test]
@@ -293,6 +326,8 @@ public interface IRepository {
 }
 "#;
         let elements = parse_cs(src);
-        assert!(elements.iter().any(|e| e.name == "IRepository" && e.kind == ChunkKind::Trait));
+        assert!(elements
+            .iter()
+            .any(|e| e.name == "IRepository" && e.kind == ChunkKind::Trait));
     }
 }

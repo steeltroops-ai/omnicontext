@@ -53,10 +53,7 @@ fn bench_index_operations() -> (f64, f64) {
     use omni_core::types::*;
 
     // Use a unique temp path to avoid collisions
-    let db_path = std::env::temp_dir().join(format!(
-        "omni_bench_{}.db",
-        std::process::id()
-    ));
+    let db_path = std::env::temp_dir().join(format!("omni_bench_{}.db", std::process::id()));
     // Clean up any previous run
     let _ = std::fs::remove_file(&db_path);
     let index = MetadataIndex::open(&db_path).expect("open");
@@ -96,15 +93,18 @@ fn bench_index_operations() -> (f64, f64) {
             vector_id: None,
         });
     }
-    let symbols: Vec<Symbol> = chunks.iter().map(|c| Symbol {
-        id: 0,
-        name: c.symbol_path.split("::").last().unwrap_or("").into(),
-        fqn: c.symbol_path.clone(),
-        kind: c.kind,
-        file_id,
-        line: c.line_start as u32,
-        chunk_id: None,
-    }).collect();
+    let symbols: Vec<Symbol> = chunks
+        .iter()
+        .map(|c| Symbol {
+            id: 0,
+            name: c.symbol_path.split("::").last().unwrap_or("").into(),
+            fqn: c.symbol_path.clone(),
+            kind: c.kind,
+            file_id,
+            line: c.line_start as u32,
+            chunk_id: None,
+        })
+        .collect();
 
     let _ = index.reindex_file(&file, &chunks, &symbols);
 
@@ -151,11 +151,19 @@ fn main() {
     // Index benchmarks
     println!("--- SQLite Index ---");
     let (upsert_ms, search_ms) = bench_index_operations();
-    println!("  File upsert:     {upsert_ms:.3}ms/op  ({:.0} ops/sec)", 1000.0 / upsert_ms);
-    println!("  Keyword search:  {search_ms:.3}ms/query  ({:.0} qps)", 1000.0 / search_ms);
+    println!(
+        "  File upsert:     {upsert_ms:.3}ms/op  ({:.0} ops/sec)",
+        1000.0 / upsert_ms
+    );
+    println!(
+        "  Keyword search:  {search_ms:.3}ms/query  ({:.0} qps)",
+        1000.0 / search_ms
+    );
     println!();
 
     // Print summary line for CI parsing
     let search_10k = bench_vector_search(10_000, 384, 10);
-    println!("BENCHMARK_RESULT: vector_search_10k={search_10k:.3}ms keyword_search={search_ms:.3}ms");
+    println!(
+        "BENCHMARK_RESULT: vector_search_10k={search_10k:.3}ms keyword_search={search_ms:.3}ms"
+    );
 }

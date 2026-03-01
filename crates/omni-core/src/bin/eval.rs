@@ -56,11 +56,7 @@ fn evaluate(queries: &[EvalQuery]) -> f64 {
     for eval in queries {
         // Simulate search results -- in production this calls engine.search()
         // For now we use the relevance map directly to validate the NDCG math
-        let mut scores: Vec<u32> = eval
-            .relevant
-            .values()
-            .copied()
-            .collect();
+        let mut scores: Vec<u32> = eval.relevant.values().copied().collect();
         scores.sort_by(|a, b| b.cmp(a));
 
         // Pad to k with zeros (irrelevant results)
