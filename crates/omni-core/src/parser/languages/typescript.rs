@@ -374,7 +374,7 @@ pub(crate) fn extract_variable_declarations(
             let value = child.child_by_field_name("value");
 
             let kind = match value.map(|v| v.kind()) {
-                Some("arrow_function") | Some("function") => ChunkKind::Function,
+                Some("arrow_function" | "function") => ChunkKind::Function,
                 _ => ChunkKind::Const,
             };
 

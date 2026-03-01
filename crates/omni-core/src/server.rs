@@ -5,6 +5,7 @@
 //! - API key authentication
 //! - Usage metering and rate limiting
 //! - JSON request/response format
+#![allow(clippy::doc_markdown)]
 
 use std::path::PathBuf;
 
@@ -46,6 +47,7 @@ pub struct AuthGuard {
 
 impl AuthGuard {
     /// Create a new auth guard.
+    #[must_use]
     pub fn new(api_keys: Vec<String>, rate_limit: u32) -> Self {
         Self {
             api_keys,
@@ -198,6 +200,7 @@ pub struct UsageMeter {
 
 impl UsageMeter {
     /// Create a new usage meter.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             records: Mutex::new(Vec::new()),

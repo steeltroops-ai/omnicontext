@@ -2,6 +2,7 @@
 //!
 //! Uses the `notify` crate for platform-native filesystem monitoring.
 //! Events are debounced and sent through a channel to the indexing pipeline.
+#![allow(clippy::doc_markdown, clippy::missing_errors_doc)]
 //!
 //! ## Design
 //!
@@ -30,6 +31,7 @@ pub struct FileWatcher {
 
 impl FileWatcher {
     /// Create a new file watcher for the given root directory.
+    #[must_use]
     pub fn new(
         root: &Path,
         watcher_config: &WatcherConfig,
@@ -92,7 +94,7 @@ impl FileWatcher {
                 self.walk_dir(&path, tx, count)?;
             } else if file_type.is_file() {
                 // Check if this is a supported source file
-                if !self.is_source_file(&path) {
+                if !is_source_file_static(&path) {
                     continue;
                 }
 
@@ -120,7 +122,7 @@ impl FileWatcher {
                 if let Ok(resolved) = std::fs::canonicalize(&path) {
                     if resolved.is_dir() {
                         self.walk_dir(&resolved, tx, count)?;
-                    } else if resolved.is_file() && self.is_source_file(&resolved) {
+                    } else if resolved.is_file() && is_source_file_static(&resolved) {
                         let event = PipelineEvent::FileChanged { path: resolved };
                         if tx.try_send(event).is_err() {
                             tracing::warn!("pipeline channel full, dropping event");
@@ -175,7 +177,6 @@ impl FileWatcher {
                             // Filter by event kind
                             match event.kind {
                                 DebouncedEventKind::Any => {}
-                                DebouncedEventKind::AnyContinuous => continue,
                                 _ => continue,
                             }
 
@@ -232,10 +233,6 @@ impl FileWatcher {
         is_excluded_static(path, &self.indexing_config.exclude_patterns)
     }
 
-    /// Check if a file is a supported source file based on its extension.
-    fn is_source_file(&self, path: &Path) -> bool {
-        is_source_file_static(path)
-    }
 }
 
 /// Check if a path matches any exclude pattern.
@@ -248,9 +245,7 @@ fn is_excluded_static(path: &Path, exclude_patterns: &[String]) -> bool {
     for component in path.components() {
         let name = component.as_os_str().to_string_lossy();
         for pattern in exclude_patterns {
-            if pattern.starts_with('*') {
-                // Glob-style extension match: *.lock, *.min.js
-                let suffix = &pattern[1..];
+            if let Some(suffix) = pattern.strip_prefix('*') {
                 if name.ends_with(suffix) {
                     return true;
                 }
@@ -264,9 +259,8 @@ fn is_excluded_static(path: &Path, exclude_patterns: &[String]) -> bool {
 
 /// Check if a file has a recognized source file extension.
 fn is_source_file_static(path: &Path) -> bool {
-    let ext = match path.extension().and_then(|e| e.to_str()) {
-        Some(e) => e,
-        None => return false,
+    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+        return false;
     };
     !matches!(Language::from_extension(ext), Language::Unknown)
 }

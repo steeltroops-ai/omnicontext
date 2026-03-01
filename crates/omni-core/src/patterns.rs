@@ -3,6 +3,14 @@
 //! Detects recurring code patterns across the codebase:
 //! error handling conventions, logging patterns, authentication flows,
 //! naming conventions, etc.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::doc_markdown,
+    clippy::missing_errors_doc,
+    clippy::uninlined_format_args
+)]
 
 use crate::error::OmniResult;
 use crate::index::MetadataIndex;

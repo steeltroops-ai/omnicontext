@@ -21,29 +21,57 @@ use crate::types::{Chunk, ChunkKind, FileInfo, ImportStatement};
 ///
 /// Each chunk is annotated with metadata for the index:
 /// symbol path, kind, visibility, line range, weight.
+///
+/// CAST (Chunking via Abstract Syntax Trees) implementation:
+/// - Backward overlap captures preceding context (configurable via `overlap_tokens`/`overlap_lines`)
+/// - Module-level declarations (imports, type defs) are injected even if far from the element
+/// - Intra-element splits use configurable `overlap_fraction` for context continuity
 pub fn chunk_elements(
     elements: &[StructuralElement],
     file_info: &FileInfo,
     imports: &[ImportStatement],
     file_id: i64,
     config: &Config,
+    source_code: &str,
 ) -> Vec<Chunk> {
     let max_tokens = config.indexing.max_chunk_tokens;
-    let overlap_fraction = 0.12; // 12% overlap
+    let overlap_fraction = config.indexing.overlap_fraction;
+    let target_overlap_tokens = config.indexing.overlap_tokens;
+    let fallback_overlap_lines = config.indexing.overlap_lines;
+    let include_module_decls = config.indexing.include_module_declarations;
     let mut chunks = Vec::new();
 
-    for elem in elements {
-        let estimated_tokens = estimate_tokens(&elem.content);
-        let context_header = build_context_header(elem, file_info, imports);
+    let source_lines: Vec<&str> = source_code.lines().collect();
 
-        // A chunk's real tokens now include the context header's tokens
+    let module_declarations = if include_module_decls {
+        extract_module_declarations(&source_lines)
+    } else {
+        String::new()
+    };
+
+    for elem in elements {
+        let start_line_idx = elem.line_start.saturating_sub(1) as usize;
+
+        let backward_context = compute_backward_context(
+            &source_lines,
+            start_line_idx,
+            target_overlap_tokens,
+            fallback_overlap_lines,
+        );
+
+        let estimated_tokens = estimate_tokens(&elem.content) + estimate_tokens(&backward_context);
+        let mut context_header = build_context_header(elem, file_info, imports, &module_declarations);
+
+        if !backward_context.is_empty() {
+            context_header.push_str("// -- surrounding context --\n");
+            context_header.push_str(&backward_context);
+        }
+
         let total_tokens = estimated_tokens + estimate_tokens(&context_header);
 
         if total_tokens <= max_tokens {
-            // Element fits in a single chunk
             chunks.push(element_to_chunk(elem, file_id, total_tokens, &context_header));
         } else {
-            // Element is too large -- apply splitting strategy
             let split_chunks = split_element(elem, file_id, max_tokens, overlap_fraction, &context_header);
             chunks.extend(split_chunks);
         }
@@ -52,27 +80,136 @@ pub fn chunk_elements(
     chunks
 }
 
+/// Compute backward context using token-based targeting with line-based fallback.
+///
+/// Grabs lines preceding the element until either `target_tokens` is reached
+/// or `max_lines` is exhausted, whichever comes first.
+fn compute_backward_context(
+    source_lines: &[&str],
+    start_line_idx: usize,
+    target_tokens: u32,
+    max_lines: usize,
+) -> String {
+    if start_line_idx == 0 {
+        return String::new();
+    }
+
+    let earliest = start_line_idx.saturating_sub(max_lines);
+    let mut selected_start = start_line_idx;
+    let mut accumulated_tokens: u32 = 0;
+
+    for idx in (earliest..start_line_idx).rev() {
+        let line_tokens = estimate_tokens(source_lines[idx]);
+        if accumulated_tokens + line_tokens > target_tokens {
+            break;
+        }
+        accumulated_tokens += line_tokens;
+        selected_start = idx;
+    }
+
+    if selected_start < start_line_idx {
+        source_lines[selected_start..start_line_idx].join("\n") + "\n"
+    } else {
+        String::new()
+    }
+}
+
+/// Extract module-level declarations from the top of a source file.
+///
+/// Captures import statements, use declarations, type aliases, constants,
+/// and other top-level declarations that provide essential context for
+/// understanding any chunk in the file.
+fn extract_module_declarations(source_lines: &[&str]) -> String {
+    let mut declarations = Vec::new();
+
+    for line in source_lines {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let is_declaration = trimmed.starts_with("import ")
+            || trimmed.starts_with("from ")
+            || trimmed.starts_with("use ")
+            || trimmed.starts_with("extern crate ")
+            || trimmed.starts_with("mod ")
+            || trimmed.starts_with("pub mod ")
+            || trimmed.starts_with("package ")
+            || trimmed.starts_with("require ")
+            || trimmed.starts_with("const ")
+            || trimmed.starts_with("pub const ")
+            || trimmed.starts_with("static ")
+            || trimmed.starts_with("pub static ")
+            || trimmed.starts_with("type ")
+            || trimmed.starts_with("pub type ")
+            || trimmed.starts_with("typedef ")
+            || trimmed.starts_with("using ")
+            || trimmed.starts_with("#include ")
+            || trimmed.starts_with("#define ")
+            || trimmed.starts_with("var ")   // Go top-level var
+            || (trimmed.starts_with("export ") && (trimmed.contains("type ") || trimmed.contains("interface ") || trimmed.contains("const ")));
+
+        if is_declaration {
+            declarations.push(*line);
+        }
+
+        // Stop scanning after we hit the first non-declaration code body
+        // (function, class, struct, impl, etc.) to avoid capturing code
+        let is_code_body = trimmed.starts_with("def ")
+            || trimmed.starts_with("class ")
+            || trimmed.starts_with("fn ")
+            || trimmed.starts_with("pub fn ")
+            || trimmed.starts_with("pub struct ")
+            || trimmed.starts_with("struct ")
+            || trimmed.starts_with("impl ")
+            || trimmed.starts_with("pub enum ")
+            || trimmed.starts_with("enum ")
+            || trimmed.starts_with("func ")
+            || trimmed.starts_with("function ");
+
+        if is_code_body {
+            break;
+        }
+    }
+
+    if declarations.is_empty() {
+        return String::new();
+    }
+
+    declarations.join("\n")
+}
+
 /// Build a contextual header for a chunk, enriching it with surrounding logic.
+///
+/// Includes module-level declarations so the LLM always has visibility
+/// into the file's imports, types, and constants even when viewing an
+/// isolated function deep in the file.
 fn build_context_header(
     elem: &StructuralElement,
     file_info: &FileInfo,
     imports: &[ImportStatement],
+    module_declarations: &str,
 ) -> String {
     let mut header = String::new();
     header.push_str(&format!("[{}] {}\n", file_info.language.as_str(), elem.symbol_path));
     header.push_str(&format!("Kind: {:?} | Visibility: {:?} | File: {}\n", elem.kind, elem.visibility, file_info.path.display()));
-    
-    // Parent extraction
+
     if let Some(parent) = elem.symbol_path.rsplit_once("::").map(|x| x.0).or_else(|| elem.symbol_path.rsplit_once('.').map(|x| x.0)) {
         if !parent.is_empty() {
             header.push_str(&format!("Parent: {}\n", parent));
         }
     }
-    
+
+    if !module_declarations.is_empty() {
+        header.push_str("// -- module declarations --\n");
+        header.push_str(module_declarations);
+        header.push('\n');
+    }
+
     if !imports.is_empty() {
-        let import_list: Vec<&str> = imports.iter().take(5).map(|i| i.import_path.as_str()).collect();
+        let import_list: Vec<&str> = imports.iter().take(8).map(|i| i.import_path.as_str()).collect();
         let mut import_str = import_list.join(", ");
-        if imports.len() > 5 {
+        if imports.len() > 8 {
             import_str.push_str(", ...");
         }
         header.push_str(&format!("Imports: {}\n", import_str));
@@ -550,12 +687,13 @@ mod tests {
 
     #[test]
     fn test_small_element_single_chunk() {
+        let source = "import sys\n\ndef hello():\n    return 'world'\n";
         let content = "def hello():\n    return 'world'\n";
         let elem = make_element(content, ChunkKind::Function);
         let config = default_config();
         let file_info = dummy_file_info();
 
-        let chunks = chunk_elements(&[elem], &file_info, &[], 1, &config);
+        let chunks = chunk_elements(&[elem], &file_info, &[], 1, &config, source);
         assert_eq!(chunks.len(), 1);
         assert!(chunks[0].content.contains(content)); // includes context header now
         assert!(chunks[0].doc_comment.is_some());
@@ -587,13 +725,14 @@ mod tests {
             lines.push(String::new());
         }
         let content = lines.join("\n");
+        let source = content.clone();
 
         let elem = make_element(&content, ChunkKind::Class);
         let mut config = default_config();
         config.indexing.max_chunk_tokens = 50; // force splitting
         let file_info = dummy_file_info();
 
-        let chunks = chunk_elements(&[elem], &file_info, &[], 1, &config);
+        let chunks = chunk_elements(&[elem], &file_info, &[], 1, &config, &source);
         assert!(
             chunks.len() > 1,
             "large element should be split into multiple chunks, got {}",
@@ -619,13 +758,14 @@ mod tests {
             }
         }
         let content = lines.join("\n");
+        let source = content.clone();
 
         let elem = make_element(&content, ChunkKind::Function);
         let mut config = default_config();
         config.indexing.max_chunk_tokens = 40;
         let file_info = dummy_file_info();
 
-        let chunks = chunk_elements(&[elem], &file_info, &[], 1, &config);
+        let chunks = chunk_elements(&[elem], &file_info, &[], 1, &config, &source);
         // All chunks should have content
         for chunk in &chunks {
             assert!(!chunk.content.is_empty(), "no chunk should be empty");
@@ -672,7 +812,7 @@ mod tests {
     fn test_empty_elements() {
         let config = default_config();
         let file_info = dummy_file_info();
-        let chunks = chunk_elements(&[], &file_info, &[], 1, &config);
+        let chunks = chunk_elements(&[], &file_info, &[], 1, &config, "");
         assert!(chunks.is_empty());
     }
 
@@ -680,13 +820,14 @@ mod tests {
     fn test_multiple_elements() {
         let config = default_config();
         let file_info = dummy_file_info();
+        let source = "def a():\n    pass\ndef b():\n    pass\nclass C:\n    pass\n";
         let elements = vec![
             make_element("def a():\n    pass\n", ChunkKind::Function),
             make_element("def b():\n    pass\n", ChunkKind::Function),
             make_element("class C:\n    pass\n", ChunkKind::Class),
         ];
 
-        let chunks = chunk_elements(&elements, &file_info, &[], 1, &config);
+        let chunks = chunk_elements(&elements, &file_info, &[], 1, &config, source);
         assert_eq!(chunks.len(), 3);
         assert_eq!(chunks[0].kind, ChunkKind::Function);
         assert_eq!(chunks[2].kind, ChunkKind::Class);

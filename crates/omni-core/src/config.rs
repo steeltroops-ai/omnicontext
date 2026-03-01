@@ -62,6 +62,28 @@ pub struct IndexingConfig {
     /// Whether to follow symbolic links.
     #[serde(default)]
     pub follow_symlinks: bool,
+
+    /// Number of backward overlap lines to include before each chunk for CAST context.
+    /// These lines provide surrounding context to prevent orphaned chunks.
+    #[serde(default = "IndexingConfig::default_overlap_lines")]
+    pub overlap_lines: usize,
+
+    /// Target overlap in tokens for CAST context windowing.
+    /// When set, takes precedence over `overlap_lines` for determining
+    /// how much backward context to capture.
+    #[serde(default = "IndexingConfig::default_overlap_tokens")]
+    pub overlap_tokens: u32,
+
+    /// Overlap fraction for intra-element splitting (0.0 - 0.5).
+    /// Controls how much content is repeated between consecutive chunks
+    /// when a single large element is split into multiple chunks.
+    #[serde(default = "IndexingConfig::default_overlap_fraction")]
+    pub overlap_fraction: f64,
+
+    /// Whether to include module-level declarations (imports, top-level constants,
+    /// type definitions) in each chunk's context header regardless of their distance.
+    #[serde(default = "IndexingConfig::default_include_module_declarations")]
+    pub include_module_declarations: bool,
 }
 
 impl Default for IndexingConfig {
@@ -72,6 +94,10 @@ impl Default for IndexingConfig {
             parse_concurrency: Self::default_parse_concurrency(),
             max_chunk_tokens: Self::default_max_chunk_tokens(),
             follow_symlinks: false,
+            overlap_lines: Self::default_overlap_lines(),
+            overlap_tokens: Self::default_overlap_tokens(),
+            overlap_fraction: Self::default_overlap_fraction(),
+            include_module_declarations: Self::default_include_module_declarations(),
         }
     }
 }
@@ -106,6 +132,14 @@ impl IndexingConfig {
     fn default_max_chunk_tokens() -> u32 {
         512
     }
+
+    fn default_overlap_lines() -> usize { 10 }
+
+    fn default_overlap_tokens() -> u32 { 150 }
+
+    fn default_overlap_fraction() -> f64 { 0.12 }
+
+    fn default_include_module_declarations() -> bool { true }
 }
 
 /// Search-specific settings.
@@ -126,6 +160,10 @@ pub struct SearchConfig {
     /// Default token budget for context building.
     #[serde(default = "SearchConfig::default_token_budget")]
     pub token_budget: u32,
+
+    /// Reranker configuration.
+    #[serde(default)]
+    pub reranker: RerankerConfig,
 }
 
 impl Default for SearchConfig {
@@ -135,6 +173,7 @@ impl Default for SearchConfig {
             max_limit: Self::default_max_limit(),
             rrf_k: Self::default_rrf_k(),
             token_budget: Self::default_token_budget(),
+            reranker: RerankerConfig::default(),
         }
     }
 }
@@ -144,6 +183,52 @@ impl SearchConfig {
     fn default_max_limit() -> usize { 100 }
     fn default_rrf_k() -> u32 { 60 }
     fn default_token_budget() -> u32 { 4000 }
+}
+
+/// Cross-encoder reranker configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RerankerConfig {
+    /// Weight given to the original RRF score when blending with reranker (0.0 - 1.0).
+    /// The reranker weight is `1.0 - rrf_weight`.
+    #[serde(default = "RerankerConfig::default_rrf_weight")]
+    pub rrf_weight: f64,
+
+    /// Maximum number of candidates to pass to the reranker.
+    #[serde(default = "RerankerConfig::default_max_candidates")]
+    pub max_candidates: usize,
+
+    /// Batch size for reranker inference.
+    #[serde(default = "RerankerConfig::default_batch_size")]
+    pub batch_size: usize,
+
+    /// Maximum sequence length for the reranker tokenizer.
+    #[serde(default = "RerankerConfig::default_max_seq_length")]
+    pub max_seq_length: usize,
+
+    /// Demotion factor applied to items not scored by the reranker (0.0 - 1.0).
+    /// Items beyond `max_candidates` have their score multiplied by this factor.
+    #[serde(default = "RerankerConfig::default_unranked_demotion")]
+    pub unranked_demotion: f64,
+}
+
+impl Default for RerankerConfig {
+    fn default() -> Self {
+        Self {
+            rrf_weight: Self::default_rrf_weight(),
+            max_candidates: Self::default_max_candidates(),
+            batch_size: Self::default_batch_size(),
+            max_seq_length: Self::default_max_seq_length(),
+            unranked_demotion: Self::default_unranked_demotion(),
+        }
+    }
+}
+
+impl RerankerConfig {
+    fn default_rrf_weight() -> f64 { 0.35 }
+    fn default_max_candidates() -> usize { 100 }
+    fn default_batch_size() -> usize { 16 }
+    fn default_max_seq_length() -> usize { 512 }
+    fn default_unranked_demotion() -> f64 { 0.5 }
 }
 
 /// Embedding model configuration.

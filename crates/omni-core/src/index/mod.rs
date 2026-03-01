@@ -13,6 +13,14 @@
 //! All CRUD operations are atomic per-file. When re-indexing a file,
 //! we delete all its chunks/symbols first, then insert new ones within
 //! a single transaction. This avoids orphaned records.
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::doc_markdown,
+    clippy::missing_errors_doc,
+    clippy::redundant_closure_for_method_calls
+)]
 
 use std::path::Path;
 
@@ -184,6 +192,31 @@ impl MetadataIndex {
             params![path.to_string_lossy().as_ref()],
         )?;
         Ok(changes > 0)
+    }
+
+    /// Get all indexed files.
+    pub fn get_all_files(&self) -> OmniResult<Vec<FileInfo>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, path, language, hash, size_bytes FROM files ORDER BY path",
+        )?;
+
+        let files = stmt.query_map([], |row| {
+            Ok(FileInfo {
+                id: row.get(0)?,
+                path: std::path::PathBuf::from(row.get::<_, String>(1)?),
+                language: Language::from_extension(
+                    &row.get::<_, String>(2)?
+                ),
+                content_hash: row.get(3)?,
+                size_bytes: row.get(4)?,
+            })
+        })?;
+
+        let mut result = Vec::new();
+        for file in files {
+            result.push(file?);
+        }
+        Ok(result)
     }
 
     /// Count total indexed files.

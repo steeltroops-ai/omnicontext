@@ -2,6 +2,7 @@
 //!
 //! Indexes git history to provide commit-level context: which commits
 //! touched which files, authorship patterns, and change summaries.
+#![allow(clippy::doc_markdown, clippy::missing_errors_doc)]
 
 use std::path::Path;
 
@@ -33,6 +34,7 @@ pub struct CommitEngine {
 
 impl CommitEngine {
     /// Create a new commit engine.
+    #[must_use]
     pub fn new(max_commits: usize) -> Self {
         Self { max_commits }
     }
@@ -56,11 +58,11 @@ impl CommitEngine {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let commits = self.parse_git_log(&stdout);
+        let commits = Self::parse_git_log(&stdout);
 
         let mut stored = 0;
         for commit in &commits {
-            if let Err(e) = self.store_commit(index, commit) {
+            if let Err(e) = Self::store_commit(index, commit) {
                 tracing::warn!(hash = %commit.hash, error = %e, "failed to store commit");
             } else {
                 stored += 1;
@@ -77,7 +79,7 @@ impl CommitEngine {
     }
 
     /// Parse `git log` output into CommitInfo records.
-    fn parse_git_log(&self, output: &str) -> Vec<CommitInfo> {
+    fn parse_git_log(output: &str) -> Vec<CommitInfo> {
         let mut commits = Vec::new();
         let mut lines = output.lines().peekable();
 
@@ -105,7 +107,7 @@ impl CommitEngine {
                     lines.next();
                     break;
                 }
-                files.push(line.to_string());
+                files.push((*line).to_string());
                 lines.next();
             }
 
@@ -123,7 +125,7 @@ impl CommitEngine {
     }
 
     /// Store a commit in the SQLite index.
-    fn store_commit(&self, index: &MetadataIndex, commit: &CommitInfo) -> OmniResult<()> {
+    fn store_commit(index: &MetadataIndex, commit: &CommitInfo) -> OmniResult<()> {
         let conn = index.connection();
         conn.execute(
             "INSERT OR REPLACE INTO commits (hash, message, author, timestamp, summary, files_changed)
@@ -140,6 +142,7 @@ impl CommitEngine {
         Ok(())
     }
 
+    #[allow(clippy::missing_errors_doc)]
     /// Get recent commits that touched a specific file.
     pub fn commits_for_file(
         index: &MetadataIndex,
@@ -168,12 +171,13 @@ impl CommitEngine {
                 files_changed: files,
             })
         })?
-        .filter_map(|r| r.ok())
+        .filter_map(std::result::Result::ok)
         .collect();
 
         Ok(commits)
     }
 
+    #[allow(clippy::missing_errors_doc)]
     /// Get the most active authors for a file.
     pub fn top_authors(
         index: &MetadataIndex,
@@ -201,10 +205,10 @@ mod tests {
 
     #[test]
     fn test_parse_git_log() {
-        let engine = CommitEngine::new(100);
+        let _engine = CommitEngine::new(100);
         let log = "abc123\nfeat: add login\nJohn Doe\n2024-01-15T10:30:00+00:00\n\nsrc/auth.rs\nsrc/main.rs\n\ndef456\nfix: typo\nJane Smith\n2024-01-14T09:00:00+00:00\n\nREADME.md\n";
 
-        let commits = engine.parse_git_log(log);
+        let commits = CommitEngine::parse_git_log(log);
         assert_eq!(commits.len(), 2);
         assert_eq!(commits[0].hash, "abc123");
         assert_eq!(commits[0].message, "feat: add login");
@@ -216,8 +220,7 @@ mod tests {
 
     #[test]
     fn test_parse_empty_log() {
-        let engine = CommitEngine::new(100);
-        let commits = engine.parse_git_log("");
+        let commits = CommitEngine::parse_git_log("");
         assert!(commits.is_empty());
     }
 }

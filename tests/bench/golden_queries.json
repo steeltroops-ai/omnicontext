@@ -1,0 +1,92 @@
+[
+  {
+    "query": "search engine hybrid retrieval",
+    "expected": ["SearchEngine", "search", "fuse_results", "rrf_score"],
+    "intent": "explain",
+    "description": "Should find the SearchEngine struct and its search methods"
+  },
+  {
+    "query": "how does the pipeline process files",
+    "expected": ["process_file", "run_index", "Engine"],
+    "intent": "explain",
+    "description": "Should find the pipeline processing logic"
+  },
+  {
+    "query": "dependency graph construction",
+    "expected": ["DependencyGraph", "DependencyEdge", "insert_dependency"],
+    "intent": "explain",
+    "description": "Should find graph-related types and operations"
+  },
+  {
+    "query": "tree-sitter parser language analyzer",
+    "expected": ["LanguageAnalyzer", "parser", "parse_file"],
+    "intent": "explain",
+    "description": "Should find the parser module and language analyzers"
+  },
+  {
+    "query": "embedding model ONNX inference",
+    "expected": ["Embedder", "embed_batch", "embed_query"],
+    "intent": "explain",
+    "description": "Should find the embedder module"
+  },
+  {
+    "query": "file watcher debounce",
+    "expected": ["FileWatcher", "watch", "full_scan"],
+    "intent": "explain",
+    "description": "Should find the watcher module"
+  },
+  {
+    "query": "MCP server tools",
+    "expected": ["OmniContextServer", "search_code", "get_symbol"],
+    "intent": "explain",
+    "description": "Should find the MCP tool definitions"
+  },
+  {
+    "query": "configuration loading precedence",
+    "expected": ["Config", "load", "merge_from_file"],
+    "intent": "explain",
+    "description": "Should find the config loading chain"
+  },
+  {
+    "query": "error handling patterns",
+    "expected": ["OmniError", "OmniResult"],
+    "intent": "explain",
+    "description": "Should find error types"
+  },
+  {
+    "query": "context window token budget assembly",
+    "expected": ["ContextWindow", "assemble_context_window", "ContextEntry"],
+    "intent": "explain",
+    "description": "Should find context assembly logic"
+  },
+  {
+    "query": "SQLite FTS5 keyword search",
+    "expected": ["keyword_search", "MetadataIndex"],
+    "intent": "explain",
+    "description": "Should find the FTS5 search implementation"
+  },
+  {
+    "query": "vector index persistence",
+    "expected": ["VectorIndex", "save", "load"],
+    "intent": "explain",
+    "description": "Should find vector index serialization"
+  },
+  {
+    "query": "chunker AST code splitting",
+    "expected": ["Chunker", "chunk_file", "ChunkKind"],
+    "intent": "explain",
+    "description": "Should find the chunker module"
+  },
+  {
+    "query": "RRF fusion scoring algorithm",
+    "expected": ["fuse_results", "rrf_score", "ScoredChunk"],
+    "intent": "explain",
+    "description": "Should find the RRF implementation"
+  },
+  {
+    "query": "git commit lineage",
+    "expected": ["commits", "CommitInfo"],
+    "intent": "explain",
+    "description": "Should find the commits module"
+  }
+]

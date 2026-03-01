@@ -2,6 +2,7 @@
 //!
 //! Enables linking multiple repositories into a unified search space.
 //! Each repo has its own index, but queries can span all repos.
+#![allow(clippy::missing_errors_doc, clippy::needless_pass_by_value)]
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -153,16 +154,19 @@ impl Workspace {
     }
 
     /// Get the number of linked repos.
+    #[must_use]
     pub fn repo_count(&self) -> usize {
         self.engines.len()
     }
 
     /// Get the workspace name.
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
     /// Get all linked repo paths.
+    #[must_use]
     pub fn repo_paths(&self) -> Vec<&PathBuf> {
         self.engines.keys().collect()
     }

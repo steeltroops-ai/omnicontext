@@ -11,6 +11,11 @@
 //!
 //! Flat search: O(n) per query, but with SIMD-friendly dot products.
 //! For 100k vectors of 384 dimensions: ~5ms per query on modern hardware.
+#![allow(
+    clippy::manual_let_else,
+    clippy::missing_errors_doc,
+    clippy::must_use_candidate
+)]
 
 use std::collections::HashMap;
 use std::path::Path;

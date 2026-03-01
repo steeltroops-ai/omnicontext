@@ -426,8 +426,10 @@ pub struct ScoreBreakdown {
     pub semantic_rank: Option<u32>,
     /// Rank from keyword (FTS5) search (None if semantic-only match).
     pub keyword_rank: Option<u32>,
-    /// RRF fusion score.
+    /// RRF fusion score (before reranking).
     pub rrf_score: f64,
+    /// Cross-encoder reranker score (None if not reranked).
+    pub reranker_score: Option<f64>,
     /// Structural importance weight applied.
     pub structural_weight: f64,
     /// Dependency proximity boost applied.

@@ -1,19 +1,25 @@
 {
   "name": "omnicontext",
   "displayName": "OmniContext",
-  "description": "Universal code context engine for AI coding agents -- semantic search, dependency graph, MCP integration",
-  "version": "0.1.0",
-  "publisher": "Mayank",
+  "description": "Universal code context engine for AI coding agents -- semantic search, dependency graph, pre-flight context injection, MCP integration",
+  "version": "0.2.0",
+  "publisher": "steeltroops-ai",
   "license": "Apache-2.0",
+  "icon": "icon.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/steeltroops-ai/omnicontext"
+  },
+  "homepage": "https://github.com/steeltroops-ai/omnicontext",
+  "bugs": {
+    "url": "https://github.com/steeltroops-ai/omnicontext/issues"
   },
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
     "Programming Languages",
+    "Machine Learning",
     "Other"
   ],
   "keywords": [
@@ -21,32 +27,68 @@
     "context engine",
     "MCP",
     "AI",
-    "semantic search"
+    "semantic search",
+    "code intelligence",
+    "RAG",
+    "copilot"
   ],
   "activationEvents": [
     "workspaceContains:**/*.rs",
     "workspaceContains:**/*.py",
     "workspaceContains:**/*.ts",
-    "workspaceContains:**/*.go"
+    "workspaceContains:**/*.go",
+    "workspaceContains:**/*.java",
+    "workspaceContains:**/*.c",
+    "workspaceContains:**/*.cpp",
+    "workspaceContains:**/*.cs"
   ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
       {
         "command": "omnicontext.index",
-        "title": "OmniContext: Index Workspace"
+        "title": "OmniContext: Index Workspace",
+        "icon": "$(database)"
       },
       {
         "command": "omnicontext.search",
-        "title": "OmniContext: Search"
+        "title": "OmniContext: Search Code",
+        "icon": "$(search)"
       },
       {
         "command": "omnicontext.status",
-        "title": "OmniContext: Show Status"
+        "title": "OmniContext: Show Status",
+        "icon": "$(info)"
       },
       {
         "command": "omnicontext.startMcp",
-        "title": "OmniContext: Start MCP Server"
+        "title": "OmniContext: Start MCP Server",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "omnicontext.startDaemon",
+        "title": "OmniContext: Start Daemon",
+        "icon": "$(zap)"
+      },
+      {
+        "command": "omnicontext.stopDaemon",
+        "title": "OmniContext: Stop Daemon",
+        "icon": "$(stop)"
+      },
+      {
+        "command": "omnicontext.toggleInjection",
+        "title": "OmniContext: Toggle Context Injection",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "omnicontext.preflight",
+        "title": "OmniContext: Pre-flight Context",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "omnicontext.moduleMap",
+        "title": "OmniContext: Show Module Map",
+        "icon": "$(list-tree)"
       }
     ],
     "configuration": {
@@ -62,22 +104,56 @@
           "default": true,
           "description": "Automatically index workspace on open"
         },
+        "omnicontext.autoStartDaemon": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically start the OmniContext daemon on workspace open"
+        },
+        "omnicontext.contextInjection": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable pre-flight context injection into AI chat"
+        },
         "omnicontext.tokenBudget": {
           "type": "number",
           "default": 8192,
-          "description": "Token budget for search context window"
+          "description": "Token budget for pre-flight context injection"
+        },
+        "omnicontext.logLevel": {
+          "type": "string",
+          "default": "info",
+          "enum": [
+            "trace",
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ],
+          "description": "Log level for the daemon process"
         }
       }
-    }
+    },
+    "chatParticipants": [
+      {
+        "id": "omnicontext.context",
+        "name": "omnicontext",
+        "fullName": "OmniContext",
+        "description": "Retrieves relevant codebase context for your query using semantic search and dependency analysis",
+        "isSticky": false
+      }
+    ]
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "bun run compile",
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package",
+    "lint": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/vscode": "^1.85.0",
     "@types/node": "^20.0.0",
-    "typescript": "^5.3.0"
+    "typescript": "^5.3.0",
+    "@vscode/vsce": "^3.0.0"
   }
 }

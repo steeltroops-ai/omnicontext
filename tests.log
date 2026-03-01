@@ -1,0 +1,200 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.99s
+     Running unittests src\lib.rs (target\debug\deps\omni_core-1259dd1f51ce36ff.exe)
+
+running 175 tests
+test chunker::tests::test_estimate_tokens ... ok
+test chunker::tests::test_find_function_split_points_if_blocks ... ok
+test chunker::tests::test_find_class_split_points ... ok
+test chunker::tests::test_extract_header_decorated ... ok
+test chunker::tests::test_extract_header_normal ... ok
+test chunker::tests::test_chunk_weight_ordering ... ok
+test chunker::tests::test_truncate_to_tokens_at_line_boundary ... ok
+test chunker::tests::test_empty_elements ... ok
+test chunker::tests::test_multiple_elements ... ok
+test chunker::tests::test_small_element_single_chunk ... ok
+test chunker::tests::test_split_preserves_all_content ... ok
+test chunker::tests::test_weight_computation ... ok
+test chunker::tests::test_large_element_gets_split ... ok
+test chunker::tests::test_truncate_to_tokens_short_content ... ok
+test commits::tests::test_parse_empty_log ... ok
+test commits::tests::test_parse_git_log ... ok
+test config::tests::test_chunk_kind_weights ... ok
+test config::tests::test_default_config_is_valid ... ok
+test config::tests::test_language_from_extension ... ok
+test embedder::model_manager::tests::test_fallback_model_constants ... ok
+test embedder::model_manager::tests::test_fallback_model_different_path ... ok
+test embedder::model_manager::tests::test_default_model_constants ... ok
+test embedder::model_manager::tests::test_model_dir_structure ... ok
+test embedder::model_manager::tests::test_model_not_ready_when_missing ... ok
+test embedder::model_manager::tests::test_resolve_model_default ... ok
+test embedder::tests::test_embedder_degraded_mode ... ok
+test embedder::tests::test_embedder_degraded_returns_correct_error ... ok
+test embedder::tests::test_embedder_dimensions ... ok
+test embedder::tests::test_format_multiple_languages ... ok
+test graph::tests::test_downstream_dependencies ... ok
+test graph::tests::test_add_and_query_dependencies ... ok
+test embedder::tests::test_format_chunk_for_embedding_pass_through ... ok
+test graph::tests::test_no_cycles ... ok
+test graph::tests::test_cycle_detection ... ok
+test graph::tests::test_distance ... ok
+test graph::tests::test_upstream_unknown_symbol ... ok
+test index::tests::test_delete_chunks_for_file ... ok
+test index::tests::test_cascade_delete ... ok
+test index::tests::test_delete_file ... ok
+test index::tests::test_open_creates_database ... ok
+test index::tests::test_insert_and_get_chunks ... ok
+test index::tests::test_keyword_search ... ok
+test index::tests::test_insert_and_lookup_symbol ... ok
+test parser::languages::c::tests::test_c_function ... ok
+test index::tests::test_file_hash_lookup ... ok
+test parser::languages::c::tests::test_c_macro ... ok
+test parser::languages::c::tests::test_c_struct ... ok
+test index::tests::test_set_chunk_vector_id ... ok
+test index::tests::test_upsert_and_get_file ... ok
+test index::tests::test_statistics ... ok
+test index::tests::test_reindex_file_atomic ... ok
+test parser::languages::cpp::tests::test_cpp_class ... ok
+test index::tests::test_search_symbols_by_name ... ok
+test parser::languages::cpp::tests::test_cpp_namespace ... ok
+test parser::languages::csharp::tests::test_cs_interface ... ok
+test parser::languages::csharp::tests::test_cs_class ... ok
+test parser::languages::document::tests::test_markdown_sections ... ok
+test parser::languages::document::tests::test_toml_sections ... ok
+test parser::languages::go::tests::test_go_function ... ok
+test parser::languages::go::tests::test_go_interface ... ok
+test parser::languages::go::tests::test_go_test_function ... ok
+test parser::languages::go::tests::test_go_visibility ... ok
+test index::tests::test_upsert_file_updates_existing ... ok
+test parser::languages::document::tests::test_markdown_no_headings ... ok
+test parser::languages::go::tests::test_go_const ... ok
+test parser::languages::go::tests::test_go_exported_function ... ok
+test parser::languages::css::tests::test_css_rule ... ok
+test parser::languages::java::tests::test_java_interface ... ok
+test parser::languages::java::tests::test_java_class ... ok
+test parser::languages::go::tests::test_go_struct ... ok
+test parser::languages::java::tests::test_java_visibility ... ok
+test parser::languages::go::tests::test_go_method ... ok
+test parser::languages::javascript::tests::test_js_arrow_function ... ok
+test parser::languages::javascript::tests::test_js_const ... ok
+test parser::languages::javascript::tests::test_js_class ... ok
+test parser::languages::javascript::tests::test_js_exported ... ok
+test parser::languages::javascript::tests::test_js_function ... ok
+test parser::languages::python::tests::test_clean_docstring ... ok
+test parser::languages::python::tests::test_comments_only_file ... ok
+test parser::languages::python::tests::test_decorated_function ... ok
+test parser::languages::python::tests::test_class_with_methods ... ok
+test parser::languages::python::tests::test_class_inheritance ... ok
+test parser::languages::python::tests::test_line_numbers ... ok
+test parser::languages::python::tests::test_function_references ... ok
+test parser::languages::python::tests::test_empty_file ... ok
+test parser::languages::python::tests::test_multiline_docstring ... ok
+test parser::languages::python::tests::test_nested_class ... ok
+test parser::languages::python::tests::test_private_function ... ok
+test parser::languages::python::tests::test_simple_function ... ok
+test parser::languages::python::tests::test_visibility_helpers ... ok
+test parser::languages::python::tests::test_test_function_detection ... ok
+test parser::languages::rust::tests::test_enum ... ok
+test parser::languages::rust::tests::test_const_and_static ... ok
+test parser::languages::rust::tests::test_empty_file ... ok
+test parser::languages::rust::tests::test_module ... ok
+test parser::languages::rust::tests::test_impl_block ... ok
+test parser::languages::rust::tests::test_multiline_doc_comment ... ok
+test parser::languages::rust::tests::test_simple_function ... ok
+test parser::languages::rust::tests::test_pub_crate_visibility ... ok
+test parser::languages::rust::tests::test_pub_function ... ok
+test parser::languages::rust::tests::test_symbol_path_uses_double_colon ... ok
+test parser::languages::rust::tests::test_struct ... ok
+test parser::languages::rust::tests::test_trait ... ok
+test parser::languages::rust::tests::test_test_function ... ok
+test parser::languages::rust::tests::test_type_alias ... ok
+test parser::languages::rust::tests::test_trait_impl ... ok
+test parser::languages::typescript::tests::test_ts_arrow_function ... ok
+test parser::languages::typescript::tests::test_ts_empty_file ... ok
+test parser::languages::typescript::tests::test_ts_class ... ok
+test parser::languages::typescript::tests::test_ts_exported_const ... ok
+test parser::languages::typescript::tests::test_ts_interface ... ok
+test parser::languages::typescript::tests::test_ts_function ... ok
+test parser::languages::typescript::tests::test_ts_exported_function ... ok
+test parser::languages::typescript::tests::test_ts_type_alias ... ok
+test parser::registry::tests::test_registry_has_all_code_languages ... ok
+test parser::registry::tests::test_registry_has_all_document_formats ... ok
+test parser::tests::test_parse_file_unknown_language_returns_error ... ok
+test parser::registry::tests::test_registry_returns_none_for_unknown ... ok
+test patterns::tests::test_pattern_category_serialization ... ok
+test pipeline::tests::test_compute_file_hash ... ok
+test search::tests::test_analyze_query_empty ... ok
+test search::tests::test_analyze_query_mixed ... ok
+test search::tests::test_analyze_query_natural_language ... ok
+test search::tests::test_analyze_query_symbol ... ok
+test search::tests::test_expand_query_preserves_original ... ok
+test search::tests::test_fuse_results_both_signals ... ok
+test search::tests::test_expand_query_splits_identifier ... ok
+test search::tests::test_fuse_results_empty ... ok
+test search::tests::test_overlap_no_overlap ... ok
+test search::tests::test_fuse_results_symbol_boost ... ok
+test search::tests::test_overlap_full_containment ... ok
+test search::tests::test_rrf_score_both_signals ... ok
+test search::tests::test_rrf_higher_rank_gets_higher_score ... ok
+test search::tests::test_overlap_partial ... ok
+test search::tests::test_search_engine_creation ... ok
+test search::tests::test_rrf_score_no_signal ... ok
+test search::tests::test_rrf_score_semantic_only ... ok
+test search::tests::test_split_camel_case ... ok
+test search::tests::test_split_dot_path ... ok
+test search::tests::test_split_http_server ... ok
+test search::tests::test_split_module_path ... ok
+test search::tests::test_split_single_word ... ok
+test server::tests::test_auth_with_keys ... ok
+test search::tests::test_split_snake_case ... ok
+test server::tests::test_auth_no_keys ... ok
+test server::tests::test_rate_limit_unlimited ... ok
+test server::tests::test_rate_limiting ... ok
+test server::tests::test_server_config_defaults ... ok
+test pipeline::tests::test_engine_status ... ok
+test pipeline::tests::test_engine_creation ... ok
+test pipeline::tests::test_index_empty_directory ... ok
+test server::tests::test_usage_meter ... ok
+test vector::tests::test_add_and_search ... ok
+test vector::tests::test_add_batch ... ok
+test vector::tests::test_dimension_mismatch_rejected ... ok
+test pipeline::tests::test_search_empty_index ... ok
+test vector::tests::test_in_memory_index ... ok
+test vector::tests::test_remove ... ok
+test vector::tests::test_dot_product_normalized ... ok
+test vector::tests::test_l2_normalize ... ok
+test vector::tests::test_remove_batch ... ok
+test pipeline::tests::test_index_single_file ... ok
+test vector::tests::test_search_empty_index ... ok
+test vector::tests::test_save_and_load ... ok
+test watcher::tests::test_full_scan_large_file_skipped ... ok
+test vector::tests::test_vector_index_creation ... ok
+test watcher::tests::test_full_scan_nested_directories ... ok
+test watcher::tests::test_is_excluded_directory ... ok
+test watcher::tests::test_full_scan_empty_dir ... ok
+test watcher::tests::test_is_excluded_glob ... ok
+test watcher::tests::test_is_source_file ... ok
+test workspace::tests::test_workspace_open_nonexistent ... ok
+test workspace::tests::test_workspace_config_roundtrip ... ok
+test watcher::tests::test_full_scan_with_temp_dir ... ok
+test vector::tests::test_larger_index ... ok
+
+test result: ok. 175 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+
+     Running unittests src\bin\bench.rs (target\debug\deps\bench-d70206cee66a45a7.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src\bin\eval.rs (target\debug\deps\eval-cb1285d3ce4a43b7.exe)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests omni_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

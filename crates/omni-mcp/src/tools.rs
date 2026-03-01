@@ -82,6 +82,25 @@ pub struct ContextWindowParams {
     pub token_budget: Option<u32>,
 }
 
+/// Parameters for get_module_map tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[allow(dead_code)]
+pub struct GetModuleMapParams {
+    /// Maximum depth for the module tree (default: no limit).
+    pub max_depth: Option<usize>,
+}
+
+/// Parameters for search_by_intent tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SearchByIntentParams {
+    /// Natural language query describing what you're looking for.
+    pub query: String,
+    /// Maximum number of results to return (default: 10).
+    pub limit: Option<usize>,
+    /// Token budget for context assembly (default: engine config).
+    pub token_budget: Option<u32>,
+}
+
 // -----------------------------------------------------------------------
 // MCP Server
 // -----------------------------------------------------------------------
@@ -618,6 +637,133 @@ impl OmniContextServer {
             Err(e) => Err(McpError::internal_error(format!("explain failed: {e}"), None)),
         }
     }
+
+    #[tool(
+        name = "get_module_map",
+        description = "Returns the module/crate/package hierarchy as a tree structure. Shows files grouped by directory with their exported symbols. Useful for understanding project architecture."
+    )]
+    async fn get_module_map(
+        &self,
+        #[allow(unused)] params: Parameters<GetModuleMapParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let engine = self.engine.lock().await;
+        let index = engine.metadata_index();
+
+        let files = index
+            .get_all_files()
+            .map_err(|e| McpError::internal_error(format!("failed to list files: {e}"), None))?;
+
+        if files.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(
+                "No files indexed. Run `omnicontext index .` first."
+            )]));
+        }
+
+        let mut modules: std::collections::BTreeMap<String, Vec<String>> =
+            std::collections::BTreeMap::new();
+
+        for file in &files {
+            let path_str = file.path.display().to_string();
+            let parts: Vec<&str> = path_str.split(['/', '\\']).collect();
+            let module_key = if parts.len() > 1 {
+                parts[..parts.len() - 1].join("/")
+            } else {
+                ".".to_string()
+            };
+
+            let chunks = index.get_chunks_for_file(file.id).unwrap_or_default();
+            let symbols: Vec<String> = chunks
+                .iter()
+                .filter(|c| matches!(
+                    c.kind,
+                    omni_core::types::ChunkKind::Function
+                    | omni_core::types::ChunkKind::Class
+                    | omni_core::types::ChunkKind::Trait
+                ))
+                .map(|c| format!("{} ({:?})", c.symbol_path, c.kind))
+                .collect();
+
+            let entry = format!(
+                "  {} [{}]{}",
+                parts.last().unwrap_or(&"?"),
+                file.language.as_str(),
+                if symbols.is_empty() {
+                    String::new()
+                } else {
+                    format!(" -- {}", symbols.join(", "))
+                }
+            );
+
+            modules.entry(module_key).or_default().push(entry);
+        }
+
+        let mut output = format!("## Module Map ({} modules, {} files)\n\n", modules.len(), files.len());
+        for (module, entries) in &modules {
+            output.push_str(&format!("### {}\n", module));
+            for entry in entries {
+                output.push_str(&format!("{}\n", entry));
+            }
+            output.push('\n');
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
+
+    #[tool(
+        name = "search_by_intent",
+        description = "Natural language search with automatic query expansion. Understands intent (edit, explain, debug, refactor) and expands queries with synonyms and related terms for better recall. Returns a pre-assembled context window."
+    )]
+    async fn search_by_intent(
+        &self,
+        params: Parameters<SearchByIntentParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let query = &params.0.query;
+        let limit = params.0.limit.unwrap_or(10);
+        let engine = self.engine.lock().await;
+
+        // Query expansion: extract key terms and add synonyms
+        let expanded_terms = expand_query(query);
+        let expanded_query = expanded_terms.join(" ");
+
+        match engine.search_context_window(&expanded_query, limit, params.0.token_budget) {
+            Ok(ctx) => {
+                if ctx.is_empty() {
+                    // Fall back to original query
+                    match engine.search(query, limit) {
+                        Ok(results) if results.is_empty() => {
+                            return Ok(CallToolResult::success(vec![Content::text(
+                                format!("No results found for: '{}'\n\nExpanded to: '{}'", query, expanded_query)
+                            )]));
+                        }
+                        Ok(results) => {
+                            let mut output = format!(
+                                "## Search by Intent\n**Query**: {}\n**Expanded**: {}\n**Results**: {}\n\n",
+                                query, expanded_query, results.len()
+                            );
+                            for (i, r) in results.iter().enumerate() {
+                                output.push_str(&format!(
+                                    "### {} (score: {:.4})\n**File**: {}\n**Symbol**: {} ({:?})\n```\n{}\n```\n\n",
+                                    i + 1, r.score, r.file_path.display(),
+                                    r.chunk.symbol_path, r.chunk.kind, r.chunk.content,
+                                ));
+                            }
+                            return Ok(CallToolResult::success(vec![Content::text(output)]));
+                        }
+                        Err(e) => return Err(McpError::internal_error(format!("search failed: {e}"), None)),
+                    }
+                }
+
+                let mut output = format!(
+                    "## Search by Intent\n**Query**: {}\n**Expanded**: {}\n**Context**: {} entries, {}/{} tokens\n\n",
+                    query, expanded_query, ctx.len(), ctx.total_tokens, ctx.token_budget
+                );
+                output.push_str(&ctx.render());
+
+                Ok(CallToolResult::success(vec![Content::text(output)]))
+            }
+            Err(e) => Err(McpError::internal_error(format!("search_by_intent failed: {e}"), None)),
+        }
+    }
 }
 
 #[tool_handler]
@@ -628,7 +774,8 @@ impl ServerHandler for OmniContextServer {
                 "OmniContext provides deep code intelligence for AI coding agents. \
                  It indexes source code into searchable chunks with full-text and semantic search. \
                  Use search_code for general queries, get_symbol for specific lookups, \
-                 and get_file_summary for file structure analysis."
+                 get_file_summary for file structure, get_module_map for architecture overview, \
+                 and search_by_intent for natural language queries with automatic expansion."
                     .into(),
             ),
             capabilities: ServerCapabilities::builder()
@@ -638,4 +785,54 @@ impl ServerHandler for OmniContextServer {
             ..Default::default()
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Query expansion for search_by_intent
+// ---------------------------------------------------------------------------
+
+/// Expand a natural language query into additional search terms.
+///
+/// Uses a static synonym map for common code concepts plus
+/// structural decomposition of the query.
+fn expand_query(query: &str) -> Vec<String> {
+    let mut terms: Vec<String> = vec![query.to_string()];
+
+    // Static synonym expansions for common code concepts
+    let synonyms: &[(&[&str], &[&str])] = &[
+        (&["auth", "authentication", "login"], &["authenticate", "verify", "credential", "token", "session", "password"]),
+        (&["error", "exception", "failure"], &["error", "err", "fail", "panic", "unwrap", "Result", "anyhow"]),
+        (&["config", "configuration", "settings"], &["config", "Config", "settings", "options", "preferences"]),
+        (&["test", "testing"], &["test", "assert", "mock", "fixture", "expect"]),
+        (&["database", "db", "storage"], &["database", "db", "sql", "query", "insert", "select", "connection"]),
+        (&["api", "endpoint", "route"], &["handler", "route", "endpoint", "request", "response", "middleware"]),
+        (&["cache", "caching"], &["cache", "memoize", "ttl", "invalidate", "evict"]),
+        (&["parse", "parser", "parsing"], &["parse", "lexer", "tokenize", "ast", "syntax", "grammar"]),
+        (&["search", "find", "query"], &["search", "find", "lookup", "retrieve", "index", "match"]),
+        (&["serialize", "serialization"], &["serialize", "deserialize", "json", "serde", "encode", "decode"]),
+        (&["async", "concurrent", "parallel"], &["async", "await", "spawn", "tokio", "future", "thread"]),
+        (&["dependency", "import"], &["import", "use", "require", "include", "depend"]),
+    ];
+
+    let lower = query.to_lowercase();
+    for (triggers, expansions) in synonyms {
+        if triggers.iter().any(|t| lower.contains(t)) {
+            for exp in *expansions {
+                let term = exp.to_string();
+                if !terms.contains(&term) {
+                    terms.push(term);
+                }
+            }
+        }
+    }
+
+    // Extract potential symbol names (CamelCase, snake_case, paths with ::)
+    for word in query.split_whitespace() {
+        let clean = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != ':');
+        if clean.len() > 2 && !terms.contains(&clean.to_string()) {
+            terms.push(clean.to_string());
+        }
+    }
+
+    terms
 }

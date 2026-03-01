@@ -8,6 +8,16 @@
 //! - get_dependencies MCP tool
 //! - Impact analysis ("what breaks if I change this?")
 //! - Circular dependency detection
+#![allow(
+    clippy::doc_markdown,
+    clippy::if_not_else,
+    clippy::items_after_statements,
+    clippy::manual_let_else,
+    clippy::map_entry,
+    clippy::missing_errors_doc,
+    clippy::must_use_candidate,
+    clippy::unnecessary_wraps
+)]
 
 use crate::types::{DependencyEdge, DependencyKind};
 use crate::error::OmniResult;

@@ -2450,6 +2450,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "omni-daemon"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "hex",
+ "omni-core",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "omni-mcp"
 version = "0.1.0"
 dependencies = [

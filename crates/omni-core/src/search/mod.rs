@@ -10,10 +10,30 @@
 //! 3. **RRF Fusion** - Combine rank lists using Reciprocal Rank Fusion
 //! 4. **Boosting** - Apply structural weight, dependency proximity, recency
 //! 5. **Context Building** - Assemble token-budget-aware context window
+#![allow(
+    clippy::cast_lossless,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::doc_link_with_quotes,
+    clippy::doc_markdown,
+    clippy::if_not_else,
+    clippy::inefficient_to_string,
+    clippy::manual_let_else,
+    clippy::match_same_arms,
+    clippy::missing_errors_doc,
+    clippy::must_use_candidate,
+    clippy::non_canonical_partial_ord_impl,
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    clippy::unused_self
+)]
 
 use crate::embedder::Embedder;
 use crate::index::MetadataIndex;
 use crate::types::{Chunk, SearchResult, ScoreBreakdown, ContextWindow, ContextEntry};
+use crate::reranker::Reranker;
 use crate::vector::VectorIndex;
 use crate::error::OmniResult;
 
@@ -58,6 +78,8 @@ impl SearchEngine {
         vector_index: &VectorIndex,
         embedder: &Embedder,
         dep_graph: Option<&crate::graph::DependencyGraph>,
+        reranker: Option<&Reranker>,
+        reranker_config: Option<&crate::config::RerankerConfig>,
     ) -> OmniResult<Vec<SearchResult>> {
         let query_type = analyze_query(query);
         let limit = limit.min(self.retrieval_limit);
@@ -121,11 +143,72 @@ impl SearchEngine {
         };
 
         // ---- RRF Fusion ----
-        let fused = self.fuse_results(
+        let mut fused = self.fuse_results(
             &keyword_results,
             &semantic_results,
             &symbol_results,
         );
+
+        if let Some(reranker) = reranker {
+            if reranker.is_available() && !fused.is_empty() {
+                let rr_cfg = reranker_config.cloned().unwrap_or_default();
+                let rerank_limit = fused.len().min(rr_cfg.max_candidates);
+                let rrf_weight = rr_cfg.rrf_weight;
+                let reranker_weight = 1.0 - rrf_weight;
+                let unranked_demotion = rr_cfg.unranked_demotion;
+
+                let mut candidates: Vec<(i64, String)> = Vec::with_capacity(rerank_limit);
+                for scored in fused.iter().take(rerank_limit) {
+                    if let Some(chunk) = self.get_chunk_by_id(index, scored.chunk_id) {
+                        candidates.push((scored.chunk_id, chunk.content));
+                    }
+                }
+
+                if !candidates.is_empty() {
+                    let texts: Vec<&str> = candidates.iter().map(|(_, c)| c.as_str()).collect();
+                    let scores = reranker.rerank(query, &texts);
+
+                    let mut min_score = f32::INFINITY;
+                    let mut max_score = f32::NEG_INFINITY;
+                    for score in scores.iter().flatten() {
+                        if *score < min_score {
+                            min_score = *score;
+                        }
+                        if *score > max_score {
+                            max_score = *score;
+                        }
+                    }
+
+                    if min_score.is_finite() && max_score.is_finite() {
+                        let denom = if max_score > min_score {
+                            max_score - min_score
+                        } else {
+                            1.0
+                        };
+                        let mut score_map = std::collections::HashMap::new();
+                        for ((chunk_id, _), score) in candidates.iter().zip(scores.iter()) {
+                            if let Some(score) = score {
+                                let norm = (*score - min_score) / denom;
+                                score_map.insert(*chunk_id, norm as f64);
+                            }
+                        }
+                        for item in &mut fused {
+                            if let Some(&norm) = score_map.get(&item.chunk_id) {
+                                item.breakdown.reranker_score = Some(norm);
+                                item.final_score = item.final_score * rrf_weight + norm * reranker_weight;
+                            } else {
+                                item.final_score *= unranked_demotion;
+                            }
+                        }
+                        fused.sort_by(|a, b| {
+                            b.final_score
+                                .partial_cmp(&a.final_score)
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                    }
+                }
+            }
+        }
 
         // ---- Identify Anchor for Proximity Boosting ----
         // We find the 'best' matched chunk that maps to a symbol
@@ -721,7 +804,7 @@ fn split_code_token(token: &str) -> Vec<&str> {
     let mut parts = Vec::new();
 
     // First split on clear separators: _ . :: - /
-    for segment in token.split(|c: char| c == '_' || c == '.' || c == ':' || c == '-' || c == '/') {
+    for segment in token.split(['_', '.', ':', '-', '/']) {
         if segment.is_empty() {
             continue;
         }

@@ -18,6 +18,12 @@
 //! ```
 //!
 //! Search queries are handled via `SearchEngine` which reads from both indexes.
+#![allow(
+    clippy::doc_markdown,
+    clippy::missing_errors_doc,
+    clippy::struct_field_names,
+    clippy::too_many_lines
+)]
 
 use std::path::Path;
 
@@ -30,6 +36,7 @@ use crate::error::{OmniError, OmniResult};
 use crate::graph::DependencyGraph;
 use crate::index::MetadataIndex;
 use crate::parser;
+use crate::reranker::Reranker;
 use crate::search::SearchEngine;
 use crate::types::{DependencyEdge, DependencyKind, FileInfo, Language, PipelineEvent, SearchResult, Symbol};
 use crate::vector::VectorIndex;
@@ -49,6 +56,7 @@ pub struct Engine {
     embedder: Embedder,
     /// Hybrid search engine (RRF fusion).
     search_engine: SearchEngine,
+    reranker: Reranker,
     /// Cross-file dependency graph.
     dep_graph: DependencyGraph,
 }
@@ -87,6 +95,8 @@ impl Engine {
             config.search.token_budget,
         );
 
+        let reranker = Reranker::new(&config.search.reranker)?;
+
         // Initialize dependency graph
         let dep_graph = DependencyGraph::new();
 
@@ -103,6 +113,7 @@ impl Engine {
             vector_index,
             embedder,
             search_engine,
+            reranker,
             dep_graph,
         })
     }
@@ -248,7 +259,7 @@ impl Engine {
             .unwrap_or_default();
 
         // Chunk the elements (returns Vec<Chunk>)
-        let chunks = chunker::chunk_elements(&elements, &file_info, &imports, file_id, &self.config);
+        let chunks = chunker::chunk_elements(&elements, &file_info, &imports, file_id, &self.config, &content);
 
         // Build Symbol records from the chunks
         let symbols: Vec<Symbol> = chunks
@@ -258,7 +269,7 @@ impl Engine {
                 id: 0,
                 name: c
                     .symbol_path
-                    .rsplit(|ch: char| ch == '.' || ch == ':')
+                    .rsplit(['.', ':'])
                     .next()
                     .unwrap_or(&c.symbol_path)
                     .to_string(),
@@ -289,23 +300,24 @@ impl Engine {
                     )
                 })
                 .collect();
-            let text_refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
+            let text_refs: Vec<&str> = texts.iter().map(String::as_str).collect();
 
             let embeddings = self.embedder.embed_batch(&text_refs);
             for (i, maybe_embedding) in embeddings.into_iter().enumerate() {
                 if let Some(embedding) = maybe_embedding {
                     if i < chunk_ids.len() {
-                        let vector_id = chunk_ids[i] as u64;
-                        if let Err(e) = self.vector_index.add(vector_id, &embedding) {
-                            tracing::warn!(error = %e, "failed to add vector");
-                            continue;
+                        if let Ok(vector_id) = u64::try_from(chunk_ids[i]) {
+                            if let Err(e) = self.vector_index.add(vector_id, &embedding) {
+                                tracing::warn!(error = %e, "failed to add vector");
+                                continue;
+                            }
+                            if let Err(e) =
+                                self.index.set_chunk_vector_id(chunk_ids[i], vector_id)
+                            {
+                                tracing::warn!(error = %e, "failed to set vector_id");
+                            }
+                            stats.embeddings += 1;
                         }
-                        if let Err(e) =
-                            self.index.set_chunk_vector_id(chunk_ids[i], vector_id)
-                        {
-                            tracing::warn!(error = %e, "failed to set vector_id");
-                        }
-                        stats.embeddings += 1;
                     }
                 }
             }
@@ -320,10 +332,10 @@ impl Engine {
             }
 
             // Find the source symbol for this element
-            let source_symbol = if !element.symbol_path.is_empty() {
-                self.index.get_symbol_by_fqn(&element.symbol_path)?
-            } else {
+            let source_symbol = if element.symbol_path.is_empty() {
                 None
+            } else {
+                self.index.get_symbol_by_fqn(&element.symbol_path)?
             };
 
             let source_id = match source_symbol {
@@ -473,6 +485,8 @@ impl Engine {
             &self.vector_index,
             &self.embedder,
             Some(&self.dep_graph),
+            Some(&self.reranker),
+            Some(&self.config.search.reranker),
         )
     }
 
@@ -504,13 +518,24 @@ impl Engine {
     pub fn status(&self) -> OmniResult<EngineStatus> {
         let stats = self.index.statistics()?;
         let dep_edges = self.index.dependency_count().unwrap_or(0);
+        let vectors_indexed = self.vector_index.len();
+        let chunks_indexed = stats.chunk_count;
+        
+        // Calculate embedding coverage percentage
+        let embedding_coverage_percent = if chunks_indexed > 0 {
+            (vectors_indexed as f64 / chunks_indexed as f64) * 100.0
+        } else {
+            0.0
+        };
+        
         Ok(EngineStatus {
             repo_path: self.config.repo_path.display().to_string(),
             data_dir: self.config.data_dir().display().to_string(),
             files_indexed: stats.file_count,
-            chunks_indexed: stats.chunk_count,
+            chunks_indexed,
             symbols_indexed: stats.symbol_count,
-            vectors_indexed: self.vector_index.len(),
+            vectors_indexed,
+            embedding_coverage_percent,
             dep_edges,
             graph_nodes: self.dep_graph.node_count(),
             graph_edges: self.dep_graph.edge_count(),
@@ -576,6 +601,8 @@ pub struct EngineStatus {
     pub symbols_indexed: usize,
     /// Number of vectors in the index.
     pub vectors_indexed: usize,
+    /// Embedding coverage percentage (vectors / chunks * 100).
+    pub embedding_coverage_percent: f64,
     /// Number of dependency edges in the SQLite store.
     pub dep_edges: usize,
     /// Number of nodes in the in-memory dependency graph.

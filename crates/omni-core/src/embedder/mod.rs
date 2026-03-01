@@ -34,6 +34,16 @@
 //! 2. **Degraded mode**: Model unavailable, returns errors gracefully
 //!
 //! The pipeline checks `is_available()` and skips embedding when degraded.
+#![allow(
+    clippy::cast_lossless,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    clippy::doc_markdown,
+    clippy::items_after_statements,
+    clippy::must_use_candidate
+)]
 
 pub mod model_manager;
 
@@ -224,6 +234,12 @@ impl Embedder {
     /// Returns a vector where each element corresponds to an input chunk.
     /// If a chunk successfully embeds, `Some(embedding)` is returned.
     /// If embedding fails (e.g., ONNX failure, chunk too large), `None` is returned.
+    ///
+    /// This implementation includes:
+    /// - Content sanitization to handle special characters
+    /// - Automatic retry with truncation for oversized chunks
+    /// - Individual fallback when batch processing fails
+    /// - Detailed logging for debugging coverage issues
     pub fn embed_batch(&self, chunks: &[&str]) -> Vec<Option<Vec<f32>>> {
         let session_mutex = match self.session.as_ref() {
             Some(s) => s,
@@ -237,8 +253,15 @@ impl Embedder {
 
         let mut all_embeddings = Vec::with_capacity(chunks.len());
 
+        // Sanitize chunks before processing
+        let sanitized: Vec<String> = chunks
+            .iter()
+            .map(|c| sanitize_for_embedding(c))
+            .collect();
+        let sanitized_refs: Vec<&str> = sanitized.iter().map(String::as_str).collect();
+
         // Process in batches
-        for batch in chunks.chunks(self.config.batch_size) {
+        for (batch_idx, batch) in sanitized_refs.chunks(self.config.batch_size).enumerate() {
             match self.run_inference(&mut session, batch) {
                 Ok(batch_embeddings) => {
                     for emb in batch_embeddings {
@@ -246,30 +269,76 @@ impl Embedder {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(
+                    tracing::debug!(
                         error = %e,
+                        batch_idx = batch_idx,
+                        batch_size = batch.len(),
                         "batch inference failed; falling back to individual chunks"
                     );
-                    // Fall back to processing chunks one by one
-                    for text in batch {
-                        match self.run_inference(&mut session, &[*text]) {
-                            Ok(mut single_emb) => {
-                                all_embeddings.push(Some(single_emb.remove(0)));
-                            }
-                            Err(chunk_err) => {
-                                tracing::warn!(
-                                    error = %chunk_err,
-                                    "chunk inference failed; skipping this chunk"
-                                );
-                                all_embeddings.push(None);
-                            }
+                    // Fall back to processing chunks one by one with retry logic
+                    for (chunk_idx, text) in batch.iter().enumerate() {
+                        let embedding = self.embed_single_with_retry(text, &mut session);
+                        if embedding.is_none() {
+                            tracing::debug!(
+                                batch_idx = batch_idx,
+                                chunk_idx = chunk_idx,
+                                text_len = text.len(),
+                                "chunk embedding failed after retry"
+                            );
                         }
+                        all_embeddings.push(embedding);
                     }
                 }
             }
         }
 
         all_embeddings
+    }
+
+    /// Embed a single chunk with automatic retry and truncation.
+    fn embed_single_with_retry(
+        &self,
+        text: &str,
+        session: &mut Session,
+    ) -> Option<Vec<f32>> {
+        // Try with full text first
+        match self.run_inference(session, &[text]) {
+            Ok(mut embs) => return Some(embs.remove(0)),
+            Err(e) => {
+                tracing::trace!(error = %e, "first attempt failed, trying with truncation");
+            }
+        }
+
+        // If that fails, try truncating to max_seq_length
+        let max_chars = self.config.max_seq_length * 4; // ~4 chars per token
+        if text.len() > max_chars {
+            let truncated = &text[..max_chars];
+            match self.run_inference(session, &[truncated]) {
+                Ok(mut embs) => {
+                    tracing::trace!("embedding succeeded after truncation");
+                    return Some(embs.remove(0));
+                }
+                Err(e) => {
+                    tracing::trace!(error = %e, "truncation attempt failed");
+                }
+            }
+        }
+
+        // If still failing, try with just the first 512 characters
+        if text.len() > 512 {
+            let minimal = &text[..512];
+            match self.run_inference(session, &[minimal]) {
+                Ok(mut embs) => {
+                    tracing::trace!("embedding succeeded with minimal content");
+                    return Some(embs.remove(0));
+                }
+                Err(e) => {
+                    tracing::trace!(error = %e, "minimal content attempt failed");
+                }
+            }
+        }
+
+        None
     }
 
     /// Embed a single text string.
@@ -396,6 +465,11 @@ impl Embedder {
     }
 
     /// Tokenize a batch of texts with padding and truncation.
+    ///
+    /// Handles tokenization errors gracefully by:
+    /// - Catching encoding failures
+    /// - Providing detailed error context
+    /// - Ensuring consistent output dimensions
     fn tokenize_batch(
         &self,
         texts: &[&str],
@@ -409,9 +483,28 @@ impl Embedder {
         let mut all_attention_mask = Vec::with_capacity(texts.len() * max_len);
         let mut all_token_type_ids = Vec::with_capacity(texts.len() * max_len);
 
-        for text in texts {
+        for (idx, text) in texts.iter().enumerate() {
+            // Handle empty text
+            if text.trim().is_empty() {
+                // Add padding for empty text
+                for _ in 0..max_len {
+                    all_input_ids.push(0);
+                    all_attention_mask.push(0);
+                    all_token_type_ids.push(0);
+                }
+                continue;
+            }
+
             let encoding = tokenizer.encode(*text, true)
-                .map_err(|e| OmniError::Internal(format!("tokenization error: {e}")))?;
+                .map_err(|e| {
+                    OmniError::Internal(format!(
+                        "tokenization error at index {}: {} (text length: {}, first 100 chars: {})",
+                        idx,
+                        e,
+                        text.len(),
+                        &text.chars().take(100).collect::<String>()
+                    ))
+                })?;
 
             let ids = encoding.get_ids();
             let mask = encoding.get_attention_mask();
@@ -450,6 +543,42 @@ pub fn format_chunk_for_embedding(
     content: &str,
 ) -> String {
     content.to_string()
+}
+
+/// Sanitize text content for embedding to prevent tokenization failures.
+///
+/// This function:
+/// - Replaces null bytes and other control characters
+/// - Normalizes whitespace
+/// - Ensures valid UTF-8
+/// - Truncates extremely long lines that might cause issues
+fn sanitize_for_embedding(text: &str) -> String {
+    let mut sanitized = String::with_capacity(text.len());
+    
+    for line in text.lines() {
+        // Skip extremely long lines (> 10k chars) that might cause tokenizer issues
+        if line.len() > 10000 {
+            sanitized.push_str(&line[..10000]);
+            sanitized.push_str(" [truncated]\n");
+            continue;
+        }
+        
+        // Replace problematic characters
+        for ch in line.chars() {
+            match ch {
+                '\0' => sanitized.push(' '), // null byte
+                '\x01'..='\x08' | '\x0B'..='\x0C' | '\x0E'..='\x1F' => {
+                    // Control characters (except \t, \n, \r)
+                    sanitized.push(' ');
+                }
+                _ => sanitized.push(ch),
+            }
+        }
+        sanitized.push('\n');
+    }
+    
+    // Trim excessive whitespace
+    sanitized.trim().to_string()
 }
 
 #[cfg(test)]

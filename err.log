@@ -1,0 +1,259 @@
+OmniContext MCP Server starting...
+  Repository: \\?\C:\Omniverse\Projects\omnicontext
+2026-02-28T16:50:29.777328Z  INFO omnicontext_mcp: initializing OmniContext engine repo=\\?\C:\Omniverse\Projects\omnicontext
+2026-02-28T16:50:29.890359Z  INFO omni_core::vector: loaded vector index from disk vectors=122 dimensions=768
+2026-02-28T16:50:29.920186Z  INFO ort: Loaded ONNX Runtime dylib from "C:\Omniverse\Projects\omnicontext\target\debug\onnxruntime.dll"; version '1.23.0'
+2026-02-28T16:50:30.154829Z  INFO ort::logging: Discovered OrtHardwareDevice {vendor_id:0x8086, device_id:0x0, vendor:Intel, type:0, metadata: [Description=11th Gen Intel(R) Core(TM) i5-11300H @ 3.10GHz, ]}
+2026-02-28T16:50:30.155210Z  INFO ort::logging: Discovered OrtHardwareDevice {vendor_id:0x8086, device_id:0x9a49, vendor:Intel Corporation, type:1, metadata: [Description=Intel(R) Iris(R) Xe Graphics, Discrete=0, DxgiAdapterNumber=0, DxgiHighPerformanceIndex=0, DxgiVideoMemory=128 MB, LUID=75202, ]}
+2026-02-28T16:50:30.159484Z  INFO ort::logging: Session Options {  execution_mode:0 execution_order:DEFAULT enable_profiling:0 optimized_model_filepath: enable_mem_pattern:1 enable_mem_reuse:1 enable_cpu_mem_arena:1 profile_file_prefix:onnxruntime_profile_ session_logid: session_log_severity_level:-1 session_log_verbosity_level:0 max_num_graph_transformation_steps:10 graph_optimization_level:4 intra_op_param:OrtThreadPoolParams { thread_pool_size: 0 auto_set_affinity: 0 allow_spinning: 1 dynamic_block_base_: 0 stack_size: 0 affinity_str:  set_denormal_as_zero: 0 } inter_op_param:OrtThreadPoolParams { thread_pool_size: 0 auto_set_affinity: 0 allow_spinning: 1 dynamic_block_base_: 0 stack_size: 0 affinity_str:  set_denormal_as_zero: 0 } use_per_session_threads:1 thread_pool_allow_spinning:1 use_deterministic_compute:0 ep_selection_policy:0 config_options: {  } }
+2026-02-28T16:50:30.160060Z  INFO ort::logging: Flush-to-zero and denormal-as-zero are off
+2026-02-28T16:50:30.160126Z  INFO ort::logging: Creating and using per session threadpools since use_per_session_threads_ is true
+2026-02-28T16:50:30.160321Z  INFO ort::logging: Dynamic block base set to 0
+2026-02-28T16:50:32.928874Z  INFO ort::logging: Initializing session.
+2026-02-28T16:50:32.928985Z  INFO ort::logging: Adding default CPU execution provider.
+2026-02-28T16:50:32.929128Z  INFO ort::logging: Creating BFCArena for Cpu with following configs: initial_chunk_size_bytes: 1048576 max_dead_bytes_per_chunk: 134217728 initial_growth_chunk_size_bytes: 2097152 max_power_of_two_extend_bytes: 1073741824 memory limit: 18446744073709551615 arena_extend_strategy: 0
+2026-02-28T16:50:32.939482Z  INFO ort::logging: This model does not have any local functions defined. AOT Inlining is not performed
+2026-02-28T16:50:32.941502Z  INFO ort::logging: GraphTransformer EnsureUniqueDQForNodeUnit modified: 0 with status: OK
+2026-02-28T16:50:32.944523Z  INFO ort::logging: GraphTransformer Level1_RuleBasedTransformer modified: 1 with status: OK
+2026-02-28T16:50:32.998700Z  INFO ort::logging: GraphTransformer DoubleQDQPairsRemover modified: 0 with status: OK
+2026-02-28T16:50:33.016770Z  INFO ort::logging: Total shared scalar initializer count: 441
+2026-02-28T16:50:33.017692Z  INFO ort::logging: GraphTransformer ConstantSharing modified: 1 with status: OK
+2026-02-28T16:50:33.083798Z  INFO ort::logging: GraphTransformer CommonSubexpressionElimination modified: 1 with status: OK
+2026-02-28T16:50:33.157338Z  INFO ort::logging: GraphTransformer ConstantFolding modified: 1 with status: OK
+2026-02-28T16:50:33.208858Z  INFO ort::logging: Removing initializer '/encoder/Constant_5_output_0'. It is no longer used by any node.
+2026-02-28T16:50:33.209085Z  INFO ort::logging: Removing initializer '/encoder/Constant_4_output_0'. It is no longer used by any node.
+2026-02-28T16:50:33.209295Z  INFO ort::logging: Removing initializer '/encoder/Constant_6_output_0'. It is no longer used by any node.
+2026-02-28T16:50:33.209497Z  INFO ort::logging: Removing initializer '/encoder/ConstantOfShape_output_0'. It is no longer used by any node.
+2026-02-28T16:50:33.209565Z  INFO ort::logging: Removing initializer '/Shape_2_output_0'. It is no longer used by any node.
+2026-02-28T16:50:33.209612Z  INFO ort::logging: Removing initializer '/encoder/Mul_output_0'. It is no longer used by any node.
+2026-02-28T16:50:33.209657Z  INFO ort::logging: Removing initializer '/encoder/Equal_output_0'. It is no longer used by any node.
+2026-02-28T16:50:33.215994Z  INFO ort::logging: GraphTransformer MatMulAddFusion modified: 0 with status: OK
+2026-02-28T16:50:33.219990Z  INFO ort::logging: Fused reshape node: /encoder/layer.0/attention/self/Reshape_output_0
+2026-02-28T16:50:33.220169Z  INFO ort::logging: Fused reshape node: /encoder/layer.0/attention/self/Reshape_2_output_0
+2026-02-28T16:50:33.220301Z  INFO ort::logging: Fused reshape node: /encoder/layer.0/attention/self/Reshape_1_output_0
+2026-02-28T16:50:33.220448Z  INFO ort::logging: Fused reshape node: /encoder/layer.0/attention/self/Reshape_3_output_0
+2026-02-28T16:50:33.220584Z  INFO ort::logging: Fused reshape node: /encoder/layer.1/attention/self/Reshape_output_0
+2026-02-28T16:50:33.220712Z  INFO ort::logging: Fused reshape node: /encoder/layer.1/attention/self/Reshape_2_output_0
+2026-02-28T16:50:33.220831Z  INFO ort::logging: Fused reshape node: /encoder/layer.1/attention/self/Reshape_1_output_0
+2026-02-28T16:50:33.220975Z  INFO ort::logging: Fused reshape node: /encoder/layer.1/attention/self/Reshape_3_output_0
+2026-02-28T16:50:33.221112Z  INFO ort::logging: Fused reshape node: /encoder/layer.2/attention/self/Reshape_output_0
+2026-02-28T16:50:33.221241Z  INFO ort::logging: Fused reshape node: /encoder/layer.2/attention/self/Reshape_2_output_0
+2026-02-28T16:50:33.221351Z  INFO ort::logging: Fused reshape node: /encoder/layer.2/attention/self/Reshape_1_output_0
+2026-02-28T16:50:33.221484Z  INFO ort::logging: Fused reshape node: /encoder/layer.2/attention/self/Reshape_3_output_0
+2026-02-28T16:50:33.221609Z  INFO ort::logging: Fused reshape node: /encoder/layer.3/attention/self/Reshape_output_0
+2026-02-28T16:50:33.221728Z  INFO ort::logging: Fused reshape node: /encoder/layer.3/attention/self/Reshape_2_output_0
+2026-02-28T16:50:33.221839Z  INFO ort::logging: Fused reshape node: /encoder/layer.3/attention/self/Reshape_1_output_0
+2026-02-28T16:50:33.221990Z  INFO ort::logging: Fused reshape node: /encoder/layer.3/attention/self/Reshape_3_output_0
+2026-02-28T16:50:33.222125Z  INFO ort::logging: Fused reshape node: /encoder/layer.4/attention/self/Reshape_output_0
+2026-02-28T16:50:33.222250Z  INFO ort::logging: Fused reshape node: /encoder/layer.4/attention/self/Reshape_2_output_0
+2026-02-28T16:50:33.222362Z  INFO ort::logging: Fused reshape node: /encoder/layer.4/attention/self/Reshape_1_output_0
+2026-02-28T16:50:33.222502Z  INFO ort::logging: Fused reshape node: /encoder/layer.4/attention/self/Reshape_3_output_0
+2026-02-28T16:50:33.222746Z  INFO ort::logging: Fused reshape node: /encoder/layer.5/attention/self/Reshape_output_0
+2026-02-28T16:50:33.223015Z  INFO ort::logging: Fused reshape node: /encoder/layer.5/attention/self/Reshape_2_output_0
+2026-02-28T16:50:33.223197Z  INFO ort::logging: Fused reshape node: /encoder/layer.5/attention/self/Reshape_1_output_0
+2026-02-28T16:50:33.223455Z  INFO ort::logging: Fused reshape node: /encoder/layer.5/attention/self/Reshape_3_output_0
+2026-02-28T16:50:33.223784Z  INFO ort::logging: Fused reshape node: /encoder/layer.6/attention/self/Reshape_output_0
+2026-02-28T16:50:33.224513Z  INFO ort::logging: Fused reshape node: /encoder/layer.6/attention/self/Reshape_2_output_0
+2026-02-28T16:50:33.225090Z  INFO ort::logging: Fused reshape node: /encoder/layer.6/attention/self/Reshape_1_output_0
+2026-02-28T16:50:33.225640Z  INFO ort::logging: Fused reshape node: /encoder/layer.6/attention/self/Reshape_3_output_0
+2026-02-28T16:50:33.226126Z  INFO ort::logging: Fused reshape node: /encoder/layer.7/attention/self/Reshape_output_0
+2026-02-28T16:50:33.226396Z  INFO ort::logging: Fused reshape node: /encoder/layer.7/attention/self/Reshape_2_output_0
+2026-02-28T16:50:33.226676Z  INFO ort::logging: Fused reshape node: /encoder/layer.7/attention/self/Reshape_1_output_0
+2026-02-28T16:50:33.227167Z  INFO ort::logging: Fused reshape node: /encoder/layer.7/attention/self/Reshape_3_output_0
+2026-02-28T16:50:33.227653Z  INFO ort::logging: Fused reshape node: /encoder/layer.8/attention/self/Reshape_output_0
+2026-02-28T16:50:33.228072Z  INFO ort::logging: Fused reshape node: /encoder/layer.8/attention/self/Reshape_2_output_0
+2026-02-28T16:50:33.228348Z  INFO ort::logging: Fused reshape node: /encoder/layer.8/attention/self/Reshape_1_output_0
+2026-02-28T16:50:33.228647Z  INFO ort::logging: Fused reshape node: /encoder/layer.8/attention/self/Reshape_3_output_0
+2026-02-28T16:50:33.230167Z  INFO ort::logging: Fused reshape node: /encoder/layer.9/attention/self/Reshape_output_0
+2026-02-28T16:50:33.230343Z  INFO ort::logging: Fused reshape node: /encoder/layer.9/attention/self/Reshape_2_output_0
+2026-02-28T16:50:33.230468Z  INFO ort::logging: Fused reshape node: /encoder/layer.9/attention/self/Reshape_1_output_0
+2026-02-28T16:50:33.230613Z  INFO ort::logging: Fused reshape node: /encoder/layer.9/attention/self/Reshape_3_output_0
+2026-02-28T16:50:33.230745Z  INFO ort::logging: Fused reshape node: /encoder/layer.10/attention/self/Reshape_output_0
+2026-02-28T16:50:33.230929Z  INFO ort::logging: Fused reshape node: /encoder/layer.10/attention/self/Reshape_2_output_0
+2026-02-28T16:50:33.231039Z  INFO ort::logging: Fused reshape node: /encoder/layer.10/attention/self/Reshape_1_output_0
+2026-02-28T16:50:33.231166Z  INFO ort::logging: Fused reshape node: /encoder/layer.10/attention/self/Reshape_3_output_0
+2026-02-28T16:50:33.231292Z  INFO ort::logging: Fused reshape node: /encoder/layer.11/attention/self/Reshape_output_0
+2026-02-28T16:50:33.231410Z  INFO ort::logging: Fused reshape node: /encoder/layer.11/attention/self/Reshape_2_output_0
+2026-02-28T16:50:33.231512Z  INFO ort::logging: Fused reshape node: /encoder/layer.11/attention/self/Reshape_1_output_0
+2026-02-28T16:50:33.231642Z  INFO ort::logging: Fused reshape node: /encoder/layer.11/attention/self/Reshape_3_output_0
+2026-02-28T16:50:33.231700Z  INFO ort::logging: Total fused reshape node count: 48
+2026-02-28T16:50:33.231748Z  INFO ort::logging: GraphTransformer ReshapeFusion modified: 1 with status: OK
+2026-02-28T16:50:33.282137Z  INFO ort::logging: Removing initializer '/encoder/layer.4/attention/self/Constant_6_output_0'. It is no longer used by any node.
+2026-02-28T16:50:33.282437Z  INFO ort::logging: Removing initializer '/encoder/layer.0/attention/self/Constant_15_output_0'. It is no longer used by any node.
+2026-02-28T16:50:33.282567Z  INFO ort::logging: Removing initializer '/encoder/layer.2/attention/self/Constant_3_output_0'. It is no longer used by any node.
+2026-02-28T16:50:33.285250Z  INFO ort::logging: GraphTransformer FreeDimensionOverrideTransformer modified: 0 with status: OK
+2026-02-28T16:50:33.285497Z  INFO ort::logging: GraphTransformer GeluFusionL1 modified: 0 with status: OK
+2026-02-28T16:50:33.285574Z  INFO ort::logging: GraphTransformer LayerNormFusionL1 modified: 0 with status: OK
+2026-02-28T16:50:33.286764Z  INFO ort::logging: GraphTransformer QDQPropagationTransformer modified: 0 with status: OK
+2026-02-28T16:50:33.287877Z  INFO ort::logging: GraphTransformer WeightBiasQuantization modified: 0 with status: OK
+2026-02-28T16:50:33.288766Z  INFO ort::logging: GraphTransformer EnsureUniqueDQForNodeUnit modified: 0 with status: OK
+2026-02-28T16:50:33.290489Z  INFO ort::logging: GraphTransformer RocmBlasAltImpl modified: 0 with status: OK
+2026-02-28T16:50:33.299749Z  INFO ort::logging: GraphTransformer TransposeOptimizer modified: 0 with status: OK
+2026-02-28T16:50:33.307620Z  INFO ort::logging: GraphTransformer Level1_RuleBasedTransformer modified: 0 with status: OK
+2026-02-28T16:50:33.308753Z  INFO ort::logging: GraphTransformer DoubleQDQPairsRemover modified: 0 with status: OK
+2026-02-28T16:50:33.319021Z  INFO ort::logging: GraphTransformer CommonSubexpressionElimination modified: 0 with status: OK
+2026-02-28T16:50:33.321297Z  INFO ort::logging: GraphTransformer ConstantFolding modified: 0 with status: OK
+2026-02-28T16:50:33.324067Z  INFO ort::logging: GraphTransformer MatMulAddFusion modified: 0 with status: OK
+2026-02-28T16:50:33.326376Z  INFO ort::logging: GraphTransformer ReshapeFusion modified: 0 with status: OK
+2026-02-28T16:50:33.326565Z  INFO ort::logging: GraphTransformer FreeDimensionOverrideTransformer modified: 0 with status: OK
+2026-02-28T16:50:33.326623Z  INFO ort::logging: GraphTransformer GeluFusionL1 modified: 0 with status: OK
+2026-02-28T16:50:33.326664Z  INFO ort::logging: GraphTransformer LayerNormFusionL1 modified: 0 with status: OK
+2026-02-28T16:50:33.328441Z  INFO ort::logging: GraphTransformer QDQPropagationTransformer modified: 0 with status: OK
+2026-02-28T16:50:33.330734Z  INFO ort::logging: GraphTransformer WeightBiasQuantization modified: 0 with status: OK
+2026-02-28T16:50:33.331994Z  INFO ort::logging: GraphTransformer EnsureUniqueDQForNodeUnit modified: 0 with status: OK
+2026-02-28T16:50:33.338164Z  INFO ort::logging: GraphTransformer RocmBlasAltImpl modified: 0 with status: OK
+2026-02-28T16:50:34.361519Z  INFO ort::logging: Running graph optimizations in loop 1 time/s (Graph Optimizations Loop Level : 1)
+2026-02-28T16:50:34.365127Z  INFO ort::logging: GraphTransformer Level2_RuleBasedTransformer modified: 0 with status: OK
+2026-02-28T16:50:34.386489Z  INFO ort::logging: GraphTransformer TransposeOptimizer_CPUExecutionProvider modified: 0 with status: OK
+2026-02-28T16:50:34.388906Z  INFO ort::logging: GraphTransformer QDQS8ToU8Transformer modified: 0 with status: OK
+2026-02-28T16:50:34.394330Z  INFO ort::logging: GraphTransformer QDQSelectorActionTransformer modified: 0 with status: OK
+2026-02-28T16:50:34.397125Z  INFO ort::logging: GraphTransformer GemmActivationFusion modified: 0 with status: OK
+2026-02-28T16:50:34.398559Z  INFO ort::logging: GraphTransformer MatMulIntegerToFloatFusion modified: 0 with status: OK
+2026-02-28T16:50:34.399699Z  INFO ort::logging: GraphTransformer DynamicQuantizeMatMulFusion modified: 0 with status: OK
+2026-02-28T16:50:34.403869Z  INFO ort::logging: GraphTransformer ConvActivationFusion modified: 0 with status: OK
+2026-02-28T16:50:34.406683Z  INFO ort::logging: GraphTransformer GeluFusionL2 modified: 1 with status: OK
+2026-02-28T16:50:34.451412Z  INFO ort::logging: Removing initializer '/encoder/layer.9/mlp/act/Constant_2_output_0'. It is no longer used by any node.
+2026-02-28T16:50:34.451628Z  INFO ort::logging: Removing initializer '/encoder/layer.2/mlp/act/Constant_output_0'. It is no longer used by any node.
+2026-02-28T16:50:34.462838Z  INFO ort::logging: GraphTransformer LayerNormFusionL2 modified: 1 with status: OK
+2026-02-28T16:50:34.489315Z  INFO ort::logging: Removing initializer '/encoder/layer.6/layer_norm_2/Constant_output_0'. It is no longer used by any node.
+2026-02-28T16:50:34.490392Z  INFO ort::logging: Removing initializer '/encoder/layer.3/layer_norm_1/Constant_1_output_0'. It is no longer used by any node.
+2026-02-28T16:50:34.495954Z  INFO ort::logging: GraphTransformer SimplifiedLayerNormFusion modified: 0 with status: OK
+2026-02-28T16:50:34.497484Z  INFO ort::logging: GraphTransformer AttentionFusion modified: 0 with status: OK
+2026-02-28T16:50:34.497994Z  INFO ort::logging: GraphTransformer EmbedLayerNormFusion modified: 0 with status: OK
+2026-02-28T16:50:34.498075Z  INFO ort::logging: GraphTransformer GatherSliceToSplitFusion modified: 0 with status: OK
+2026-02-28T16:50:34.498417Z  INFO ort::logging: GraphTransformer GatherToSliceFusion modified: 0 with status: OK
+2026-02-28T16:50:34.499083Z  INFO ort::logging: GraphTransformer MatmulTransposeFusion modified: 0 with status: OK
+2026-02-28T16:50:34.499859Z  INFO ort::logging: GraphTransformer BiasGeluFusion modified: 0 with status: OK
+2026-02-28T16:50:34.500229Z  INFO ort::logging: GraphTransformer GroupQueryAttentionFusion modified: 0 with status: OK
+2026-02-28T16:50:34.501257Z  INFO ort::logging: GraphTransformer MatMulAddFusion modified: 0 with status: OK
+2026-02-28T16:50:34.502260Z  INFO ort::logging: GraphTransformer SkipLayerNormFusion modified: 0 with status: OK
+2026-02-28T16:50:34.503055Z  INFO ort::logging: GraphTransformer FastGeluFusion modified: 0 with status: OK
+2026-02-28T16:50:34.503623Z  INFO ort::logging: GraphTransformer QuickGeluFusion modified: 0 with status: OK
+2026-02-28T16:50:34.504159Z  INFO ort::logging: GraphTransformer BiasSoftmaxFusion modified: 0 with status: OK
+2026-02-28T16:50:34.504585Z  INFO ort::logging: GraphTransformer BiasDropoutFusion modified: 0 with status: OK
+2026-02-28T16:50:34.505900Z  INFO ort::logging: GraphTransformer MatMulScaleFusion modified: 1 with status: OK
+2026-02-28T16:50:34.535363Z  INFO ort::logging: Removing initializer '/encoder/layer.6/attention/self/Constant_12_output_0'. It is no longer used by any node.
+2026-02-28T16:50:34.539244Z  INFO ort::logging: GraphTransformer MatMulActivationFusion modified: 0 with status: OK
+2026-02-28T16:50:34.541600Z  INFO ort::logging: GraphTransformer MatMulNBitsFusion modified: 0 with status: OK
+2026-02-28T16:50:34.542290Z  INFO ort::logging: GraphTransformer QDQFinalCleanupTransformer modified: 0 with status: OK
+2026-02-28T16:50:34.542709Z  INFO ort::logging: GraphTransformer Level2_RuleBasedTransformer modified: 0 with status: OK
+2026-02-28T16:50:34.543109Z  INFO ort::logging: GraphTransformer QDQS8ToU8Transformer modified: 0 with status: OK
+2026-02-28T16:50:34.544320Z  INFO ort::logging: GraphTransformer QDQSelectorActionTransformer modified: 0 with status: OK
+2026-02-28T16:50:34.545210Z  INFO ort::logging: GraphTransformer GemmActivationFusion modified: 0 with status: OK
+2026-02-28T16:50:34.548782Z  INFO ort::logging: GraphTransformer MatMulIntegerToFloatFusion modified: 0 with status: OK
+2026-02-28T16:50:34.550862Z  INFO ort::logging: GraphTransformer DynamicQuantizeMatMulFusion modified: 0 with status: OK
+2026-02-28T16:50:34.552924Z  INFO ort::logging: GraphTransformer ConvActivationFusion modified: 0 with status: OK
+2026-02-28T16:50:34.553487Z  INFO ort::logging: GraphTransformer GeluFusionL2 modified: 0 with status: OK
+2026-02-28T16:50:34.553884Z  INFO ort::logging: GraphTransformer LayerNormFusionL2 modified: 0 with status: OK
+2026-02-28T16:50:34.554379Z  INFO ort::logging: GraphTransformer SimplifiedLayerNormFusion modified: 0 with status: OK
+2026-02-28T16:50:34.555394Z  INFO ort::logging: GraphTransformer AttentionFusion modified: 0 with status: OK
+2026-02-28T16:50:34.558923Z  INFO ort::logging: GraphTransformer EmbedLayerNormFusion modified: 0 with status: OK
+2026-02-28T16:50:34.559866Z  INFO ort::logging: GraphTransformer GatherSliceToSplitFusion modified: 0 with status: OK
+2026-02-28T16:50:34.561491Z  INFO ort::logging: GraphTransformer GatherToSliceFusion modified: 0 with status: OK
+2026-02-28T16:50:34.564014Z  INFO ort::logging: GraphTransformer MatmulTransposeFusion modified: 0 with status: OK
+2026-02-28T16:50:34.565104Z  INFO ort::logging: GraphTransformer BiasGeluFusion modified: 0 with status: OK
+2026-02-28T16:50:34.565563Z  INFO ort::logging: GraphTransformer GroupQueryAttentionFusion modified: 0 with status: OK
+2026-02-28T16:50:34.566106Z  INFO ort::logging: GraphTransformer MatMulAddFusion modified: 0 with status: OK
+2026-02-28T16:50:34.568906Z  INFO ort::logging: GraphTransformer SkipLayerNormFusion modified: 0 with status: OK
+2026-02-28T16:50:34.572471Z  INFO ort::logging: GraphTransformer FastGeluFusion modified: 0 with status: OK
+2026-02-28T16:50:34.574061Z  INFO ort::logging: GraphTransformer QuickGeluFusion modified: 0 with status: OK
+2026-02-28T16:50:34.575555Z  INFO ort::logging: GraphTransformer BiasSoftmaxFusion modified: 0 with status: OK
+2026-02-28T16:50:34.576219Z  INFO ort::logging: GraphTransformer BiasDropoutFusion modified: 0 with status: OK
+2026-02-28T16:50:34.580252Z  INFO ort::logging: GraphTransformer MatMulScaleFusion modified: 0 with status: OK
+2026-02-28T16:50:34.582447Z  INFO ort::logging: GraphTransformer MatMulActivationFusion modified: 0 with status: OK
+2026-02-28T16:50:34.584418Z  INFO ort::logging: GraphTransformer MatMulNBitsFusion modified: 0 with status: OK
+2026-02-28T16:50:34.586494Z  INFO ort::logging: GraphTransformer QDQFinalCleanupTransformer modified: 0 with status: OK
+2026-02-28T16:50:34.587167Z  INFO ort::logging: GraphTransformer NchwcTransformer modified: 0 with status: OK
+2026-02-28T16:50:34.588895Z  INFO ort::logging: GraphTransformer NhwcTransformer modified: 0 with status: OK
+2026-02-28T16:50:34.590831Z  INFO ort::logging: GraphTransformer ConvAddActivationFusion modified: 0 with status: OK
+2026-02-28T16:50:34.594806Z  INFO ort::logging: GraphTransformer RemoveDuplicateCastTransformer modified: 0 with status: OK
+2026-02-28T16:50:34.595078Z  INFO ort::logging: GraphTransformer CastFloat16Transformer modified: 0 with status: OK
+2026-02-28T16:50:34.596089Z  INFO ort::logging: GraphTransformer FuseFp16InitializerToFp32NodeTransformer modified: 0 with status: OK
+2026-02-28T16:50:34.596394Z  INFO ort::logging: GraphTransformer MemcpyTransformer modified: 0 with status: OK
+2026-02-28T16:50:34.610176Z  INFO ort::logging: Use DeviceBasedPartition as default
+2026-02-28T16:50:34.827472Z  INFO ort::logging: Saving initialized tensors.
+2026-02-28T16:50:34.828349Z  INFO ort::logging: Extending BFCArena for Cpu. bin_num:0 (requested) num_bytes: 4 (actual) rounded_bytes:256
+2026-02-28T16:50:34.828575Z  INFO ort::logging: Extended allocation by 1048576 bytes.
+2026-02-28T16:50:34.828650Z  INFO ort::logging: Total allocated bytes: 1048576
+2026-02-28T16:50:34.828724Z  INFO ort::logging: Allocated memory at 000001D730328080 to 000001D730428080
+2026-02-28T16:50:34.831898Z  INFO ort::logging: Done saving initialized tensors
+2026-02-28T16:50:34.837253Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:34.843415Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:34.849652Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:34.855746Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:34.862879Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 18874368
+2026-02-28T16:50:34.910581Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 9437184
+2026-02-28T16:50:34.936336Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:34.942582Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:34.948560Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:34.954488Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:34.962218Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 18874368
+2026-02-28T16:50:35.004422Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 9437184
+2026-02-28T16:50:35.026978Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.033539Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.039071Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.043491Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.048063Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 18874368
+2026-02-28T16:50:35.109835Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 9437184
+2026-02-28T16:50:35.138612Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.148265Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.156572Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.162179Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.167120Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 18874368
+2026-02-28T16:50:35.223148Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 9437184
+2026-02-28T16:50:35.249302Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.257643Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.264809Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.273436Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.278188Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 18874368
+2026-02-28T16:50:35.337910Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 9437184
+2026-02-28T16:50:35.364584Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.371581Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.377469Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.387535Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.395926Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 18874368
+2026-02-28T16:50:35.454070Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 9437184
+2026-02-28T16:50:35.476098Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.482355Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.487738Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.494988Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.501517Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 18874368
+2026-02-28T16:50:35.559433Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 9437184
+2026-02-28T16:50:35.587088Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.595675Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.603335Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.610916Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.619626Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 18874368
+2026-02-28T16:50:35.677427Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 9437184
+2026-02-28T16:50:35.703909Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.709887Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.717146Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.722227Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.729606Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 18874368
+2026-02-28T16:50:35.784775Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 9437184
+2026-02-28T16:50:35.806381Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.810811Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.817825Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.822181Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.829103Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 18874368
+2026-02-28T16:50:35.873527Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 9437184
+2026-02-28T16:50:35.897155Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.904764Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.909759Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.919204Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:35.926326Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 18874368
+2026-02-28T16:50:35.973341Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 9437184
+2026-02-28T16:50:36.000400Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:36.007646Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:36.015097Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:36.020440Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 2359296
+2026-02-28T16:50:36.026329Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 18874368
+2026-02-28T16:50:36.088027Z  INFO ort::logging: Reserving memory in BFCArena for Cpu size: 9437184
+2026-02-28T16:50:36.127164Z  INFO ort::logging: Session successfully initialized.
+2026-02-28T16:50:36.127641Z  INFO omni_core::embedder: loaded ONNX embedding model model=C:\Users\mayan\AppData\Local\omnicontext\models\jina-embeddings-v2-base-code\model.onnx
+2026-02-28T16:50:38.236125Z  INFO omni_core::pipeline: engine initialized repo=\\?\C:\Omniverse\Projects\omnicontext data_dir=C:\Users\mayan\AppData\Local\omnicontext\repos\80aa8fb8 embedding_available=true
+2026-02-28T16:50:38.237727Z  INFO omnicontext_mcp: using existing index files=56 chunks=906
+2026-02-28T16:50:38.237868Z  INFO omnicontext_mcp: engine ready, starting MCP server on stdio
+2026-02-28T16:50:38.583584Z ERROR omnicontext_mcp: failed to start MCP server error=expect initialized notification, but received: Some(Request(JsonRpcRequest { jsonrpc: JsonRpcVersion2_0, id: Number(2), request: ListToolsRequest(RequestOptionalParam { method: ListToolsRequestMethod, params: Some(PaginatedRequestParams { meta: None, cursor: None }), extensions: Extensions }) }))
+Error: expect initialized notification, but received: Some(Request(JsonRpcRequest { jsonrpc: JsonRpcVersion2_0, id: Number(2), request: ListToolsRequest(RequestOptionalParam { method: ListToolsRequestMethod, params: Some(PaginatedRequestParams { meta: None, cursor: None }), extensions: Extensions }) }))
+Error: MCP server exited with code: exit code: 1
