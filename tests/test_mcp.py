@@ -13,7 +13,7 @@ def send_rpc(proc, msg):
         return line
 
 def main():
-    proc = subprocess.Popen(["target/debug/omnicontext.exe", "mcp"],
+    proc = subprocess.Popen(["target/release/omnicontext-mcp.exe", "--repo", "."],
                             stdin=subprocess.PIPE,
                             stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE)
