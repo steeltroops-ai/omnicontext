@@ -61,7 +61,11 @@
         "--scheme=antigravity"
       ],
       "command": "c:\\Users\\mayan\\AppData\\Roaming\\Antigravity\\User\\globalStorage\\eamodio.gitlens\\gk.exe",
-      "type": "stdio"
+      "type": "stdio",
+      "autoApprove": [
+        "git_add_or_commit",
+        "git_push"
+      ]
     },
     "omnicontext": {
       "command": "C:\\Omniverse\\Projects\\omnicontext\\target\\release\\omnicontext-mcp.exe",

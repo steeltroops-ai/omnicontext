@@ -39,7 +39,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 rusqlite = { version = "0.33", features = ["bundled", "vtab", "functions"] }
 
 # AST parsing
-tree-sitter = "0.25"
+tree-sitter = "0.26"
 tree-sitter-python = "0.23"
 tree-sitter-typescript = "0.23"
 tree-sitter-rust = "0.23"
@@ -54,6 +54,7 @@ tree-sitter-md = "0.5"
 
 # Embedding / ML
 ort = { version = "2.0.0-rc.11", features = ["download-binaries", "load-dynamic", "copy-dylibs"] }
+# Note: Using rc.11 which targets ONNX Runtime 1.23.x - this is the latest stable version
 
 # Vector index
 # usearch = "2"  # TODO: evaluate version compatibility during Phase 1
@@ -93,7 +94,7 @@ sha2 = "0.10"
 hex = "0.4"
 
 # Tokenization
-tokenizers = "0.21"
+tokenizers = "0.22"
 
 # HTTP downloads (model auto-download)
 reqwest = { version = "0.12", features = ["blocking", "rustls-tls"], default-features = false }
