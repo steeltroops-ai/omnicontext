@@ -180,21 +180,13 @@ impl PythonAnalyzer {
                         match inner_child.kind() {
                             "function_definition" => {
                                 if let Some(elem) = self.extract_function(
-                                    inner_child,
-                                    source,
-                                    module_name,
-                                    scope_path,
-                                    &decorators,
+                                    inner_child, source, module_name, scope_path, &decorators,
                                 ) {
                                     let mut inner_scope = scope_path.to_vec();
                                     inner_scope.push(elem.name.clone());
                                     if let Some(body) = inner_child.child_by_field_name("body") {
                                         self.walk_node(
-                                            body,
-                                            source,
-                                            module_name,
-                                            &inner_scope,
-                                            elements,
+                                            body, source, module_name, &inner_scope, elements,
                                         );
                                     }
                                     // Use the decorated_definition's span for full content
@@ -206,21 +198,13 @@ impl PythonAnalyzer {
                             }
                             "class_definition" => {
                                 if let Some(elem) = self.extract_class(
-                                    inner_child,
-                                    source,
-                                    module_name,
-                                    scope_path,
-                                    &decorators,
+                                    inner_child, source, module_name, scope_path, &decorators,
                                 ) {
                                     let mut inner_scope = scope_path.to_vec();
                                     inner_scope.push(elem.name.clone());
                                     if let Some(body) = inner_child.child_by_field_name("body") {
                                         self.walk_node(
-                                            body,
-                                            source,
-                                            module_name,
-                                            &inner_scope,
-                                            elements,
+                                            body, source, module_name, &inner_scope, elements,
                                         );
                                     }
                                     let mut elem = elem;

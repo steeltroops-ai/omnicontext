@@ -109,12 +109,7 @@ impl RustAnalyzer {
                         inner_scope.push(elem.name.clone());
                         if let Some(body) = child.child_by_field_name("body") {
                             self.walk_node(
-                                body,
-                                source,
-                                module_name,
-                                &inner_scope,
-                                elements,
-                                in_test_mod,
+                                body, source, module_name, &inner_scope, elements, in_test_mod,
                             );
                         }
                         elements.push(elem);
@@ -127,12 +122,7 @@ impl RustAnalyzer {
                         inner_scope.push(elem.name.clone());
                         if let Some(body) = child.child_by_field_name("body") {
                             self.walk_node(
-                                body,
-                                source,
-                                module_name,
-                                &inner_scope,
-                                elements,
-                                in_test_mod,
+                                body, source, module_name, &inner_scope, elements, in_test_mod,
                             );
                         }
                         elements.push(elem);
@@ -164,12 +154,7 @@ impl RustAnalyzer {
                     // Recurse into other compound nodes
                     if child.child_count() > 0 && child.kind() != "string_literal" {
                         self.walk_node(
-                            child,
-                            source,
-                            module_name,
-                            scope_path,
-                            elements,
-                            in_test_mod,
+                            child, source, module_name, scope_path, elements, in_test_mod,
                         );
                     }
                 }
@@ -354,12 +339,7 @@ impl RustAnalyzer {
             let mut inner_scope = scope_path.to_vec();
             inner_scope.push(name);
             self.walk_node(
-                body,
-                source,
-                module_name,
-                &inner_scope,
-                elements,
-                is_test_mod,
+                body, source, module_name, &inner_scope, elements, is_test_mod,
             );
         }
     }

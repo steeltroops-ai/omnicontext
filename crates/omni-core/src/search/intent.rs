@@ -171,6 +171,7 @@ impl QueryIntent {
 
 /// Context selection strategy based on query intent.
 #[derive(Debug, Clone, Copy)]
+#[allow(clippy::struct_excessive_bools)]
 pub struct ContextStrategy {
     /// Include architectural overview and module map.
     pub include_architecture: bool,
@@ -284,10 +285,7 @@ mod tests {
             QueryIntent::classify("improve performance"),
             QueryIntent::Edit
         );
-        assert_eq!(
-            QueryIntent::classify("add a new field"),
-            QueryIntent::Edit
-        );
+        assert_eq!(QueryIntent::classify("add a new field"), QueryIntent::Edit);
     }
 
     #[test]
@@ -296,10 +294,7 @@ mod tests {
             QueryIntent::classify("authentication"),
             QueryIntent::Unknown
         );
-        assert_eq!(
-            QueryIntent::classify("Config"),
-            QueryIntent::Unknown
-        );
+        assert_eq!(QueryIntent::classify("Config"), QueryIntent::Unknown);
     }
 
     #[test]
@@ -332,4 +327,3 @@ mod tests {
         assert_eq!(strategy.graph_depth, 3);
     }
 }
-
