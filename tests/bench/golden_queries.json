@@ -1,92 +1,484 @@
-[
-  {
-    "query": "search engine hybrid retrieval",
-    "expected": ["SearchEngine", "search", "fuse_results", "rrf_score"],
-    "intent": "explain",
-    "description": "Should find the SearchEngine struct and its search methods"
-  },
-  {
-    "query": "how does the pipeline process files",
-    "expected": ["process_file", "run_index", "Engine"],
-    "intent": "explain",
-    "description": "Should find the pipeline processing logic"
-  },
-  {
-    "query": "dependency graph construction",
-    "expected": ["DependencyGraph", "DependencyEdge", "insert_dependency"],
-    "intent": "explain",
-    "description": "Should find graph-related types and operations"
-  },
-  {
-    "query": "tree-sitter parser language analyzer",
-    "expected": ["LanguageAnalyzer", "parser", "parse_file"],
-    "intent": "explain",
-    "description": "Should find the parser module and language analyzers"
-  },
-  {
-    "query": "embedding model ONNX inference",
-    "expected": ["Embedder", "embed_batch", "embed_query"],
-    "intent": "explain",
-    "description": "Should find the embedder module"
-  },
-  {
-    "query": "file watcher debounce",
-    "expected": ["FileWatcher", "watch", "full_scan"],
-    "intent": "explain",
-    "description": "Should find the watcher module"
-  },
-  {
-    "query": "MCP server tools",
-    "expected": ["OmniContextServer", "search_code", "get_symbol"],
-    "intent": "explain",
-    "description": "Should find the MCP tool definitions"
-  },
-  {
-    "query": "configuration loading precedence",
-    "expected": ["Config", "load", "merge_from_file"],
-    "intent": "explain",
-    "description": "Should find the config loading chain"
-  },
-  {
-    "query": "error handling patterns",
-    "expected": ["OmniError", "OmniResult"],
-    "intent": "explain",
-    "description": "Should find error types"
-  },
-  {
-    "query": "context window token budget assembly",
-    "expected": ["ContextWindow", "assemble_context_window", "ContextEntry"],
-    "intent": "explain",
-    "description": "Should find context assembly logic"
-  },
-  {
-    "query": "SQLite FTS5 keyword search",
-    "expected": ["keyword_search", "MetadataIndex"],
-    "intent": "explain",
-    "description": "Should find the FTS5 search implementation"
-  },
-  {
-    "query": "vector index persistence",
-    "expected": ["VectorIndex", "save", "load"],
-    "intent": "explain",
-    "description": "Should find vector index serialization"
-  },
-  {
-    "query": "chunker AST code splitting",
-    "expected": ["Chunker", "chunk_file", "ChunkKind"],
-    "intent": "explain",
-    "description": "Should find the chunker module"
-  },
-  {
-    "query": "RRF fusion scoring algorithm",
-    "expected": ["fuse_results", "rrf_score", "ScoredChunk"],
-    "intent": "explain",
-    "description": "Should find the RRF implementation"
-  },
-  {
-    "query": "git commit lineage",
-    "expected": ["commits", "CommitInfo"],
-    "intent": "explain",
-    "description": "Should find the commits module"
+{
+  "version": "1.0",
+  "description": "Golden query dataset for search quality benchmarking",
+  "queries": [
+    {
+      "id": "explain_001",
+      "intent": "Explain",
+      "query": "how does the search engine work?",
+      "expected_results": [
+        {
+          "symbol_path": "omni_core::search::SearchEngine",
+          "relevance": 3,
+          "reason": "Main search engine implementation"
+        },
+        {
+          "symbol_path": "omni_core::search::SearchEngine::search",
+          "relevance": 3,
+          "reason": "Core search method"
+        },
+        {
+          "symbol_path": "omni_core::search::SearchEngine::fuse_results",
+          "relevance": 2,
+          "reason": "RRF fusion logic"
+        },
+        {
+          "symbol_path": "omni_core::search::analyze_query",
+          "relevance": 2,
+          "reason": "Query analysis"
+        }
+      ]
+    },
+    {
+      "id": "explain_002",
+      "intent": "Explain",
+      "query": "what is the embedding pipeline?",
+      "expected_results": [
+        {
+          "symbol_path": "omni_core::embedder::Embedder",
+          "relevance": 3,
+          "reason": "Main embedder implementation"
+        },
+        {
+          "symbol_path": "omni_core::embedder::Embedder::embed_batch",
+          "relevance": 3,
+          "reason": "Batch embedding method"
+        },
+        {
+          "symbol_path": "omni_core::embedder::model_manager::ModelManager",
+          "relevance": 2,
+          "reason": "Model management"
+        },
+        {
+          "symbol_path": "omni_core::pipeline::Pipeline::index_file",
+          "relevance": 2,
+          "reason": "Indexing pipeline"
+        }
+      ]
+    },
+    {
+      "id": "edit_001",
+      "intent": "Edit",
+      "query": "add logging to search function",
+      "expected_results": [
+        {
+          "symbol_path": "omni_core::search::SearchEngine::search",
+          "relevance": 3,
+          "reason": "Function to add logging to"
+        },
+        {
+          "symbol_path": "omni_core::search::SearchEngine::fuse_results",
+          "relevance": 2,
+          "reason": "Related search logic"
+        },
+        {
+          "symbol_path": "omni_core::search::SearchEngine::assemble_context_window",
+          "relevance": 2,
+          "reason": "Related search logic"
+        }
+      ]
+    },
+    {
+      "id": "edit_002",
+      "intent": "Edit",
+      "query": "improve chunking algorithm",
+      "expected_results": [
+        {
+          "symbol_path": "omni_core::chunker::chunk_elements",
+          "relevance": 3,
+          "reason": "Main chunking function"
+        },
+        {
+          "symbol_path": "omni_core::chunker::element_to_chunk",
+          "relevance": 3,
+          "reason": "Element conversion logic"
+        },
+        {
+          "symbol_path": "omni_core::chunker::compute_backward_context",
+          "relevance": 2,
+          "reason": "Context computation"
+        },
+        {
+          "symbol_path": "omni_core::chunker::compute_forward_context",
+          "relevance": 2,
+          "reason": "Context computation"
+        }
+      ]
+    },
+    {
+      "id": "debug_001",
+      "intent": "Debug",
+      "query": "fix embedding coverage bug",
+      "expected_results": [
+        {
+          "symbol_path": "omni_core::embedder::Embedder::embed_batch",
+          "relevance": 3,
+          "reason": "Embedding implementation"
+        },
+        {
+          "symbol_path": "omni_core::embedder::Embedder::tfidf_fallback",
+          "relevance": 3,
+          "reason": "Fallback logic"
+        },
+        {
+          "symbol_path": "omni_core::pipeline::Pipeline::index_file",
+          "relevance": 2,
+          "reason": "Indexing pipeline"
+        }
+      ]
+    },
+    {
+      "id": "debug_002",
+      "intent": "Debug",
+      "query": "why is search returning no results?",
+      "expected_results": [
+        {
+          "symbol_path": "omni_core::search::SearchEngine::search",
+          "relevance": 3,
+          "reason": "Main search function"
+        },
+        {
+          "symbol_path": "omni_core::index::MetadataIndex::keyword_search",
+          "relevance": 2,
+          "reason": "Keyword search implementation"
+        },
+        {
+          "symbol_path": "omni_core::vector::VectorIndex::search",
+          "relevance": 2,
+          "reason": "Vector search implementation"
+        },
+        {
+          "symbol_path": "omni_core::search::SearchEngine::fuse_results",
+          "relevance": 2,
+          "reason": "Result fusion"
+        }
+      ]
+    },
+    {
+      "id": "refactor_001",
+      "intent": "Refactor",
+      "query": "rename SearchEngine to HybridSearchEngine",
+      "expected_results": [
+        {
+          "symbol_path": "omni_core::search::SearchEngine",
+          "relevance": 3,
+          "reason": "Type to rename"
+        },
+        {
+          "symbol_path": "omni_core::search::SearchEngine::new",
+          "relevance": 2,
+          "reason": "Constructor"
+        },
+        {
+          "symbol_path": "omni_core::search::SearchEngine::search",
+          "relevance": 2,
+          "reason": "Method"
+        }
+      ]
+    },
+    {
+      "id": "refactor_002",
+      "intent": "Refactor",
+      "query": "extract RRF fusion into separate module",
+      "expected_results": [
+        {
+          "symbol_path": "omni_core::search::SearchEngine::fuse_results",
+          "relevance": 3,
+          "reason": "Function to extract"
+        },
+        {
+          "symbol_path": "omni_core::search::SearchEngine::rrf_score",
+          "relevance": 3,
+          "reason": "Related RRF logic"
+        },
+        {
+          "symbol_path": "omni_core::search::ScoredChunk",
+          "relevance": 2,
+          "reason": "Related type"
+        }
+      ]
+    },
+    {
+      "id": "generate_001",
+      "intent": "Generate",
+      "query": "create a new language parser for Ruby",
+      "expected_results": [
+        {
+          "symbol_path": "omni_core::parser::languages::python::PythonExtractor",
+          "relevance": 3,
+          "reason": "Example parser implementation"
+        },
+        {
+          "symbol_path": "omni_core::parser::languages::typescript::TypeScriptExtractor",
+          "relevance": 2,
+          "reason": "Example parser implementation"
+        },
+        {
+          "symbol_path": "omni_core::parser::registry::LanguageRegistry::register",
+          "relevance": 2,
+          "reason": "Registration logic"
+        },
+        {
+          "symbol_path": "omni_core::parser::LanguageExtractor",
+          "relevance": 2,
+          "reason": "Trait to implement"
+        }
+      ]
+    },
+    {
+      "id": "generate_002",
+      "intent": "Generate",
+      "query": "implement a new MCP tool for code analysis",
+      "expected_results": [
+        {
+          "symbol_path": "omni_mcp::tools::register_tools",
+          "relevance": 3,
+          "reason": "Tool registration"
+        },
+        {
+          "symbol_path": "omni_mcp::tools::search_code",
+          "relevance": 2,
+          "reason": "Example tool implementation"
+        },
+        {
+          "symbol_path": "omni_mcp::tools::get_symbol",
+          "relevance": 2,
+          "reason": "Example tool implementation"
+        }
+      ]
+    },
+    {
+      "id": "multi_file_001",
+      "intent": "Explain",
+      "query": "how does indexing work from file to database?",
+      "expected_results": [
+        {
+          "symbol_path": "omni_core::pipeline::Pipeline::index_file",
+          "relevance": 3,
+          "reason": "Main indexing entry point"
+        },
+        {
+          "symbol_path": "omni_core::parser::parse_file",
+          "relevance": 3,
+          "reason": "File parsing"
+        },
+        {
+          "symbol_path": "omni_core::chunker::chunk_elements",
+          "relevance": 3,
+          "reason": "Chunking"
+        },
+        {
+          "symbol_path": "omni_core::embedder::Embedder::embed_batch",
+          "relevance": 3,
+          "reason": "Embedding"
+        },
+        {
+          "symbol_path": "omni_core::index::MetadataIndex::insert_chunks",
+          "relevance": 3,
+          "reason": "Database insertion"
+        }
+      ]
+    },
+    {
+      "id": "cross_module_001",
+      "intent": "Explain",
+      "query": "how do search results get assembled into context?",
+      "expected_results": [
+        {
+          "symbol_path": "omni_core::search::SearchEngine::assemble_context_window",
+          "relevance": 3,
+          "reason": "Context assembly"
+        },
+        {
+          "symbol_path": "omni_core::search::context_assembler::ContextAssembler",
+          "relevance": 3,
+          "reason": "Context assembler"
+        },
+        {
+          "symbol_path": "omni_core::search::context_assembler::ContextAssembler::assemble",
+          "relevance": 3,
+          "reason": "Assembly method"
+        },
+        {
+          "symbol_path": "omni_core::types::ContextWindow",
+          "relevance": 2,
+          "reason": "Result type"
+        }
+      ]
+    },
+    {
+      "id": "ambiguous_001",
+      "intent": "Unknown",
+      "query": "Config",
+      "expected_results": [
+        {
+          "symbol_path": "omni_core::config::Config",
+          "relevance": 3,
+          "reason": "Main config type"
+        },
+        {
+          "symbol_path": "omni_core::config::IndexingConfig",
+          "relevance": 2,
+          "reason": "Indexing config"
+        },
+        {
+          "symbol_path": "omni_core::config::SearchConfig",
+          "relevance": 2,
+          "reason": "Search config"
+        }
+      ]
+    },
+    {
+      "id": "ambiguous_002",
+      "intent": "Unknown",
+      "query": "authentication",
+      "expected_results": [
+        {
+          "symbol_path": "omni_core::server::AuthConfig",
+          "relevance": 2,
+          "reason": "Auth configuration"
+        },
+        {
+          "symbol_path": "omni_core::server::validate_api_key",
+          "relevance": 2,
+          "reason": "Auth validation"
+        }
+      ]
+    },
+    {
+      "id": "symbol_001",
+      "intent": "Edit",
+      "query": "SearchEngine::search",
+      "expected_results": [
+        {
+          "symbol_path": "omni_core::search::SearchEngine::search",
+          "relevance": 3,
+          "reason": "Exact symbol match"
+        }
+      ]
+    },
+    {
+      "id": "symbol_002",
+      "intent": "Edit",
+      "query": "Embedder::embed_batch",
+      "expected_results": [
+        {
+          "symbol_path": "omni_core::embedder::Embedder::embed_batch",
+          "relevance": 3,
+          "reason": "Exact symbol match"
+        }
+      ]
+    },
+    {
+      "id": "edge_case_001",
+      "intent": "Debug",
+      "query": "memory leak in vector index",
+      "expected_results": [
+        {
+          "symbol_path": "omni_core::vector::VectorIndex",
+          "relevance": 3,
+          "reason": "Vector index implementation"
+        },
+        {
+          "symbol_path": "omni_core::vector::VectorIndex::add",
+          "relevance": 2,
+          "reason": "Add operation"
+        },
+        {
+          "symbol_path": "omni_core::vector::VectorIndex::remove",
+          "relevance": 2,
+          "reason": "Remove operation"
+        }
+      ]
+    },
+    {
+      "id": "edge_case_002",
+      "intent": "Explain",
+      "query": "what happens when embedding fails?",
+      "expected_results": [
+        {
+          "symbol_path": "omni_core::embedder::Embedder::embed_batch",
+          "relevance": 3,
+          "reason": "Embedding implementation"
+        },
+        {
+          "symbol_path": "omni_core::embedder::Embedder::tfidf_fallback",
+          "relevance": 3,
+          "reason": "Fallback mechanism"
+        },
+        {
+          "symbol_path": "omni_core::embedder::Embedder::is_available",
+          "relevance": 2,
+          "reason": "Availability check"
+        }
+      ]
+    },
+    {
+      "id": "performance_001",
+      "intent": "Edit",
+      "query": "optimize search performance",
+      "expected_results": [
+        {
+          "symbol_path": "omni_core::search::SearchEngine::search",
+          "relevance": 3,
+          "reason": "Main search function"
+        },
+        {
+          "symbol_path": "omni_core::search::SearchEngine::fuse_results",
+          "relevance": 2,
+          "reason": "Fusion logic"
+        },
+        {
+          "symbol_path": "omni_core::vector::VectorIndex::search",
+          "relevance": 2,
+          "reason": "Vector search"
+        }
+      ]
+    },
+    {
+      "id": "architecture_001",
+      "intent": "Explain",
+      "query": "what is the overall architecture?",
+      "expected_results": [
+        {
+          "symbol_path": "omni_core::pipeline::Pipeline",
+          "relevance": 3,
+          "reason": "Main pipeline orchestrator"
+        },
+        {
+          "symbol_path": "omni_core::search::SearchEngine",
+          "relevance": 2,
+          "reason": "Search component"
+        },
+        {
+          "symbol_path": "omni_core::index::MetadataIndex",
+          "relevance": 2,
+          "reason": "Index component"
+        },
+        {
+          "symbol_path": "omni_core::embedder::Embedder",
+          "relevance": 2,
+          "reason": "Embedding component"
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "total_queries": 20,
+    "intents": {
+      "Explain": 7,
+      "Edit": 5,
+      "Debug": 4,
+      "Refactor": 2,
+      "Generate": 2,
+      "Unknown": 2
+    },
+    "coverage": {
+      "single_file": 10,
+      "multi_file": 5,
+      "cross_module": 3,
+      "ambiguous": 2,
+      "edge_cases": 2
+    }
   }
-]
+}

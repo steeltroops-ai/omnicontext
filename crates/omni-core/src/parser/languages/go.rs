@@ -109,20 +109,12 @@ impl GoAnalyzer {
                 }
                 "type_declaration" => {
                     self.extract_type_declarations(
-                        child,
-                        source,
-                        module_name,
-                        scope_path,
-                        elements,
+                        child, source, module_name, scope_path, elements,
                     );
                 }
                 "const_declaration" | "var_declaration" => {
                     self.extract_const_declarations(
-                        child,
-                        source,
-                        module_name,
-                        scope_path,
-                        elements,
+                        child, source, module_name, scope_path, elements,
                     );
                 }
                 _ => {

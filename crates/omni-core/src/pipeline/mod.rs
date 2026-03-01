@@ -286,12 +286,7 @@ impl Engine {
 
         // Chunk the elements (returns Vec<Chunk>)
         let chunks = chunker::chunk_elements(
-            &elements,
-            &file_info,
-            &imports,
-            file_id,
-            &self.config,
-            &content,
+            &elements, &file_info, &imports, file_id, &self.config, &content,
         );
 
         // Build Symbol records from the chunks

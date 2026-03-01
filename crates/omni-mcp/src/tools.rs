@@ -899,12 +899,7 @@ fn expand_query(query: &str) -> Vec<String> {
         (
             &["auth", "authentication", "login"],
             &[
-                "authenticate",
-                "verify",
-                "credential",
-                "token",
-                "session",
-                "password",
+                "authenticate", "verify", "credential", "token", "session", "password",
             ],
         ),
         (
@@ -924,24 +919,13 @@ fn expand_query(query: &str) -> Vec<String> {
         (
             &["database", "db", "storage"],
             &[
-                "database",
-                "db",
-                "sql",
-                "query",
-                "insert",
-                "select",
-                "connection",
+                "database", "db", "sql", "query", "insert", "select", "connection",
             ],
         ),
         (
             &["api", "endpoint", "route"],
             &[
-                "handler",
-                "route",
-                "endpoint",
-                "request",
-                "response",
-                "middleware",
+                "handler", "route", "endpoint", "request", "response", "middleware",
             ],
         ),
         (
@@ -959,12 +943,7 @@ fn expand_query(query: &str) -> Vec<String> {
         (
             &["serialize", "serialization"],
             &[
-                "serialize",
-                "deserialize",
-                "json",
-                "serde",
-                "encode",
-                "decode",
+                "serialize", "deserialize", "json", "serde", "encode", "decode",
             ],
         ),
         (

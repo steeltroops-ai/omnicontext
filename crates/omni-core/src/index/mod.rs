@@ -675,6 +675,21 @@ impl MetadataIndex {
         })
     }
 
+    /// Get file counts grouped by language.
+    pub fn language_distribution(&self) -> OmniResult<Vec<(String, usize)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT language, COUNT(*) FROM files GROUP BY language ORDER BY COUNT(*) DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as usize))
+        })?;
+        let mut dist = Vec::new();
+        for r in rows {
+            dist.push(r?);
+        }
+        Ok(dist)
+    }
+
     /// Get the raw connection for advanced queries.
     /// Use sparingly -- prefer adding methods to this struct.
     pub fn connection(&self) -> &Connection {

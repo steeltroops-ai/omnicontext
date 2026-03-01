@@ -72,10 +72,7 @@ pub fn chunk_elements(
 
         if total_tokens <= max_tokens {
             chunks.push(element_to_chunk(
-                elem,
-                file_id,
-                total_tokens,
-                &context_header,
+                elem, file_id, total_tokens, &context_header,
             ));
         } else {
             let split_chunks =
@@ -318,14 +315,7 @@ fn split_element(
     };
 
     create_chunks_from_splits(
-        elem,
-        file_id,
-        &lines,
-        &split_points,
-        &header,
-        max_tokens,
-        overlap_fraction,
-        context_header,
+        elem, file_id, &lines, &split_points, &header, max_tokens, overlap_fraction, context_header,
     )
 }
 

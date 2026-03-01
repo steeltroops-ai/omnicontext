@@ -30,12 +30,19 @@
     clippy::unused_self
 )]
 
+pub mod context_assembler;
+pub mod intent;
+
 use crate::embedder::Embedder;
 use crate::error::OmniResult;
 use crate::index::MetadataIndex;
 use crate::reranker::Reranker;
 use crate::types::{Chunk, ContextEntry, ContextWindow, ScoreBreakdown, SearchResult};
 use crate::vector::VectorIndex;
+
+// Re-export key types for convenience
+pub use context_assembler::ContextAssembler;
+pub use intent::{ContextStrategy, QueryIntent};
 
 /// Hybrid search engine that fuses multiple retrieval signals.
 pub struct SearchEngine {
