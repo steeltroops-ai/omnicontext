@@ -312,7 +312,7 @@ async fn handle_preflight(
     start: std::time::Instant,
 ) -> Result<serde_json::Value, (i32, String)> {
     use std::fmt::Write;
-    
+
     let eng = engine.lock().await;
 
     // Build the context window from the user's prompt
@@ -449,7 +449,7 @@ async fn handle_index(engine: Arc<Mutex<Engine>>) -> Result<serde_json::Value, (
         .map(|result| {
             #[allow(clippy::cast_possible_truncation)]
             let elapsed_ms = start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
-            
+
             serde_json::json!({
                 "files_processed": result.files_processed,
                 "chunks_created": result.chunks_created,

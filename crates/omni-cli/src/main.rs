@@ -306,9 +306,10 @@ async fn cmd_mcp(repo: &str, _transport: &str, _port: u16) -> Result<()> {
 
     // Try to find the MCP binary next to the current executable
     let current_exe = std::env::current_exe()?;
-    let mcp_binary = current_exe
-        .parent()
-        .map_or_else(|| std::path::PathBuf::from("omnicontext-mcp"), |p| p.join("omnicontext-mcp"));
+    let mcp_binary = current_exe.parent().map_or_else(
+        || std::path::PathBuf::from("omnicontext-mcp"),
+        |p| p.join("omnicontext-mcp"),
+    );
 
     let status = tokio::process::Command::new(&mcp_binary)
         .arg("--repo")

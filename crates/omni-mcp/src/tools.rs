@@ -15,9 +15,7 @@ use rmcp::{
     handler::server::tool::ToolRouter,
     handler::server::wrapper::Parameters,
     model::{CallToolResult, Content, Implementation, ServerCapabilities, ServerInfo},
-    tool, tool_handler, tool_router,
-    ErrorData as McpError,
-    ServerHandler,
+    tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler,
 };
 use serde::Deserialize;
 use tokio::sync::Mutex;
@@ -133,7 +131,7 @@ impl OmniContextServer {
         params: Parameters<SearchCodeParams>,
     ) -> Result<CallToolResult, McpError> {
         use std::fmt::Write;
-        
+
         let limit = params.0.limit.unwrap_or(10);
         let query = &params.0.query;
         let engine = self.engine.lock().await;
@@ -181,7 +179,7 @@ impl OmniContextServer {
         params: Parameters<ContextWindowParams>,
     ) -> Result<CallToolResult, McpError> {
         use std::fmt::Write;
-        
+
         let limit = params.0.limit.unwrap_or(20);
         let query = &params.0.query;
         let engine = self.engine.lock().await;
@@ -253,7 +251,7 @@ impl OmniContextServer {
         params: Parameters<GetSymbolParams>,
     ) -> Result<CallToolResult, McpError> {
         use std::fmt::Write;
-        
+
         let name = &params.0.name;
         let limit = params.0.limit.unwrap_or(5);
         let engine = self.engine.lock().await;
@@ -318,7 +316,7 @@ impl OmniContextServer {
         params: Parameters<GetFileSummaryParams>,
     ) -> Result<CallToolResult, McpError> {
         use std::fmt::Write;
-        
+
         // Helper: strip Windows UNC prefix for consistent comparison
         fn normalize_path_str(s: &str) -> &str {
             s.strip_prefix(r"\\?\").unwrap_or(s)
@@ -465,7 +463,7 @@ impl OmniContextServer {
         params: Parameters<GetDependenciesParams>,
     ) -> Result<CallToolResult, McpError> {
         use std::fmt::Write;
-        
+
         let symbol_name = &params.0.symbol;
         let direction = params.0.direction.as_deref().unwrap_or("both");
         let engine = self.engine.lock().await;
@@ -478,11 +476,9 @@ impl OmniContextServer {
             Ok(None) => {
                 // Try prefix search
                 match index.search_symbols_by_name(symbol_name, 1) {
-                    Ok(mut syms) if !syms.is_empty() => {
-                        syms.pop().ok_or_else(|| {
-                            McpError::internal_error("symbol list unexpectedly empty".to_string(), None)
-                        })?
-                    }
+                    Ok(mut syms) if !syms.is_empty() => syms.pop().ok_or_else(|| {
+                        McpError::internal_error("symbol list unexpectedly empty".to_string(), None)
+                    })?,
                     _ => {
                         return Ok(CallToolResult::success(vec![Content::text(format!(
                             "Symbol '{symbol_name}' not found in the index.",
@@ -586,13 +582,7 @@ impl OmniContextServer {
                                 .map_or_else(|| format!("symbol#{id}"), |s| s.fqn)
                         })
                         .collect();
-                    writeln!(
-                        output,
-                        "**Cycle {}**: {} -> ...",
-                        i + 1,
-                        names.join(" -> ")
-                    )
-                    .ok();
+                    writeln!(output, "**Cycle {}**: {} -> ...", i + 1, names.join(" -> ")).ok();
                 }
             }
         }
@@ -618,7 +608,7 @@ impl OmniContextServer {
         params: Parameters<FindPatternsParams>,
     ) -> Result<CallToolResult, McpError> {
         use std::fmt::Write;
-        
+
         let limit = params.0.limit.unwrap_or(5);
         let pattern = &params.0.pattern;
         let engine = self.engine.lock().await;
@@ -735,7 +725,7 @@ impl OmniContextServer {
         #[allow(unused)] params: Parameters<GetModuleMapParams>,
     ) -> Result<CallToolResult, McpError> {
         use std::fmt::Write;
-        
+
         let engine = self.engine.lock().await;
         let index = engine.metadata_index();
 
@@ -814,7 +804,7 @@ impl OmniContextServer {
         params: Parameters<SearchByIntentParams>,
     ) -> Result<CallToolResult, McpError> {
         use std::fmt::Write;
-        
+
         let query = &params.0.query;
         let limit = params.0.limit.unwrap_or(10);
         let engine = self.engine.lock().await;
