@@ -7,9 +7,10 @@ OmniContext is a **high-performance, locally-runnable code context engine** that
 [![Status](https://img.shields.io/badge/Status-Alpha-orange)](https://github.com/steeltroops-ai/omnicontext)
 [![Version](https://img.shields.io/badge/Version-v0.1.0-blue)](https://github.com/steeltroops-ai/omnicontext/releases)
 [![Build](https://img.shields.io/github/actions/workflow/status/steeltroops-ai/omnicontext/ci.yml?branch=main&label=Build)](https://github.com/steeltroops-ai/omnicontext/actions)
+[![Tests](https://img.shields.io/badge/Tests-149%20passing-brightgreen)](https://github.com/steeltroops-ai/omnicontext)
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](https://github.com/steeltroops-ai/omnicontext)
 [![License](<https://img.shields.io/badge/License-Open%20Core%20(Apache%202.0%20%2F%20Commercial)-blue>)](./LICENSE)
-[![Tests](https://img.shields.io/badge/Tests-149%20passing-brightgreen)](https://github.com/steeltroops-ai/omnicontext)
+
 
 ## Tech Stack
 
