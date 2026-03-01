@@ -1,4 +1,83 @@
 {
   "mcpServers": {
+    "sequential-thinking": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ],
+      "env": {},
+      "disabled": true,
+      "disabledTools": [
+        "sequentialthinking"
+      ]
+    },
+    "netlify": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@netlify/mcp"
+      ],
+      "env": {
+        "NETLIFY_PERSONAL_ACCESS_TOKEN": "nfp_vBRu1seK1YLSJ4PdSbhQ9BQz5TziMEc36bb3"
+      },
+      "disabled": true
+    },
+    "prisma-mcp-server": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "prisma",
+        "mcp"
+      ],
+      "env": {},
+      "disabled": true
+    },
+    "cloudrun": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@google-cloud/cloud-run-mcp"
+      ],
+      "env": {},
+      "disabled": true
+    },
+    "augment-context": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@augmentcode/mcp-server-context"
+      ],
+      "env": {
+        "AUGMENT_API_KEY": "YOUR_ACTUAL_API_KEY_HERE"
+      },
+      "disabled": true
+    },
+    "GitKraken": {
+      "args": [
+        "mcp",
+        "--host=antigravity",
+        "--source=gitlens",
+        "--scheme=antigravity"
+      ],
+      "command": "c:\\Users\\mayan\\AppData\\Roaming\\Antigravity\\User\\globalStorage\\eamodio.gitlens\\gk.exe",
+      "type": "stdio"
+    },
+    "omnicontext": {
+      "command": "C:\\Omniverse\\Projects\\omnicontext\\target\\release\\omnicontext-mcp.exe",
+      "args": [
+        "--repo",
+        "C:\\Omniverse\\Projects\\omnicontext"
+      ],
+      "autoApprove": [
+        "get_status",
+        "search_code",
+        "get_architecture",
+        "get_symbol",
+        "get_file_summary",
+        "find_patterns",
+        "get_dependencies"
+      ]
+    }
   }
 }

@@ -1,83 +1,93 @@
 # OmniContext Installation Guide
 
-Universal code context engine for AI coding agents. Works on Windows, macOS, and Linux.
+## For End Users (Recommended Methods)
 
-## Quick Install
+Choose ONE method based on your platform:
 
-### Windows (PowerShell)
+### Windows
 
+**Option 1: Direct Install (Recommended)**
 ```powershell
-irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install/install.ps1 | iex
+irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install.ps1 | iex
 ```
 
-### macOS/Linux (Bash)
-
-```bash
-curl -sSL https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install/install.sh | bash
-```
-
-## Package Managers
-
-### Homebrew (macOS/Linux)
-
-```bash
-brew tap steeltroops-ai/omnicontext
-brew install omnicontext
-```
-
-### Scoop (Windows)
-
+**Option 2: Scoop Package Manager**
 ```powershell
 scoop bucket add omnicontext https://github.com/steeltroops-ai/omnicontext
 scoop install omnicontext
 ```
 
+### macOS / Linux
+
+**Option 1: Direct Install (Recommended)**
+```bash
+curl -fsSL https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install.sh | bash
+```
+
+**Option 2: Homebrew (macOS/Linux)**
+```bash
+brew tap steeltroops-ai/omnicontext
+brew install omnicontext
+```
+
 ## What Gets Installed
 
-1. **Binaries** (added to PATH automatically):
-   - `omnicontext` - CLI for indexing and searching
-   - `omnicontext-mcp` - MCP server for AI agents
+All installation methods install to the same locations:
 
-2. **AI Model** (~550MB, auto-downloaded):
-   - Jina AI code embedding model
-   - Enables semantic code search
-   - Stored in `~/.omnicontext/models/`
+### Binaries
+- **Windows**: `%USERPROFILE%\.omnicontext\bin\`
+  - `omnicontext.exe` - CLI tool
+  - `omnicontext-mcp.exe` - MCP server
+  - `omnicontext-daemon.exe` - Background indexer (optional)
 
-3. **Installation Locations**:
-   - Windows: `%USERPROFILE%\.omnicontext\bin\`
-   - macOS/Linux: `~/.local/bin/`
+- **Unix/Linux/macOS**: `~/.local/bin/`
+  - `omnicontext` - CLI tool
+  - `omnicontext-mcp` - MCP server
+  - `omnicontext-daemon` - Background indexer (optional)
 
-## Getting Started
+### Data & Models
+- **All platforms**: `~/.omnicontext/`
+  - `models/jina-embeddings-v2-base-code.onnx` (~550MB) - AI embedding model
+  - `repos/{hash}/` - Indexed repository data per project
+    - `index.db` - SQLite database (metadata, FTS5)
+    - `vectors.usearch` - Vector index (HNSW)
+    - `graph.bin` - Dependency graph
 
-### 1. Index Your Repository
+### Configuration
+- **MCP Config**: `~/.kiro/settings/mcp.json` (if using with Kiro/Claude)
 
+## Installation Process
+
+All methods perform these steps:
+
+1. **Download** - Fetch latest release binary for your platform
+2. **Stop Processes** - Gracefully stop any running instances
+3. **Install Binaries** - Place executables in PATH
+4. **Download Model** - Fetch Jina AI embedding model (~550MB, one-time)
+5. **Verify** - Test binary execution and model presence
+6. **Configure PATH** - Ensure binaries are accessible
+
+## Post-Installation
+
+### Verify Installation
 ```bash
-cd /path/to/your/repo
+omnicontext --version
+```
+
+### Index Your First Repository
+```bash
+cd /path/to/your/code
 omnicontext index .
 ```
 
-This creates:
-- SQLite database with code metadata
-- Vector index for semantic search
-- Dependency graph
-
-### 2. Search Your Code
-
+### Search Your Code
 ```bash
-# Keyword search
 omnicontext search "authentication"
-
-# Semantic search
-omnicontext search "how to validate user input"
-
-# Symbol lookup
-omnicontext search "UserService.authenticate"
 ```
 
-### 3. Connect to AI Agents
+### Configure MCP (for AI Agents)
 
-Add to your MCP configuration (e.g., `~/.kiro/settings/mcp.json`):
-
+Add to `~/.kiro/settings/mcp.json`:
 ```json
 {
   "mcpServers": {
@@ -90,158 +100,144 @@ Add to your MCP configuration (e.g., `~/.kiro/settings/mcp.json`):
 }
 ```
 
-Restart your IDE/editor to load the configuration.
-
-## MCP Tools Available
-
-Once connected, AI agents can use:
-
-- `search_code` - Hybrid keyword + semantic search
-- `get_symbol` - Lookup symbols by name
-- `get_file_summary` - Get file structure overview
-- `get_dependencies` - Traverse dependency graph
-- `find_patterns` - Identify code patterns
-- `get_architecture` - Generate architecture overview
-- `explain_codebase` - Comprehensive project explanation
-- `get_status` - Engine status and metrics
-
 ## Updating
 
-### Re-run Installation Script
-
-```powershell
-# Windows
-irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install/install.ps1 | iex
-```
-
+### All Platforms
 ```bash
-# macOS/Linux
-curl -sSL https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install/install.sh | bash
+# Windows
+irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/update.ps1 | iex
+
+# Unix/Linux/macOS
+curl -fsSL https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install.sh | bash
 ```
 
 ### Package Managers
-
 ```bash
-# Homebrew
-brew upgrade omnicontext
-
-# Scoop
+# Scoop (Windows)
 scoop update omnicontext
+
+# Homebrew (macOS/Linux)
+brew upgrade omnicontext
 ```
+
+**Note**: Updates preserve all indexed data and configuration.
 
 ## Uninstalling
 
 ### Windows
-
 ```powershell
-# Remove binaries
-Remove-Item -Recurse -Force "$env:USERPROFILE\.omnicontext"
-
-# Remove from PATH (manually edit environment variables)
+irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/uninstall.ps1 | iex
 ```
 
-### macOS/Linux
-
+### Package Managers
 ```bash
-# Remove binaries
-rm -rf ~/.local/bin/omnicontext*
-rm -rf ~/.omnicontext
+# Scoop
+scoop uninstall omnicontext
 
-# If installed via Homebrew
+# Homebrew
 brew uninstall omnicontext
 ```
 
-## Troubleshooting
+**Options**:
+- Keep indexed data: Add `-KeepData` flag
+- Keep MCP config: Add `-KeepConfig` flag
 
-### Model Download Fails
+## For Developers
 
-If the AI model download is interrupted:
+If you're contributing to OmniContext or need to build from source:
 
-```bash
-# Manually trigger download
-omnicontext index .
-```
-
-The model will auto-download with progress bar.
-
-### Binary Not Found
-
-Ensure installation directory is in PATH:
-
-```powershell
-# Windows - Check PATH
-$env:PATH -split ';' | Select-String "omnicontext"
-
-# Add to PATH if missing
-[Environment]::SetEnvironmentVariable("PATH", "$env:PATH;$env:USERPROFILE\.omnicontext\bin", "User")
-```
-
-```bash
-# macOS/Linux - Check PATH
-echo $PATH | grep -o "[^:]*omnicontext[^:]*"
-
-# Add to PATH if missing (add to ~/.bashrc or ~/.zshrc)
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-### MCP Server Not Connecting
-
-1. Verify binary executes: `omnicontext-mcp --help`
-2. Check MCP configuration path
-3. Restart IDE/editor
-4. Check IDE logs for MCP errors
-
-### Indexing Fails
-
-```bash
-# Check status
-omnicontext status
-
-# Re-index with verbose logging
-RUST_LOG=debug omnicontext index .
-```
-
-## System Requirements
-
-- **OS**: Windows 10+, macOS 10.15+, Linux (glibc 2.31+)
-- **Architecture**: x86_64 (Intel/AMD) or ARM64 (Apple Silicon)
-- **Disk Space**: ~600MB (binaries + model)
-- **Memory**: ~100MB per 10k files indexed
-- **Internet**: Required for initial model download only
-
-## Offline Usage
-
-After initial installation and model download, OmniContext works completely offline:
-- No API keys required
-- No cloud dependencies
-- All processing on your machine
-- Privacy-first design
-
-## Developer Installation
-
-If you're developing OmniContext, see:
-- `scripts/README.md` - Developer scripts
-- `CONTRIBUTING.md` - Development guide
-
-Build from source:
-
+### Build from Source
 ```bash
 # Clone repository
 git clone https://github.com/steeltroops-ai/omnicontext.git
 cd omnicontext
 
-# Build all binaries
+# Build release binaries
 cargo build --release
 
 # Binaries in: target/release/
 ```
 
+### Development Scripts
+
+Located in `scripts/` (for contributors only):
+
+- `install-mcp.ps1` - Build and configure MCP server from source
+- `install-mcp-quick.ps1` - Quick config update (no build)
+- `test-mcp.ps1` - Run MCP integration tests
+- `test-mcp-protocol.py` - Protocol compliance tests
+
+### Run Tests
+```bash
+cargo test --workspace
+```
+
+## Troubleshooting
+
+### Model Download Fails
+The installer automatically downloads the embedding model. If it fails:
+```bash
+# Manually trigger download
+cd /tmp
+omnicontext index .
+```
+
+### Binary Not in PATH
+
+**Windows**: Add to PowerShell profile (`$PROFILE`):
+```powershell
+$env:PATH += ";$env:USERPROFILE\.omnicontext\bin"
+```
+
+**Unix/Linux/macOS**: Add to `~/.bashrc` or `~/.zshrc`:
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+### Permission Denied (Unix/Linux/macOS)
+```bash
+chmod +x ~/.local/bin/omnicontext*
+```
+
+### Scoop/Homebrew Not Working
+Fall back to direct install method - it's the most reliable.
+
+## Edge Cases Handled
+
+All installation methods handle:
+
+- ✅ Existing installations (seamless updates)
+- ✅ Running processes (graceful shutdown)
+- ✅ Nested/flat archive structures
+- ✅ Missing directories (auto-created)
+- ✅ PATH not configured (instructions provided)
+- ✅ Model already downloaded (skip re-download)
+- ✅ Network failures (clear error messages)
+- ✅ Architecture detection (x86_64, aarch64)
+- ✅ OS detection (Windows, macOS, Linux)
+
+## FAQ
+
+**Q: Which installation method should I use?**
+A: Direct install (`install.ps1` or `install.sh`) is recommended. Package managers are convenient if you already use them.
+
+**Q: Does Scoop really work on Windows?**
+A: Yes! Scoop is a popular Windows package manager. It works like Homebrew for macOS.
+
+**Q: Can I use multiple installation methods?**
+A: No, choose ONE method. All install to the same location, so mixing methods can cause conflicts.
+
+**Q: Do I need to re-index after updating?**
+A: No, indexed data is preserved. Re-index only if you want to pick up new features.
+
+**Q: How much disk space is needed?**
+A: ~600MB minimum (550MB model + 50MB binary). Indexed repos add ~1-5MB per 1000 files.
+
+**Q: Can I install without internet?**
+A: No, the embedding model must be downloaded. After first install, OmniContext works offline.
+
 ## Support
 
-- **Issues**: https://github.com/steeltroops-ai/omnicontext/issues
-- **Discussions**: https://github.com/steeltroops-ai/omnicontext/discussions
-- **Documentation**: https://github.com/steeltroops-ai/omnicontext/tree/main/docs
-
-## License
-
-Apache 2.0 - See LICENSE file for details.
+- Documentation: https://github.com/steeltroops-ai/omnicontext
+- Issues: https://github.com/steeltroops-ai/omnicontext/issues
+- Discussions: https://github.com/steeltroops-ai/omnicontext/discussions

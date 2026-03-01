@@ -3,87 +3,290 @@ name: Release
 on:
   push:
     tags:
-      - "v*"
-
-permissions:
-  contents: write
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., v0.1.0-alpha)'
+        required: true
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      version: ${{ steps.get_version.outputs.version }}
+    steps:
+      - name: Get version
+        id: get_version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.get_version.outputs.version }}
+          release_name: OmniContext ${{ steps.get_version.outputs.version }}
+          draft: false
+          prerelease: ${{ contains(steps.get_version.outputs.version, 'alpha') || contains(steps.get_version.outputs.version, 'beta') }}
+          body: |
+            ## OmniContext ${{ steps.get_version.outputs.version }}
+            
+            Universal code context engine for AI coding agents.
+            
+            ### Installation
+            
+            **Windows (PowerShell)**:
+            ```powershell
+            irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install/install.ps1 | iex
+            ```
+            
+            **macOS/Linux (Bash)**:
+            ```bash
+            curl -sSL https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install/install.sh | bash
+            ```
+            
+            ### What's Included
+            
+            - `omnicontext` - CLI for indexing and searching
+            - `omnicontext-mcp` - MCP server for AI agents
+            - `omnicontext-daemon` - Background file watcher
+            
+            ### Features
+            
+            - 🔍 Hybrid search (keyword + semantic)
+            - 🧠 Jina AI code embeddings
+            - 🔗 Dependency graph analysis
+            - 📊 Code pattern detection
+            - 🏗️ Architecture overview
+            - 🔌 MCP protocol support
+            
+            ### System Requirements
+            
+            - Windows 10+, macOS 10.15+, or Linux (glibc 2.31+)
+            - x86_64 or ARM64 architecture
+            - ~600MB disk space (binaries + model)
+            
+            See [INSTALL.md](https://github.com/steeltroops-ai/omnicontext/blob/main/INSTALL.md) for detailed instructions.
+
   build:
     name: Build ${{ matrix.target }}
+    needs: create-release
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
-            archive: tar.gz
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            archive: tar.gz
-          - target: aarch64-apple-darwin
-            os: macos-latest
-            archive: tar.gz
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
+          # Windows x64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
             archive: zip
+            
+          # Linux x64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+            
+          # macOS x64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            archive: tar.gz
+            
+          # macOS ARM64 (Apple Silicon)
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - uses: Swatinem/rust-cache@v2
+      - name: Cache cargo registry
+        uses: actions/cache@v4
         with:
-          key: ${{ matrix.target }}
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build release binaries
-        run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Package (Unix)
-        if: matrix.archive == 'tar.gz'
         run: |
-          mkdir -p dist
-          cp target/${{ matrix.target }}/release/omnicontext dist/
-          cp target/${{ matrix.target }}/release/omnicontext-mcp dist/
-          tar czf omnicontext-${{ github.ref_name }}-${{ matrix.target }}.tar.gz -C dist .
+          cargo build --release --target ${{ matrix.target }} --workspace --bins
 
-      - name: Package (Windows)
-        if: matrix.archive == 'zip'
+      - name: Create archive (Windows)
+        if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist
-          Copy-Item target/${{ matrix.target }}/release/omnicontext.exe dist/
-          Copy-Item target/${{ matrix.target }}/release/omnicontext-mcp.exe dist/
-          Compress-Archive -Path dist/* -DestinationPath omnicontext-${{ github.ref_name }}-${{ matrix.target }}.zip
+          $version = "${{ needs.create-release.outputs.version }}"
+          $target = "${{ matrix.target }}"
+          $archiveName = "omnicontext-${version}-${target}.zip"
+          
+          # Create staging directory
+          New-Item -ItemType Directory -Path "staging" -Force
+          
+          # Copy binaries
+          Copy-Item "target/${{ matrix.target }}/release/omnicontext.exe" "staging/"
+          Copy-Item "target/${{ matrix.target }}/release/omnicontext-mcp.exe" "staging/"
+          Copy-Item "target/${{ matrix.target }}/release/omnicontext-daemon.exe" "staging/"
+          
+          # Copy documentation
+          Copy-Item "README.md" "staging/"
+          Copy-Item "LICENSE" "staging/"
+          Copy-Item "INSTALL.md" "staging/"
+          
+          # Create zip
+          Compress-Archive -Path "staging/*" -DestinationPath $archiveName
+          
+          # Generate SHA256
+          $hash = (Get-FileHash -Algorithm SHA256 $archiveName).Hash
+          "$hash  $archiveName" | Out-File -FilePath "${archiveName}.sha256" -Encoding ASCII
+          
+          echo "ARCHIVE_NAME=$archiveName" >> $env:GITHUB_ENV
+          echo "ARCHIVE_PATH=$archiveName" >> $env:GITHUB_ENV
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+      - name: Create archive (Unix)
+        if: matrix.os != 'windows-latest'
+        run: |
+          version="${{ needs.create-release.outputs.version }}"
+          target="${{ matrix.target }}"
+          archive_name="omnicontext-${version}-${target}.tar.gz"
+          
+          # Create staging directory
+          mkdir -p staging
+          
+          # Copy binaries
+          cp "target/${{ matrix.target }}/release/omnicontext" staging/
+          cp "target/${{ matrix.target }}/release/omnicontext-mcp" staging/
+          cp "target/${{ matrix.target }}/release/omnicontext-daemon" staging/ || true
+          
+          # Copy documentation
+          cp README.md staging/
+          cp LICENSE staging/
+          cp INSTALL.md staging/
+          
+          # Create tarball
+          tar -czf "$archive_name" -C staging .
+          
+          # Generate SHA256
+          if [[ "$OSTYPE" == "darwin"* ]]; then
+            shasum -a 256 "$archive_name" > "${archive_name}.sha256"
+          else
+            sha256sum "$archive_name" > "${archive_name}.sha256"
+          fi
+          
+          echo "ARCHIVE_NAME=$archive_name" >> $GITHUB_ENV
+          echo "ARCHIVE_PATH=$archive_name" >> $GITHUB_ENV
+
+      - name: Upload release archive
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          name: omnicontext-${{ matrix.target }}
-          path: omnicontext-*.*
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ${{ env.ARCHIVE_PATH }}
+          asset_name: ${{ env.ARCHIVE_NAME }}
+          asset_content_type: application/octet-stream
 
-  release:
-    name: Create Release
-    needs: build
+      - name: Upload SHA256 checksum
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: ${{ env.ARCHIVE_PATH }}.sha256
+          asset_name: ${{ env.ARCHIVE_NAME }}.sha256
+          asset_content_type: text/plain
+
+  update-package-manifests:
+    name: Update Package Manifests
+    needs: [create-release, build]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          merge-multiple: true
+      - name: Download release assets
+        run: |
+          version="${{ needs.create-release.outputs.version }}"
+          
+          # Download SHA256 files
+          for target in x86_64-pc-windows-msvc x86_64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin; do
+            if [[ "$target" == *"windows"* ]]; then
+              ext="zip"
+            else
+              ext="tar.gz"
+            fi
+            
+            url="https://github.com/${{ github.repository }}/releases/download/${version}/omnicontext-${version}-${target}.${ext}.sha256"
+            curl -sSL "$url" -o "${target}.sha256" || echo "Failed to download $target"
+          done
 
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Update Homebrew formula
+        run: |
+          version="${{ needs.create-release.outputs.version }}"
+          version_number="${version#v}"
+          
+          # Read SHA256 hashes
+          sha256_x64=$(cat x86_64-apple-darwin.sha256 | cut -d' ' -f1)
+          sha256_arm64=$(cat aarch64-apple-darwin.sha256 | cut -d' ' -f1)
+          sha256_linux=$(cat x86_64-unknown-linux-gnu.sha256 | cut -d' ' -f1)
+          
+          # Update formula
+          sed -i "s/version \".*\"/version \"${version_number}\"/" distribution/homebrew/omnicontext.rb
+          sed -i "s/PLACEHOLDER_SHA256_X64/${sha256_x64}/" distribution/homebrew/omnicontext.rb
+          sed -i "s/PLACEHOLDER_SHA256_ARM64/${sha256_arm64}/" distribution/homebrew/omnicontext.rb
+          sed -i "s/PLACEHOLDER_SHA256_LINUX/${sha256_linux}/" distribution/homebrew/omnicontext.rb
+
+      - name: Update Scoop manifest
+        run: |
+          version="${{ needs.create-release.outputs.version }}"
+          version_number="${version#v}"
+          
+          # Read SHA256 hash
+          sha256_windows=$(cat x86_64-pc-windows-msvc.sha256 | cut -d' ' -f1)
+          
+          # Update manifest
+          sed -i "s/\"version\": \".*\"/\"version\": \"${version_number}\"/" distribution/scoop/omnicontext.json
+          sed -i "s/PLACEHOLDER_SHA256/${sha256_windows}/" distribution/scoop/omnicontext.json
+          sed -i "s/v[0-9.]*-*[a-z]*/${version}/g" distribution/scoop/omnicontext.json
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v5
         with:
-          generate_release_notes: true
-          files: artifacts/*
+          commit-message: "chore: update package manifests for ${{ needs.create-release.outputs.version }}"
+          title: "Update package manifests for ${{ needs.create-release.outputs.version }}"
+          body: |
+            Automated update of package manager manifests for release ${{ needs.create-release.outputs.version }}.
+            
+            - Updated Homebrew formula with SHA256 hashes
+            - Updated Scoop manifest with SHA256 hash
+            - Updated version numbers
+          branch: release/${{ needs.create-release.outputs.version }}
+          delete-branch: true
+

@@ -110,18 +110,21 @@ Write-Host "Initializing OmniContext & downloading Jina AI embedding model..." -
 Write-Host "This requires a robust internet connection. Please wait while the model downloads."
 
 try {
-    # Using 'omnicontext status' in an empty temp directory to force embedder initialization
-    # which will trigger the download logic and show the indicatif progress bar.
+    # Create temporary directory with dummy file to trigger model download
     $InitTemp = Join-Path $env:TEMP "omnicontext_init_temp"
     if (!(Test-Path $InitTemp)) {
         New-Item -ItemType Directory -Path $InitTemp | Out-Null
     }
     
-    # Run status
+    # Create dummy source file
+    "// Dummy file for model download" | Out-File -FilePath "$InitTemp\dummy.rs" -Encoding UTF8
+    "fn main() {}" | Out-File -FilePath "$InitTemp\dummy.rs" -Append -Encoding UTF8
+    
+    # Run index command to trigger model download
     Set-Location $InitTemp
-    & $OutExe status
+    & $OutExe index .
     if ($LASTEXITCODE -ne 0) {
-        throw "Status command failed with exit code $LASTEXITCODE"
+        throw "Index command failed with exit code $LASTEXITCODE"
     }
     
     Remove-Item -Path $InitTemp -Recurse -Force
