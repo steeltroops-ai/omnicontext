@@ -1,0 +1,81 @@
+name: Benchmark
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  benchmark:
+    name: Run Benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: dtolnay/rust-toolchain@stable
+      
+      - uses: Swatinem/rust-cache@v2
+      
+      - name: Run benchmarks
+        run: cargo bench --workspace --no-fail-fast
+      
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-results
+          path: target/criterion/
+          retention-days: 30
+
+  performance-regression:
+    name: Performance Regression Check
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - uses: dtolnay/rust-toolchain@stable
+      
+      - uses: Swatinem/rust-cache@v2
+      
+      - name: Run baseline benchmarks (main)
+        run: |
+          git checkout main
+          cargo bench --workspace --no-fail-fast -- --save-baseline main
+      
+      - name: Run PR benchmarks
+        run: |
+          git checkout ${{ github.event.pull_request.head.sha }}
+          cargo bench --workspace --no-fail-fast -- --baseline main
+      
+      - name: Comment PR with results
+        uses: actions/github-script@v7
+        if: always()
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            
+            // Read benchmark results
+            const criterionDir = 'target/criterion';
+            let comment = '## 📊 Benchmark Results\n\n';
+            
+            if (fs.existsSync(criterionDir)) {
+              comment += 'Benchmarks completed. Check artifacts for detailed results.\n';
+            } else {
+              comment += 'No benchmark results found.\n';
+            }
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });

@@ -86,7 +86,12 @@ jobs:
              [[ "${{ needs.test.result }}" != "success" ]] || \
              [[ "${{ needs.fmt.result }}" != "success" ]] || \
              [[ "${{ needs.clippy.result }}" != "success" ]]; then
-            echo "One or more required checks failed"
+            echo "❌ One or more required checks failed"
+            echo "Check results:"
+            echo "  - check: ${{ needs.check.result }}"
+            echo "  - test: ${{ needs.test.result }}"
+            echo "  - fmt: ${{ needs.fmt.result }}"
+            echo "  - clippy: ${{ needs.clippy.result }}"
             exit 1
           fi
-          echo "All required checks passed!"
+          echo "✅ All required checks passed!"
