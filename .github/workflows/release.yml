@@ -2,281 +2,304 @@ name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches: [main]
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Version to release (e.g., v0.1.0-alpha)'
-        required: true
+      force_bump:
+        description: 'Force version bump (major, minor, patch, or auto)'
+        required: false
+        default: 'auto'
 
 env:
   CARGO_TERM_COLOR: always
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  create-release:
-    name: Create Release
+  # Step 1: Analyze commits and determine if we should release
+  analyze:
+    name: Analyze Changes
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.get_version.outputs.version }}
+      should_release: ${{ steps.check.outputs.should_release }}
+      bump_type: ${{ steps.check.outputs.bump_type }}
+      new_version: ${{ steps.version.outputs.new_version }}
     steps:
-      - name: Get version
-        id: get_version
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get versions
+        id: versions
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          current=$(grep '^version = ' Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+          last_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "current=$current" >> $GITHUB_OUTPUT
+          echo "last_tag=$last_tag" >> $GITHUB_OUTPUT
+
+      - name: Analyze commits
+        id: check
+        run: |
+          # Get commits since last tag
+          if [ "${{ steps.versions.outputs.last_tag }}" = "v0.0.0" ]; then
+            commits=$(git log --pretty=format:"%s" HEAD)
           else
-            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+            commits=$(git log --pretty=format:"%s" ${{ steps.versions.outputs.last_tag }}..HEAD)
           fi
-      
-      - name: Create Release
-        id: create_release
+          
+          # Check for conventional commits
+          has_breaking=false
+          has_feat=false
+          has_fix=false
+          
+          while IFS= read -r commit; do
+            if echo "$commit" | grep -qiE '^[a-z]+(\([a-z]+\))?!:|BREAKING CHANGE:'; then
+              has_breaking=true
+            elif echo "$commit" | grep -qiE '^feat(\([a-z]+\))?:'; then
+              has_feat=true
+            elif echo "$commit" | grep -qiE '^fix(\([a-z]+\))?:'; then
+              has_fix=true
+            fi
+          done <<< "$commits"
+          
+          # Determine bump type
+          bump_type="none"
+          if [ "$has_breaking" = true ]; then
+            bump_type="major"
+          elif [ "$has_feat" = true ]; then
+            bump_type="minor"
+          elif [ "$has_fix" = true ]; then
+            bump_type="patch"
+          fi
+          
+          # Override with manual input
+          if [ "${{ github.event.inputs.force_bump }}" != "" ] && [ "${{ github.event.inputs.force_bump }}" != "auto" ]; then
+            bump_type="${{ github.event.inputs.force_bump }}"
+          fi
+          
+          should_release="false"
+          if [ "$bump_type" != "none" ]; then
+            should_release="true"
+          fi
+          
+          echo "bump_type=$bump_type" >> $GITHUB_OUTPUT
+          echo "should_release=$should_release" >> $GITHUB_OUTPUT
+          echo "Bump type: $bump_type"
+          echo "Should release: $should_release"
+
+      - name: Calculate new version
+        id: version
+        if: steps.check.outputs.should_release == 'true'
+        run: |
+          current="${{ steps.versions.outputs.current }}"
+          bump_type="${{ steps.check.outputs.bump_type }}"
+          
+          IFS='.' read -r major minor patch <<< "$current"
+          
+          case $bump_type in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
+          
+          new_version="${major}.${minor}.${patch}"
+          echo "new_version=$new_version" >> $GITHUB_OUTPUT
+          echo "New version: $new_version"
+
+  # Step 2: Bump version and create release
+  bump-and-tag:
+    name: Bump Version and Tag
+    needs: analyze
+    if: needs.analyze.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ needs.analyze.outputs.new_version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Update version files
+        run: |
+          new_version="${{ needs.analyze.outputs.new_version }}"
+          
+          # Update all Cargo.toml files
+          sed -i "s/^version = \".*\"/version = \"${new_version}\"/" Cargo.toml
+          for f in crates/*/Cargo.toml; do
+            sed -i "s/^version = \".*\"/version = \"${new_version}\"/" "$f"
+            sed -i "s/omni-core = { version = \".*\"/omni-core = { version = \"${new_version}\"/" "$f"
+          done
+          
+          cargo update --workspace --quiet
+
+      - name: Generate changelog
+        run: |
+          last_tag="${{ needs.analyze.outputs.last_tag }}"
+          if [ "$last_tag" = "v0.0.0" ]; then
+            commits=$(git log --pretty=format:"%s|%h" HEAD)
+          else
+            commits=$(git log --pretty=format:"%s|%h" ${last_tag}..HEAD)
+          fi
+          
+          changelog="## What's Changed\n\n"
+          breaking=""; features=""; fixes=""; other=""
+          
+          while IFS='|' read -r msg hash; do
+            if echo "$msg" | grep -qiE '^[a-z]+!:|BREAKING CHANGE:'; then
+              breaking="${breaking}- ${msg} (${hash})\n"
+            elif echo "$msg" | grep -qiE '^feat:'; then
+              clean=$(echo "$msg" | sed 's/^feat[^:]*: //')
+              features="${features}- ${clean} (${hash})\n"
+            elif echo "$msg" | grep -qiE '^fix:'; then
+              clean=$(echo "$msg" | sed 's/^fix[^:]*: //')
+              fixes="${fixes}- ${clean} (${hash})\n"
+            else
+              other="${other}- ${msg} (${hash})\n"
+            fi
+          done <<< "$commits"
+          
+          [ -n "$breaking" ] && changelog="${changelog}### ⚠️ Breaking Changes\n\n${breaking}\n"
+          [ -n "$features" ] && changelog="${changelog}### ✨ Features\n\n${features}\n"
+          [ -n "$fixes" ] && changelog="${changelog}### 🐛 Bug Fixes\n\n${fixes}\n"
+          [ -n "$other" ] && changelog="${changelog}### 🔧 Other Changes\n\n${other}\n"
+          
+          echo -e "$changelog" > /tmp/changelog.md
+
+      - name: Update CHANGELOG.md
+        run: |
+          new_version="${{ needs.analyze.outputs.new_version }}"
+          date=$(date +%Y-%m-%d)
+          changelog=$(cat /tmp/changelog.md)
+          
+          if [ ! -f CHANGELOG.md ]; then
+            echo "# Changelog" > CHANGELOG.md
+            echo "" >> CHANGELOG.md
+            echo "## [${new_version}] - ${date}" >> CHANGELOG.md
+            echo "" >> CHANGELOG.md
+            cat /tmp/changelog.md >> CHANGELOG.md
+          else
+            awk -v version="$new_version" -v date="$date" -v changelog="$(cat /tmp/changelog.md)" '
+              /^# Changelog/ { print; print ""; print "## [" version "] - " date; print ""; print changelog; next }
+              { print }
+            ' CHANGELOG.md > CHANGELOG.md.tmp
+            mv CHANGELOG.md.tmp CHANGELOG.md
+          fi
+
+      - name: Commit and push
+        run: |
+          new_version="${{ needs.analyze.outputs.new_version }}"
+          
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          git add Cargo.toml Cargo.lock crates/*/Cargo.toml CHANGELOG.md
+          git commit -m "chore(release): bump version to ${new_version} [skip ci]"
+          git tag -a "v${new_version}" -m "Release v${new_version}"
+          
+          git push origin main
+          git push origin "v${new_version}"
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ needs.analyze.outputs.new_version }}
+          name: OmniContext v${{ needs.analyze.outputs.new_version }}
+          body_path: /tmp/changelog.md
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ steps.get_version.outputs.version }}
-          name: OmniContext ${{ steps.get_version.outputs.version }}
-          draft: false
-          prerelease: ${{ contains(steps.get_version.outputs.version, 'alpha') || contains(steps.get_version.outputs.version, 'beta') }}
-          generate_release_notes: true
-          body: |
-            ## OmniContext ${{ steps.get_version.outputs.version }}
-            
-            Universal code context engine for AI coding agents.
-            
-            ### Installation
-            
-            **Windows (PowerShell)**:
-            ```powershell
-            irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install/install.ps1 | iex
-            ```
-            
-            **macOS/Linux (Bash)**:
-            ```bash
-            curl -sSL https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install/install.sh | bash
-            ```
-            
-            ### What's Included
-            
-            - `omnicontext` - CLI for indexing and searching
-            - `omnicontext-mcp` - MCP server for AI agents
-            - `omnicontext-daemon` - Background file watcher
-            
-            ### Features
-            
-            - 🔍 Hybrid search (keyword + semantic)
-            - 🧠 Jina AI code embeddings
-            - 🔗 Dependency graph analysis
-            - 📊 Code pattern detection
-            - 🏗️ Architecture overview
-            - 🔌 MCP protocol support
-            
-            ### System Requirements
-            
-            - Windows 10+, macOS 10.15+, or Linux (glibc 2.31+)
-            - x86_64 or ARM64 architecture
-            - ~600MB disk space (binaries + model)
-            
-            See [INSTALL.md](https://github.com/steeltroops-ai/omnicontext/blob/main/INSTALL.md) for detailed instructions.
 
+  # Step 3: Build binaries for all platforms
   build:
     name: Build ${{ matrix.target }}
-    needs: create-release
+    needs: bump-and-tag
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Windows x64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            archive: zip
-            
-          # Linux x64
+            ext: zip
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            archive: tar.gz
-            
-          # macOS x64
+            ext: tar.gz
           - os: macos-latest
             target: x86_64-apple-darwin
-            archive: tar.gz
-            
-          # macOS ARM64 (Apple Silicon)
+            ext: tar.gz
           - os: macos-latest
             target: aarch64-apple-darwin
-            archive: tar.gz
-
+            ext: tar.gz
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.bump-and-tag.outputs.version }}
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+      - uses: Swatinem/rust-cache@v2
 
-      - name: Cache cargo index
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Cache cargo build
-        uses: actions/cache@v4
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-build-target-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Build release binaries
-        run: |
-          cargo build --release --target ${{ matrix.target }} --workspace --bins
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} --workspace --bins
 
       - name: Create archive (Windows)
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
-          $version = "${{ needs.create-release.outputs.version }}"
+          $version = "${{ needs.bump-and-tag.outputs.version }}"
           $target = "${{ matrix.target }}"
-          $archiveName = "omnicontext-${version}-${target}.zip"
+          $archive = "omnicontext-${version}-${target}.zip"
           
-          # Create staging directory
-          New-Item -ItemType Directory -Path "staging" -Force
+          New-Item -ItemType Directory -Path staging -Force
+          Copy-Item "target/${{ matrix.target }}/release/omnicontext.exe" staging/
+          Copy-Item "target/${{ matrix.target }}/release/omnicontext-mcp.exe" staging/
+          Copy-Item "target/${{ matrix.target }}/release/omnicontext-daemon.exe" staging/
+          Copy-Item README.md, LICENSE, INSTALL.md staging/
           
-          # Copy binaries
-          Copy-Item "target/${{ matrix.target }}/release/omnicontext.exe" "staging/"
-          Copy-Item "target/${{ matrix.target }}/release/omnicontext-mcp.exe" "staging/"
-          Copy-Item "target/${{ matrix.target }}/release/omnicontext-daemon.exe" "staging/"
+          Compress-Archive -Path staging/* -DestinationPath $archive
+          $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash
+          "$hash  $archive" | Out-File -FilePath "${archive}.sha256" -Encoding ASCII
           
-          # Copy documentation
-          Copy-Item "README.md" "staging/"
-          Copy-Item "LICENSE" "staging/"
-          Copy-Item "INSTALL.md" "staging/"
-          
-          # Create zip
-          Compress-Archive -Path "staging/*" -DestinationPath $archiveName
-          
-          # Generate SHA256
-          $hash = (Get-FileHash -Algorithm SHA256 $archiveName).Hash
-          "$hash  $archiveName" | Out-File -FilePath "${archiveName}.sha256" -Encoding ASCII
-          
-          echo "ARCHIVE_NAME=$archiveName" >> $env:GITHUB_ENV
-          echo "ARCHIVE_PATH=$archiveName" >> $env:GITHUB_ENV
+          echo "ARCHIVE=$archive" >> $env:GITHUB_ENV
 
       - name: Create archive (Unix)
         if: matrix.os != 'windows-latest'
         run: |
-          version="${{ needs.create-release.outputs.version }}"
+          version="${{ needs.bump-and-tag.outputs.version }}"
           target="${{ matrix.target }}"
-          archive_name="omnicontext-${version}-${target}.tar.gz"
+          archive="omnicontext-${version}-${target}.tar.gz"
           
-          # Create staging directory
           mkdir -p staging
-          
-          # Copy binaries
           cp "target/${{ matrix.target }}/release/omnicontext" staging/
           cp "target/${{ matrix.target }}/release/omnicontext-mcp" staging/
           cp "target/${{ matrix.target }}/release/omnicontext-daemon" staging/ || true
+          cp README.md LICENSE INSTALL.md staging/
           
-          # Copy documentation
-          cp README.md staging/
-          cp LICENSE staging/
-          cp INSTALL.md staging/
+          tar -czf "$archive" -C staging .
           
-          # Create tarball
-          tar -czf "$archive_name" -C staging .
-          
-          # Generate SHA256
           if [[ "$OSTYPE" == "darwin"* ]]; then
-            shasum -a 256 "$archive_name" > "${archive_name}.sha256"
+            shasum -a 256 "$archive" > "${archive}.sha256"
           else
-            sha256sum "$archive_name" > "${archive_name}.sha256"
+            sha256sum "$archive" > "${archive}.sha256"
           fi
           
-          echo "ARCHIVE_NAME=$archive_name" >> $GITHUB_ENV
-          echo "ARCHIVE_PATH=$archive_name" >> $GITHUB_ENV
+          echo "ARCHIVE=$archive" >> $GITHUB_ENV
 
-      - name: Upload release archive
+      - name: Upload to release
         uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ needs.bump-and-tag.outputs.version }}
+          files: |
+            ${{ env.ARCHIVE }}
+            ${{ env.ARCHIVE }}.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ needs.create-release.outputs.version }}
-          files: |
-            ${{ env.ARCHIVE_PATH }}
-            ${{ env.ARCHIVE_PATH }}.sha256
-
-  update-package-manifests:
-    name: Update Package Manifests
-    needs: [create-release, build]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download release assets
-        run: |
-          version="${{ needs.create-release.outputs.version }}"
-          
-          # Download SHA256 files
-          for target in x86_64-pc-windows-msvc x86_64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin; do
-            if [[ "$target" == *"windows"* ]]; then
-              ext="zip"
-            else
-              ext="tar.gz"
-            fi
-            
-            url="https://github.com/${{ github.repository }}/releases/download/${version}/omnicontext-${version}-${target}.${ext}.sha256"
-            curl -sSL "$url" -o "${target}.sha256" || echo "Failed to download $target"
-          done
-
-      - name: Update Homebrew formula
-        run: |
-          version="${{ needs.create-release.outputs.version }}"
-          version_number="${version#v}"
-          
-          # Read SHA256 hashes
-          sha256_x64=$(cat x86_64-apple-darwin.sha256 | cut -d' ' -f1)
-          sha256_arm64=$(cat aarch64-apple-darwin.sha256 | cut -d' ' -f1)
-          sha256_linux=$(cat x86_64-unknown-linux-gnu.sha256 | cut -d' ' -f1)
-          
-          # Update formula
-          sed -i "s/version \".*\"/version \"${version_number}\"/" distribution/homebrew/omnicontext.rb
-          sed -i "s/PLACEHOLDER_SHA256_X64/${sha256_x64}/" distribution/homebrew/omnicontext.rb
-          sed -i "s/PLACEHOLDER_SHA256_ARM64/${sha256_arm64}/" distribution/homebrew/omnicontext.rb
-          sed -i "s/PLACEHOLDER_SHA256_LINUX/${sha256_linux}/" distribution/homebrew/omnicontext.rb
-
-      - name: Update Scoop manifest
-        run: |
-          version="${{ needs.create-release.outputs.version }}"
-          version_number="${version#v}"
-          
-          # Read SHA256 hash
-          sha256_windows=$(cat x86_64-pc-windows-msvc.sha256 | cut -d' ' -f1)
-          
-          # Update manifest
-          sed -i "s/\"version\": \".*\"/\"version\": \"${version_number}\"/" distribution/scoop/omnicontext.json
-          sed -i "s/PLACEHOLDER_SHA256/${sha256_windows}/" distribution/scoop/omnicontext.json
-          sed -i "s/v[0-9.]*-*[a-z]*/${version}/g" distribution/scoop/omnicontext.json
-
-      - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v5
-        with:
-          commit-message: "chore: update package manifests for ${{ needs.create-release.outputs.version }}"
-          title: "Update package manifests for ${{ needs.create-release.outputs.version }}"
-          body: |
-            Automated update of package manager manifests for release ${{ needs.create-release.outputs.version }}.
-            
-            - Updated Homebrew formula with SHA256 hashes
-            - Updated Scoop manifest with SHA256 hash
-            - Updated version numbers
-          branch: release/${{ needs.create-release.outputs.version }}
-          delete-branch: true
-
