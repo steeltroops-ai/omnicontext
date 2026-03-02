@@ -27,7 +27,8 @@ irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distributi
 ### macOS / Linux
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/update.sh | bash
+# Re-run the install script (it updates existing installation)
+curl -sSL https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install.sh | bash
 ```
 
 ## Uninstall
@@ -174,7 +175,7 @@ distribution/
 ├── install.ps1         # Windows installer
 ├── install.sh          # macOS/Linux installer
 ├── update.ps1          # Windows updater
-├── update.sh           # macOS/Linux updater (coming soon)
+├── uninstall.ps1       # Windows uninstaller
 ├── homebrew/           # Homebrew formula
 │   └── omnicontext.rb
 └── scoop/              # Scoop manifest
