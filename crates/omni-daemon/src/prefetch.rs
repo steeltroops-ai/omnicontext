@@ -168,13 +168,13 @@ impl PrefetchCache {
                 let new_cache = LruCache::new(
                     NonZeroUsize::new(new_capacity).expect("capacity must be non-zero"),
                 );
-                
+
                 // Transfer existing entries to new cache (up to new capacity)
                 let old_cache = std::mem::replace(&mut *cache, new_cache);
                 for (key, value) in old_cache.iter().take(new_capacity) {
                     cache.put(key.clone(), value.clone());
                 }
-                
+
                 updated = true;
                 tracing::debug!(new_capacity = new_capacity, "cache capacity updated");
             }
@@ -376,99 +376,99 @@ mod tests {
     }
 }
 
-    #[test]
-    fn test_update_config_capacity() {
-        let cache = PrefetchCache::new(5, Duration::from_secs(300));
-        
-        // Add 3 entries
-        cache.put_file_context(PathBuf::from("file1.rs"), "context1".to_string());
-        cache.put_file_context(PathBuf::from("file2.rs"), "context2".to_string());
-        cache.put_file_context(PathBuf::from("file3.rs"), "context3".to_string());
-        
-        assert_eq!(cache.stats().size, 3);
-        
-        // Update capacity to 10
-        let updated = cache.update_config(Some(10), None);
-        assert!(updated);
-        
-        // Existing entries should still be present
-        assert_eq!(cache.stats().size, 3);
-        assert!(cache.get_file_context(&PathBuf::from("file1.rs")).is_some());
-        assert!(cache.get_file_context(&PathBuf::from("file2.rs")).is_some());
-        assert!(cache.get_file_context(&PathBuf::from("file3.rs")).is_some());
+#[test]
+fn test_update_config_capacity() {
+    let cache = PrefetchCache::new(5, Duration::from_secs(300));
+
+    // Add 3 entries
+    cache.put_file_context(PathBuf::from("file1.rs"), "context1".to_string());
+    cache.put_file_context(PathBuf::from("file2.rs"), "context2".to_string());
+    cache.put_file_context(PathBuf::from("file3.rs"), "context3".to_string());
+
+    assert_eq!(cache.stats().size, 3);
+
+    // Update capacity to 10
+    let updated = cache.update_config(Some(10), None);
+    assert!(updated);
+
+    // Existing entries should still be present
+    assert_eq!(cache.stats().size, 3);
+    assert!(cache.get_file_context(&PathBuf::from("file1.rs")).is_some());
+    assert!(cache.get_file_context(&PathBuf::from("file2.rs")).is_some());
+    assert!(cache.get_file_context(&PathBuf::from("file3.rs")).is_some());
+}
+
+#[test]
+fn test_update_config_ttl() {
+    let cache = PrefetchCache::new(100, Duration::from_secs(300));
+
+    // Add an entry with old TTL
+    cache.put_file_context(PathBuf::from("old.rs"), "old_context".to_string());
+
+    // Update TTL to 1ms (very short)
+    let updated = cache.update_config(None, Some(1));
+    assert!(updated);
+
+    // Add a new entry with new TTL
+    cache.put_file_context(PathBuf::from("new.rs"), "new_context".to_string());
+
+    // Wait for new entry to expire (1 second + buffer)
+    std::thread::sleep(Duration::from_millis(1100));
+
+    // Old entry should still be valid (has 300s TTL)
+    assert!(cache.get_file_context(&PathBuf::from("old.rs")).is_some());
+
+    // New entry should be expired (has 1s TTL)
+    assert!(cache.get_file_context(&PathBuf::from("new.rs")).is_none());
+}
+
+#[test]
+fn test_update_config_both() {
+    let cache = PrefetchCache::new(5, Duration::from_secs(300));
+
+    // Update both capacity and TTL
+    let updated = cache.update_config(Some(20), Some(600));
+    assert!(updated);
+
+    // Add entries to verify new configuration
+    for i in 1..=10 {
+        cache.put_file_context(
+            PathBuf::from(format!("file{}.rs", i)),
+            format!("context{}", i),
+        );
     }
 
-    #[test]
-    fn test_update_config_ttl() {
-        let cache = PrefetchCache::new(100, Duration::from_secs(300));
-        
-        // Add an entry with old TTL
-        cache.put_file_context(PathBuf::from("old.rs"), "old_context".to_string());
-        
-        // Update TTL to 1ms (very short)
-        let updated = cache.update_config(None, Some(1));
-        assert!(updated);
-        
-        // Add a new entry with new TTL
-        cache.put_file_context(PathBuf::from("new.rs"), "new_context".to_string());
-        
-        // Wait for new entry to expire (1 second + buffer)
-        std::thread::sleep(Duration::from_millis(1100));
-        
-        // Old entry should still be valid (has 300s TTL)
-        assert!(cache.get_file_context(&PathBuf::from("old.rs")).is_some());
-        
-        // New entry should be expired (has 1s TTL)
-        assert!(cache.get_file_context(&PathBuf::from("new.rs")).is_none());
+    // All 10 entries should fit in new capacity
+    assert_eq!(cache.stats().size, 10);
+}
+
+#[test]
+fn test_update_config_no_changes() {
+    let cache = PrefetchCache::new(100, Duration::from_secs(300));
+
+    // Update with no parameters
+    let updated = cache.update_config(None, None);
+    assert!(!updated);
+}
+
+#[test]
+fn test_update_config_capacity_reduction() {
+    let cache = PrefetchCache::new(10, Duration::from_secs(300));
+
+    // Add 5 entries
+    for i in 1..=5 {
+        cache.put_file_context(
+            PathBuf::from(format!("file{}.rs", i)),
+            format!("context{}", i),
+        );
     }
 
-    #[test]
-    fn test_update_config_both() {
-        let cache = PrefetchCache::new(5, Duration::from_secs(300));
-        
-        // Update both capacity and TTL
-        let updated = cache.update_config(Some(20), Some(600));
-        assert!(updated);
-        
-        // Add entries to verify new configuration
-        for i in 1..=10 {
-            cache.put_file_context(
-                PathBuf::from(format!("file{}.rs", i)),
-                format!("context{}", i),
-            );
-        }
-        
-        // All 10 entries should fit in new capacity
-        assert_eq!(cache.stats().size, 10);
-    }
+    assert_eq!(cache.stats().size, 5);
 
-    #[test]
-    fn test_update_config_no_changes() {
-        let cache = PrefetchCache::new(100, Duration::from_secs(300));
-        
-        // Update with no parameters
-        let updated = cache.update_config(None, None);
-        assert!(!updated);
-    }
+    // Reduce capacity to 3
+    let updated = cache.update_config(Some(3), None);
+    assert!(updated);
 
-    #[test]
-    fn test_update_config_capacity_reduction() {
-        let cache = PrefetchCache::new(10, Duration::from_secs(300));
-        
-        // Add 5 entries
-        for i in 1..=5 {
-            cache.put_file_context(
-                PathBuf::from(format!("file{}.rs", i)),
-                format!("context{}", i),
-            );
-        }
-        
-        assert_eq!(cache.stats().size, 5);
-        
-        // Reduce capacity to 3
-        let updated = cache.update_config(Some(3), None);
-        assert!(updated);
-        
-        // Only 3 entries should remain
-        assert_eq!(cache.stats().size, 3);
-    }
+    // Only 3 entries should remain
+    assert_eq!(cache.stats().size, 3);
+}

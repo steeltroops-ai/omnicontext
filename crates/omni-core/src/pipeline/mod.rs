@@ -589,19 +589,19 @@ impl Engine {
 
     /// Clear the index (metadata, vectors, and graph).
     /// This removes all indexed data but keeps the database structure intact.
-    /// 
+    ///
     /// Note: Currently this is a no-op placeholder. Full implementation would require:
     /// - MetadataIndex::clear() to truncate all tables
     /// - VectorIndex::clear() to remove all vectors
     /// - DependencyGraph::clear() to remove all nodes/edges
     pub fn clear_index(&mut self) -> OmniResult<()> {
         tracing::warn!("clear_index is not fully implemented yet - this is a placeholder");
-        
+
         // TODO: Implement actual clearing logic:
         // self.index.clear()?;
         // self.vector_index.clear();
         // self.dep_graph.clear();
-        
+
         Ok(())
     }
 
