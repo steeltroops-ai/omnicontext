@@ -16,6 +16,7 @@ use tokio::sync::Mutex;
 
 use omni_core::Engine;
 
+use crate::metrics::PerformanceMetrics;
 use crate::protocol::{self, error_codes, Response};
 
 /// Derive a deterministic pipe/socket name from the repository path.
@@ -417,7 +418,7 @@ async fn handle_performance_metrics(
     let search_latency_p99_ms = performance_metrics.get_latency_percentile(0.99);
 
     // Get memory usage
-    let memory_usage_bytes = performance_metrics.get_current_memory_bytes();
+    let memory_usage_bytes = PerformanceMetrics::get_current_memory_bytes();
     let peak_memory_usage_bytes = performance_metrics.get_peak_memory_bytes();
 
     // Update peak memory if current is higher

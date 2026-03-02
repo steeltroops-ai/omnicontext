@@ -18,12 +18,66 @@ $ErrorActionPreference = "Stop"
 $RepoOwner = "steeltroops-ai"
 $RepoName = "omnicontext"
 
+# Fetch version from source code (Cargo.toml)
+Write-Host "Fetching latest version from source..." -ForegroundColor Cyan
 try {
-    $LatestRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/$RepoOwner/$RepoName/releases/latest" -UseBasicParsing
-    $Version = $LatestRelease.tag_name
+    $CargoTomlUrl = "https://raw.githubusercontent.com/$RepoOwner/$RepoName/main/Cargo.toml"
+    $CargoContent = Invoke-RestMethod -Uri $CargoTomlUrl -UseBasicParsing
+    
+    if ($CargoContent -match 'version\s*=\s*"([^"]+)"') {
+        $SourceVersion = $Matches[1]
+        $Version = "v$SourceVersion"
+        Write-Host "Latest version from source: $Version" -ForegroundColor Green
+    } else {
+        throw "Could not parse version from Cargo.toml"
+    }
 } catch {
-    Write-Host "Warning: Failed to fetch latest version from GitHub. Falling back to explicit alpha version." -ForegroundColor Yellow
-    $Version = "v0.1.0-alpha"
+    Write-Host "Warning: Failed to fetch version from source. Trying GitHub releases..." -ForegroundColor Yellow
+    
+    # Fallback: Check GitHub releases
+    try {
+        $Releases = Invoke-RestMethod -Uri "https://api.github.com/repos/$RepoOwner/$RepoName/releases" -UseBasicParsing
+        if ($Releases.Count -eq 0) {
+            Write-Host "=========================================" -ForegroundColor Red
+            Write-Host " No Pre-Built Releases Available Yet" -ForegroundColor Red
+            Write-Host "=========================================" -ForegroundColor Red
+            Write-Host ""
+            Write-Host "OmniContext doesn't have pre-built releases yet." -ForegroundColor Yellow
+            Write-Host "You'll need to build from source." -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "To build from source:" -ForegroundColor Cyan
+            Write-Host "  1. Install Rust: https://rustup.rs/" -ForegroundColor White
+            Write-Host "  2. Clone the repo: git clone https://github.com/steeltroops-ai/omnicontext.git" -ForegroundColor White
+            Write-Host "  3. Build: cd omnicontext && cargo build --release" -ForegroundColor White
+            Write-Host "  4. Binaries will be in: target/release/" -ForegroundColor White
+            Write-Host ""
+            Write-Host "For detailed instructions, see:" -ForegroundColor Cyan
+            Write-Host "  https://github.com/steeltroops-ai/omnicontext/blob/main/CONTRIBUTING.md" -ForegroundColor White
+            Write-Host ""
+            exit 1
+        }
+        
+        $LatestRelease = $Releases[0]
+        $Version = $LatestRelease.tag_name
+        
+        # Verify the release has assets
+        if ($LatestRelease.assets.Count -eq 0) {
+            Write-Host "Warning: Latest release $Version has no binary assets. Checking for older releases..." -ForegroundColor Yellow
+            $ReleaseWithAssets = $Releases | Where-Object { $_.assets.Count -gt 0 } | Select-Object -First 1
+            if ($ReleaseWithAssets) {
+                $Version = $ReleaseWithAssets.tag_name
+                Write-Host "Using release $Version which has binaries available." -ForegroundColor Green
+            } else {
+                Write-Host "Error: No releases with binary assets found. Please build from source." -ForegroundColor Red
+                Write-Host "See: https://github.com/steeltroops-ai/omnicontext/blob/main/CONTRIBUTING.md" -ForegroundColor Yellow
+                exit 1
+            }
+        }
+    } catch {
+        Write-Host "Error: Could not determine version. Please build from source." -ForegroundColor Red
+        Write-Host "See: https://github.com/steeltroops-ai/omnicontext/blob/main/CONTRIBUTING.md" -ForegroundColor Yellow
+        exit 1
+    }
 }
 
 $OutDir = Join-Path $HOME ".omnicontext\bin"

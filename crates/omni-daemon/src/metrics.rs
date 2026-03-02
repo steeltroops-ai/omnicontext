@@ -48,28 +48,32 @@ impl PerformanceMetrics {
         #[allow(clippy::cast_possible_truncation)]
         let latency_ms = duration.as_millis().min(u128::from(u64::MAX)) as u64;
 
-        let mut inner = self.inner.lock().unwrap();
-        inner.total_searches += 1;
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.total_searches += 1;
 
-        // Add sample
-        if inner.search_latencies.len() >= inner.max_samples {
-            // Remove oldest sample (FIFO)
-            inner.search_latencies.remove(0);
+            // Add sample
+            if inner.search_latencies.len() >= inner.max_samples {
+                // Remove oldest sample (FIFO)
+                inner.search_latencies.remove(0);
+            }
+            inner.search_latencies.push(latency_ms);
         }
-        inner.search_latencies.push(latency_ms);
     }
 
     /// Update peak memory usage.
     pub fn update_memory_usage(&self, current_bytes: u64) {
-        let mut inner = self.inner.lock().unwrap();
-        if current_bytes > inner.peak_memory_bytes {
-            inner.peak_memory_bytes = current_bytes;
+        if let Ok(mut inner) = self.inner.lock() {
+            if current_bytes > inner.peak_memory_bytes {
+                inner.peak_memory_bytes = current_bytes;
+            }
         }
     }
 
     /// Get search latency percentile (P50, P95, P99).
     pub fn get_latency_percentile(&self, percentile: f64) -> f64 {
-        let inner = self.inner.lock().unwrap();
+        let Ok(inner) = self.inner.lock() else {
+            return 0.0;
+        };
 
         if inner.search_latencies.is_empty() {
             return 0.0;
@@ -78,7 +82,11 @@ impl PerformanceMetrics {
         let mut sorted = inner.search_latencies.clone();
         sorted.sort_unstable();
 
-        #[allow(clippy::cast_precision_loss)]
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss
+        )]
         let index = ((sorted.len() as f64 - 1.0) * percentile).round() as usize;
         let index = index.min(sorted.len() - 1);
 
@@ -88,32 +96,39 @@ impl PerformanceMetrics {
     }
 
     /// Get current memory usage in bytes.
-    pub fn get_current_memory_bytes(&self) -> u64 {
-        // Simple estimation: return 0 for now
-        // In production, this could use platform-specific APIs
-        // or be updated from external monitoring
+    ///
+    /// Simple estimation: returns 0 for now.
+    /// In production, this could use platform-specific APIs
+    /// or be updated from external monitoring.
+    #[must_use]
+    pub const fn get_current_memory_bytes() -> u64 {
         0
     }
 
     /// Get peak memory usage in bytes.
     pub fn get_peak_memory_bytes(&self) -> u64 {
-        let inner = self.inner.lock().unwrap();
-        inner.peak_memory_bytes
+        self.inner
+            .lock()
+            .map(|inner| inner.peak_memory_bytes)
+            .unwrap_or(0)
     }
 
     /// Get total number of searches performed.
     pub fn get_total_searches(&self) -> u64 {
-        let inner = self.inner.lock().unwrap();
-        inner.total_searches
+        self.inner
+            .lock()
+            .map(|inner| inner.total_searches)
+            .unwrap_or(0)
     }
 
     /// Reset all metrics.
     #[allow(dead_code)]
     pub fn reset(&self) {
-        let mut inner = self.inner.lock().unwrap();
-        inner.search_latencies.clear();
-        inner.peak_memory_bytes = 0;
-        inner.total_searches = 0;
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.search_latencies.clear();
+            inner.peak_memory_bytes = 0;
+            inner.total_searches = 0;
+        }
     }
 }
 

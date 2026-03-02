@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       force_bump:
-        description: 'Force version bump (major, minor, patch, or auto)'
+        description: "Force version bump (major, minor, patch, or auto)"
         required: false
-        default: 'auto'
+        default: "auto"
 
 env:
   CARGO_TERM_COLOR: always
@@ -48,12 +48,12 @@ jobs:
           else
             commits=$(git log --pretty=format:"%s" ${{ steps.versions.outputs.last_tag }}..HEAD)
           fi
-          
+
           # Check for conventional commits
           has_breaking=false
           has_feat=false
           has_fix=false
-          
+
           while IFS= read -r commit; do
             if echo "$commit" | grep -qiE '^[a-z]+(\([a-z]+\))?!:|BREAKING CHANGE:'; then
               has_breaking=true
@@ -63,7 +63,7 @@ jobs:
               has_fix=true
             fi
           done <<< "$commits"
-          
+
           # Determine bump type
           bump_type="none"
           if [ "$has_breaking" = true ]; then
@@ -73,17 +73,17 @@ jobs:
           elif [ "$has_fix" = true ]; then
             bump_type="patch"
           fi
-          
+
           # Override with manual input
           if [ "${{ github.event.inputs.force_bump }}" != "" ] && [ "${{ github.event.inputs.force_bump }}" != "auto" ]; then
             bump_type="${{ github.event.inputs.force_bump }}"
           fi
-          
+
           should_release="false"
           if [ "$bump_type" != "none" ]; then
             should_release="true"
           fi
-          
+
           echo "bump_type=$bump_type" >> $GITHUB_OUTPUT
           echo "should_release=$should_release" >> $GITHUB_OUTPUT
           echo "Bump type: $bump_type"
@@ -95,15 +95,15 @@ jobs:
         run: |
           current="${{ steps.versions.outputs.current }}"
           bump_type="${{ steps.check.outputs.bump_type }}"
-          
+
           IFS='.' read -r major minor patch <<< "$current"
-          
+
           case $bump_type in
             major) major=$((major + 1)); minor=0; patch=0 ;;
             minor) minor=$((minor + 1)); patch=0 ;;
             patch) patch=$((patch + 1)) ;;
           esac
-          
+
           new_version="${major}.${minor}.${patch}"
           echo "new_version=$new_version" >> $GITHUB_OUTPUT
           echo "New version: $new_version"
@@ -128,14 +128,19 @@ jobs:
       - name: Update version files
         run: |
           new_version="${{ needs.analyze.outputs.new_version }}"
-          
+
           # Update all Cargo.toml files
           sed -i "s/^version = \".*\"/version = \"${new_version}\"/" Cargo.toml
           for f in crates/*/Cargo.toml; do
             sed -i "s/^version = \".*\"/version = \"${new_version}\"/" "$f"
             sed -i "s/omni-core = { version = \".*\"/omni-core = { version = \"${new_version}\"/" "$f"
           done
-          
+
+          # Update package.json
+          if [ -f editors/vscode/package.json ]; then
+            sed -i "s/\"version\": \".*\"/\"version\": \"${new_version}\"/" editors/vscode/package.json
+          fi
+
           cargo update --workspace --quiet
 
       - name: Generate changelog
@@ -146,10 +151,10 @@ jobs:
           else
             commits=$(git log --pretty=format:"%s|%h" ${last_tag}..HEAD)
           fi
-          
+
           changelog="## What's Changed\n\n"
           breaking=""; features=""; fixes=""; other=""
-          
+
           while IFS='|' read -r msg hash; do
             if echo "$msg" | grep -qiE '^[a-z]+!:|BREAKING CHANGE:'; then
               breaking="${breaking}- ${msg} (${hash})\n"
@@ -163,12 +168,12 @@ jobs:
               other="${other}- ${msg} (${hash})\n"
             fi
           done <<< "$commits"
-          
+
           [ -n "$breaking" ] && changelog="${changelog}### ⚠️ Breaking Changes\n\n${breaking}\n"
           [ -n "$features" ] && changelog="${changelog}### ✨ Features\n\n${features}\n"
           [ -n "$fixes" ] && changelog="${changelog}### 🐛 Bug Fixes\n\n${fixes}\n"
           [ -n "$other" ] && changelog="${changelog}### 🔧 Other Changes\n\n${other}\n"
-          
+
           echo -e "$changelog" > /tmp/changelog.md
 
       - name: Update CHANGELOG.md
@@ -176,7 +181,7 @@ jobs:
           new_version="${{ needs.analyze.outputs.new_version }}"
           date=$(date +%Y-%m-%d)
           changelog=$(cat /tmp/changelog.md)
-          
+
           if [ ! -f CHANGELOG.md ]; then
             echo "# Changelog" > CHANGELOG.md
             echo "" >> CHANGELOG.md
@@ -194,14 +199,14 @@ jobs:
       - name: Commit and push
         run: |
           new_version="${{ needs.analyze.outputs.new_version }}"
-          
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          
-          git add Cargo.toml Cargo.lock crates/*/Cargo.toml CHANGELOG.md
+
+          git add Cargo.toml Cargo.lock crates/*/Cargo.toml editors/vscode/package.json CHANGELOG.md
           git commit -m "chore(release): bump version to ${new_version} [skip ci]"
           git tag -a "v${new_version}" -m "Release v${new_version}"
-          
+
           git push origin main
           git push origin "v${new_version}"
 
@@ -258,17 +263,17 @@ jobs:
           $version = "${{ needs.bump-and-tag.outputs.version }}"
           $target = "${{ matrix.target }}"
           $archive = "omnicontext-${version}-${target}.zip"
-          
+
           New-Item -ItemType Directory -Path staging -Force
           Copy-Item "target/${{ matrix.target }}/release/omnicontext.exe" staging/
           Copy-Item "target/${{ matrix.target }}/release/omnicontext-mcp.exe" staging/
           Copy-Item "target/${{ matrix.target }}/release/omnicontext-daemon.exe" staging/
           Copy-Item README.md, LICENSE, INSTALL.md staging/
-          
+
           Compress-Archive -Path staging/* -DestinationPath $archive
           $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash
           "$hash  $archive" | Out-File -FilePath "${archive}.sha256" -Encoding ASCII
-          
+
           echo "ARCHIVE=$archive" >> $env:GITHUB_ENV
 
       - name: Create archive (Unix)
@@ -277,21 +282,21 @@ jobs:
           version="${{ needs.bump-and-tag.outputs.version }}"
           target="${{ matrix.target }}"
           archive="omnicontext-${version}-${target}.tar.gz"
-          
+
           mkdir -p staging
           cp "target/${{ matrix.target }}/release/omnicontext" staging/
           cp "target/${{ matrix.target }}/release/omnicontext-mcp" staging/
           cp "target/${{ matrix.target }}/release/omnicontext-daemon" staging/ || true
           cp README.md LICENSE INSTALL.md staging/
-          
+
           tar -czf "$archive" -C staging .
-          
+
           if [[ "$OSTYPE" == "darwin"* ]]; then
             shasum -a 256 "$archive" > "${archive}.sha256"
           else
             sha256sum "$archive" > "${archive}.sha256"
           fi
-          
+
           echo "ARCHIVE=$archive" >> $GITHUB_ENV
 
       - name: Upload to release
@@ -303,3 +308,38 @@ jobs:
             ${{ env.ARCHIVE }}.sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Step 4: Publish VS Code Extension
+  publish-extension:
+    name: Publish VS Code Extension
+    needs: bump-and-tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.bump-and-tag.outputs.version }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+
+      - name: Install dependencies
+        working-directory: editors/vscode
+        run: bun install
+
+      - name: Compile
+        working-directory: editors/vscode
+        run: bun run compile
+
+      - name: Publish to Marketplace
+        working-directory: editors/vscode
+        run: npx vsce publish -p ${{ secrets.VSCE_PAT }} --no-dependencies
+        if: github.repository == 'steeltroops-ai/omnicontext' && env.VSCE_PAT != ''
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+
+      - name: Publish to Open VSX
+        working-directory: editors/vscode
+        run: npx ovsx publish -p ${{ secrets.OVSX_PAT }} --no-dependencies
+        if: github.repository == 'steeltroops-ai/omnicontext' && env.OVSX_PAT != ''
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}

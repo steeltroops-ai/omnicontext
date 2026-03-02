@@ -27,16 +27,65 @@ echo "========================================="
 echo " 🚀 Installing OmniContext"
 echo "========================================="
 
-# Fetch latest version
-info "Fetching latest version from GitHub..."
-LATEST_RELEASE=$(curl -sSL "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest" | grep '"tag_name":' | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/' || echo "")
+# Fetch version from source code (Cargo.toml)
+info "Fetching latest version from source..."
+CARGO_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/Cargo.toml"
 
-if [ -z "$LATEST_RELEASE" ]; then
-    warning "Failed to fetch latest version. Falling back to v0.1.0-alpha"
-    VERSION="v0.1.0-alpha"
+if CARGO_CONTENT=$(curl -sSL -f "$CARGO_URL"); then
+    if SOURCE_VERSION=$(echo "$CARGO_CONTENT" | grep -m1 'version\s*=' | sed -E 's/.*version\s*=\s*"([^"]+)".*/\1/'); then
+        if [ -n "$SOURCE_VERSION" ]; then
+            VERSION="v${SOURCE_VERSION}"
+            success "Latest version from source: $VERSION"
+        else
+            warning "Could not parse version from Cargo.toml"
+            VERSION=""
+        fi
+    else
+        warning "Could not parse version from Cargo.toml"
+        VERSION=""
+    fi
 else
-    VERSION="$LATEST_RELEASE"
-    success "Latest version: $VERSION"
+    warning "Could not fetch Cargo.toml from GitHub"
+    VERSION=""
+fi
+
+# Fallback: Check GitHub releases if source version fetch failed
+if [ -z "$VERSION" ]; then
+    info "Trying GitHub releases..."
+    RELEASES_JSON=$(curl -sSL "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases" || echo "[]")
+
+    # Check if any releases exist
+    RELEASE_COUNT=$(echo "$RELEASES_JSON" | grep -c '"tag_name"' || echo "0")
+
+    if [ "$RELEASE_COUNT" -eq 0 ]; then
+        error "No pre-built releases available yet"
+        echo ""
+        warning "OmniContext doesn't have pre-built releases yet."
+        info "You'll need to build from source."
+        echo ""
+        echo "To build from source:"
+        echo "  1. Install Rust: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+        echo "  2. Clone the repo: git clone https://github.com/steeltroops-ai/omnicontext.git"
+        echo "  3. Build: cd omnicontext && cargo build --release"
+        echo "  4. Binaries will be in: target/release/"
+        echo ""
+        echo "For detailed instructions, see:"
+        echo "  https://github.com/steeltroops-ai/omnicontext/blob/main/CONTRIBUTING.md"
+        echo ""
+        exit 1
+    fi
+
+    # Get the latest release tag
+    LATEST_RELEASE=$(echo "$RELEASES_JSON" | grep '"tag_name":' | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/' || echo "")
+
+    if [ -z "$LATEST_RELEASE" ]; then
+        error "Could not determine version. Please build from source."
+        echo "See: https://github.com/steeltroops-ai/omnicontext/blob/main/CONTRIBUTING.md"
+        exit 1
+    else
+        VERSION="$LATEST_RELEASE"
+        success "Using release version: $VERSION"
+    fi
 fi
 
 # Determine OS and architecture

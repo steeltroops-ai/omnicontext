@@ -2,7 +2,61 @@
 
 Quick installation commands for end users on all platforms.
 
-## Quick Install
+> **Note**: Pre-built releases are not yet available. You'll need to build from source.
+> See [CONTRIBUTING.md](../CONTRIBUTING.md) for build instructions.
+
+## Build from Source (Required for Now)
+
+Until pre-built releases are available, follow these steps:
+
+### Prerequisites
+- Rust toolchain (install from https://rustup.rs/)
+- Git
+
+### Build Steps
+
+```bash
+# Clone the repository
+git clone https://github.com/steeltroops-ai/omnicontext.git
+cd omnicontext
+
+# Build release binaries
+cargo build --release
+
+# Binaries will be in target/release/
+# - omnicontext (CLI)
+# - omnicontext-mcp (MCP server)
+# - omnicontext-daemon (file watcher)
+```
+
+### Manual Installation
+
+**Windows:**
+```powershell
+# Copy binaries to a directory in your PATH
+$binDir = "$env:LOCALAPPDATA\omnicontext\bin"
+New-Item -ItemType Directory -Force -Path $binDir
+Copy-Item target\release\omnicontext.exe $binDir\
+Copy-Item target\release\omnicontext-mcp.exe $binDir\
+Copy-Item target\release\omnicontext-daemon.exe $binDir\
+
+# Add to PATH
+$path = [Environment]::GetEnvironmentVariable("Path", "User")
+[Environment]::SetEnvironmentVariable("Path", "$path;$binDir", "User")
+```
+
+**macOS / Linux:**
+```bash
+# Copy binaries to /usr/local/bin
+sudo cp target/release/omnicontext /usr/local/bin/
+sudo cp target/release/omnicontext-mcp /usr/local/bin/
+sudo cp target/release/omnicontext-daemon /usr/local/bin/
+sudo chmod +x /usr/local/bin/omnicontext*
+```
+
+---
+
+## Quick Install (When Releases Are Available)
 
 ### Windows
 
