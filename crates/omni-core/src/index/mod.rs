@@ -261,6 +261,42 @@ impl MetadataIndex {
         Ok(self.conn.last_insert_rowid())
     }
 
+    /// Insert multiple chunks in a single transaction for better performance.
+    /// Returns the chunk IDs in the same order as the input.
+    pub fn insert_chunks_batch(&self, chunks: &[Chunk]) -> OmniResult<Vec<i64>> {
+        if chunks.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let tx = self.conn.unchecked_transaction()?;
+        let mut chunk_ids = Vec::with_capacity(chunks.len());
+
+        for chunk in chunks {
+            tx.execute(
+                "INSERT INTO chunks (file_id, symbol_path, kind, visibility, line_start,
+                 line_end, content, doc_comment, token_count, weight, vector_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    chunk.file_id,
+                    chunk.symbol_path,
+                    chunk.kind.as_str(),
+                    chunk.visibility.as_str(),
+                    chunk.line_start,
+                    chunk.line_end,
+                    chunk.content,
+                    chunk.doc_comment,
+                    chunk.token_count,
+                    chunk.weight,
+                    chunk.vector_id.map(|v| v as i64),
+                ],
+            )?;
+            chunk_ids.push(tx.last_insert_rowid());
+        }
+
+        tx.commit()?;
+        Ok(chunk_ids)
+    }
+
     /// Delete all chunks belonging to a file.
     pub fn delete_chunks_for_file(&self, file_id: i64) -> OmniResult<usize> {
         let changes = self
@@ -338,6 +374,36 @@ impl MetadataIndex {
         )?;
 
         Ok(self.conn.last_insert_rowid())
+    }
+
+    /// Insert multiple symbols in a single transaction for better performance.
+    /// Returns the symbol IDs in the same order as the input.
+    pub fn insert_symbols_batch(&self, symbols: &[Symbol]) -> OmniResult<Vec<i64>> {
+        if symbols.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let tx = self.conn.unchecked_transaction()?;
+        let mut symbol_ids = Vec::with_capacity(symbols.len());
+
+        for symbol in symbols {
+            tx.execute(
+                "INSERT OR REPLACE INTO symbols (name, fqn, kind, file_id, line, chunk_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    symbol.name,
+                    symbol.fqn,
+                    symbol.kind.as_str(),
+                    symbol.file_id,
+                    symbol.line,
+                    symbol.chunk_id,
+                ],
+            )?;
+            symbol_ids.push(tx.last_insert_rowid());
+        }
+
+        tx.commit()?;
+        Ok(symbol_ids)
     }
 
     /// Look up a symbol by its fully qualified name.

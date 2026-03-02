@@ -55,15 +55,24 @@ pub struct SearchEngine {
 
     /// Token budget for context building.
     token_budget: u32,
+
+    /// LRU cache for query embeddings (query -> embedding vector).
+    /// Reduces redundant embedding computation for repeated queries.
+    query_cache: std::sync::Arc<std::sync::Mutex<lru::LruCache<String, Vec<f32>>>>,
 }
 
 impl SearchEngine {
     /// Create a new search engine with the given configuration.
+    #[allow(clippy::missing_panics_doc, clippy::expect_used)]
     pub fn new(rrf_k: u32, token_budget: u32) -> Self {
+        // SAFETY: 100 is a non-zero constant, so this unwrap is safe
+        let cache_size = std::num::NonZeroUsize::new(100).expect("100 is non-zero");
+
         Self {
             rrf_k,
             retrieval_limit: 100, // fetch top-100 from each signal
             token_budget,
+            query_cache: std::sync::Arc::new(std::sync::Mutex::new(lru::LruCache::new(cache_size))),
         }
     }
 
@@ -117,18 +126,44 @@ impl SearchEngine {
 
         // ---- Signal 2: Semantic (Vector) ----
         let semantic_results = if embedder.is_available() && query_type != QueryType::Symbol {
-            match embedder.embed_single(query) {
-                Ok(query_vec) => match vector_index.search(&query_vec, self.retrieval_limit) {
+            // Check cache first
+            let cache_key = query.to_string();
+            let cached_embedding = {
+                if let Ok(mut cache) = self.query_cache.lock() {
+                    cache.get(&cache_key).cloned()
+                } else {
+                    None
+                }
+            };
+
+            let query_vec = if let Some(embedding) = cached_embedding {
+                embedding
+            } else {
+                match embedder.embed_single(query) {
+                    Ok(vec) => {
+                        // Store in cache
+                        if let Ok(mut cache) = self.query_cache.lock() {
+                            cache.put(cache_key, vec.clone());
+                        }
+                        vec
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "query embedding failed");
+                        Vec::new()
+                    }
+                }
+            };
+
+            if !query_vec.is_empty() {
+                match vector_index.search(&query_vec, self.retrieval_limit) {
                     Ok(results) => results,
                     Err(e) => {
                         tracing::warn!(error = %e, "vector search failed");
                         Vec::new()
                     }
-                },
-                Err(e) => {
-                    tracing::warn!(error = %e, "query embedding failed");
-                    Vec::new()
                 }
+            } else {
+                Vec::new()
             }
         } else {
             Vec::new()

@@ -3,7 +3,7 @@
   "displayName": "OmniContext",
   "description": "Universal code context engine for AI coding agents -- semantic search, dependency graph, pre-flight context injection, MCP integration",
   "version": "0.2.0",
-  "publisher": "steeltroops-ai",
+  "publisher": "Mayank",
   "license": "Apache-2.0",
   "icon": "icon.png",
   "repository": {
@@ -40,7 +40,8 @@
     "workspaceContains:**/*.java",
     "workspaceContains:**/*.c",
     "workspaceContains:**/*.cpp",
-    "workspaceContains:**/*.cs"
+    "workspaceContains:**/*.cs",
+    "onView:omnicontext.mainView"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -89,6 +90,16 @@
         "command": "omnicontext.moduleMap",
         "title": "OmniContext: Show Module Map",
         "icon": "$(list-tree)"
+      },
+      {
+        "command": "omnicontext.syncMcp",
+        "title": "OmniContext: Sync MCP to Claude/Config",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "omnicontext.refreshSidebar",
+        "title": "OmniContext: Refresh Sidebar",
+        "icon": "$(refresh)"
       }
     ],
     "configuration": {
@@ -115,8 +126,8 @@
           "description": "Enable pre-flight context injection into AI chat"
         },
         "omnicontext.tokenBudget": {
+          "number": 8192,
           "type": "number",
-          "default": 8192,
           "description": "Token budget for pre-flight context injection"
         },
         "omnicontext.logLevel": {
@@ -130,8 +141,58 @@
             "error"
           ],
           "description": "Log level for the daemon process"
+        },
+        "omnicontext.prefetch.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable pre-fetch functionality to cache context based on IDE events (file open, cursor movement, text edits)"
+        },
+        "omnicontext.prefetch.cacheSize": {
+          "type": "number",
+          "default": 100,
+          "minimum": 10,
+          "maximum": 1000,
+          "description": "Maximum number of entries in the pre-fetch cache (range: 10-1000)"
+        },
+        "omnicontext.prefetch.cacheTtlSeconds": {
+          "type": "number",
+          "default": 300,
+          "minimum": 60,
+          "maximum": 3600,
+          "description": "Time-to-live for cached entries in seconds (range: 60-3600, default: 300 = 5 minutes)"
+        },
+        "omnicontext.prefetch.debounceMs": {
+          "type": "number",
+          "default": 200,
+          "minimum": 50,
+          "maximum": 1000,
+          "description": "Debounce delay in milliseconds for IDE events (cursor movement, text edits) to avoid excessive pre-fetch requests (range: 50-1000)"
+        },
+        "omnicontext.automation.autoSyncMcp": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically sync MCP configuration to Claude and Kiro on changes"
         }
       }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "omnicontext-sidebar",
+          "title": "OmniContext",
+          "icon": "resources/icon-white.svg"
+        }
+      ]
+    },
+    "views": {
+      "omnicontext-sidebar": [
+        {
+          "id": "omnicontext.mainView",
+          "name": "Control Center",
+          "type": "webview",
+          "icon": "resources/icon-white.svg"
+        }
+      ]
     },
     "chatParticipants": [
       {
@@ -148,12 +209,22 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "package": "vsce package",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "pretest": "bun run compile",
+    "test": "node ./out/test/runTest.js"
   },
   "devDependencies": {
-    "@types/vscode": "^1.85.0",
+    "@types/glob": "^8.1.0",
+    "@types/mocha": "^10.0.6",
     "@types/node": "^20.0.0",
-    "typescript": "^5.3.0",
-    "@vscode/vsce": "^3.0.0"
+    "@types/vscode": "^1.85.0",
+    "@vscode/test-electron": "^2.3.9",
+    "@vscode/vsce": "^3.0.0",
+    "glob": "^10.3.10",
+    "mocha": "^10.2.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "@vscode/codicons": "^0.0.44"
   }
 }

@@ -42,6 +42,10 @@ tree-sitter-cpp = { workspace = true }
 tree-sitter-c-sharp = { workspace = true }
 tree-sitter-css = { workspace = true }
 tree-sitter-md = { workspace = true }
+tree-sitter-ruby = { workspace = true }
+tree-sitter-php = { workspace = true }
+tree-sitter-swift = { workspace = true }
+tree-sitter-kotlin-ng = { workspace = true }
 
 # Embedding
 ort = { workspace = true }
@@ -62,6 +66,7 @@ petgraph = { workspace = true }
 
 # Concurrency
 dashmap = { workspace = true }
+lru = { workspace = true }
 
 # Configuration
 toml = { workspace = true }

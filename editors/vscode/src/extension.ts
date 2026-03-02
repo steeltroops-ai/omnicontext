@@ -2,6 +2,10 @@ import * as vscode from "vscode";
 import * as cp from "child_process";
 import * as path from "path";
 import * as net from "net";
+import { EventTracker } from "./eventTracker";
+import { SymbolExtractor } from "./symbolExtractor";
+import { OmniSidebarProvider } from "./sidebarProvider";
+import { CacheStatsManager } from "./cacheStats";
 
 let statusBarItem: vscode.StatusBarItem;
 let outputChannel: vscode.OutputChannel;
@@ -13,6 +17,17 @@ const pendingRequests = new Map<
   number,
   { resolve: (v: any) => void; reject: (e: Error) => void }
 >();
+
+// IPC reconnection state
+let reconnectAttempts = 0;
+const MAX_RECONNECT_ATTEMPTS = 10;
+let reconnectTimer: NodeJS.Timeout | null = null;
+let currentRepoRoot: string | null = null;
+
+// Event tracking
+let eventTracker: EventTracker | null = null;
+let symbolExtractor: SymbolExtractor | null = null;
+let cacheStatsManager: CacheStatsManager | null = null;
 
 // ---------------------------------------------------------------------------
 // Extension lifecycle
@@ -31,6 +46,26 @@ export function activate(context: vscode.ExtensionContext) {
   statusBarItem.command = "omnicontext.search";
   statusBarItem.show();
   context.subscriptions.push(statusBarItem);
+
+  // Initialize event tracking and cache stats
+  symbolExtractor = new SymbolExtractor();
+  cacheStatsManager = new CacheStatsManager(sendIpcRequest);
+  eventTracker = new EventTracker(sendIpcRequest, symbolExtractor);
+  eventTracker.registerListeners(context);
+
+  // Sidebar Provider
+  const sidebarProvider = new OmniSidebarProvider(
+    context.extensionUri,
+    cacheStatsManager,
+    eventTracker,
+    sendIpcRequest
+  );
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(
+      "omnicontext.mainView",
+      sidebarProvider,
+    ),
+  );
 
   // Register commands
   context.subscriptions.push(
@@ -53,24 +88,201 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("omnicontext.moduleMap", () =>
       runModuleMap(),
     ),
+    vscode.commands.registerCommand("omnicontext.syncMcp", () => runSyncMcp()),
+    vscode.commands.registerCommand("omnicontext.repair", () =>
+      runRepairEnvironment(),
+    ),
+    vscode.commands.registerCommand("omnicontext.refreshSidebar", () => {
+      sidebarProvider.refresh();
+    }),
   );
 
   // Register the chat participant for context injection
   registerChatParticipant(context);
 
+  // Register configuration change listener
+  registerConfigurationWatcher(context);
+
   // Auto-start daemon and index on workspace open
   const config = vscode.workspace.getConfiguration("omnicontext");
   if (config.get<boolean>("autoStartDaemon", true)) {
-    startDaemon(true);
+    startDaemon(true).then(() => sidebarProvider.refresh());
   } else if (config.get<boolean>("autoIndex", true)) {
-    runIndex(true);
+    runIndex(true).then(() => sidebarProvider.refresh());
   }
+
+  // Poll for status updates for sidebar
+  setInterval(() => {
+    sidebarProvider.refresh();
+  }, 10000);
 }
 
 export function deactivate() {
   stopDaemon();
+  eventTracker?.dispose();
+  eventTracker = null;
+  symbolExtractor = null;
   statusBarItem?.dispose();
   outputChannel?.dispose();
+}
+
+async function runSyncMcp() {
+  const root = getWorkspaceRoot();
+  if (!root) return;
+
+  const binary = getBinaryPath();
+  if (!binary) return;
+
+  const mcpBinary = binary.replace(/omnicontext(\.exe)?$/, "omnicontext-mcp$1");
+  const fs = require("fs");
+
+  const targets = [
+    path.join(
+      process.env.APPDATA || "",
+      "Claude",
+      "claude_desktop_config.json",
+    ),
+    path.join(process.env.USERPROFILE || "", ".kiro", "settings", "mcp.json"),
+  ];
+
+  let syncedCount = 0;
+
+  for (const configPath of targets) {
+    if (!fs.existsSync(path.dirname(configPath))) continue;
+
+    try {
+      let config: any = { mcpServers: {} };
+      if (fs.existsSync(configPath)) {
+        config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+      }
+
+      if (!config.mcpServers) config.mcpServers = {};
+
+      config.mcpServers.omnicontext = {
+        command: mcpBinary,
+        args: ["--repo", root],
+      };
+
+      fs.writeFileSync(configPath, JSON.stringify(config, null, 2), "utf-8");
+      syncedCount++;
+    } catch (err: any) {
+      outputChannel.appendLine(`Sync error for ${configPath}: ${err.message}`);
+    }
+  }
+
+  if (syncedCount > 0) {
+    vscode.window.showInformationMessage(
+      `OmniContext synced to ${syncedCount} AI client(s). Restart your AI chat to see it!`,
+    );
+  } else {
+    vscode.window.showWarningMessage(
+      "No supported AI clients found for auto-sync. Configure manually.",
+    );
+  }
+}
+
+async function runRepairEnvironment() {
+  const binary = getBinaryPath();
+  if (!binary) return;
+
+  const scriptPath = path.join(
+    path.dirname(binary),
+    "..",
+    "..",
+    "scripts",
+    "fix-onnx-runtime.ps1",
+  );
+
+  const terminal = vscode.window.createTerminal("OmniContext Repair");
+  terminal.show();
+
+  if (process.platform === "win32") {
+    terminal.sendText(`pwsh -File "${scriptPath}"`);
+  } else {
+    vscode.window.showInformationMessage("Repair is only needed on Windows.");
+  }
+}
+
+// ... (existing helper functions) ...
+
+// ---------------------------------------------------------------------------
+// Configuration watcher
+// ---------------------------------------------------------------------------
+
+function registerConfigurationWatcher(context: vscode.ExtensionContext): void {
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration("omnicontext.prefetch")) {
+        handlePrefetchConfigChange();
+      }
+    })
+  );
+}
+
+async function handlePrefetchConfigChange(): Promise<void> {
+  const config = vscode.workspace.getConfiguration("omnicontext.prefetch");
+
+  // Get configuration values
+  const enabled = config.get<boolean>("enabled", true);
+  const cacheSize = config.get<number>("cacheSize", 100);
+  const cacheTtlSeconds = config.get<number>("cacheTtlSeconds", 300);
+  const debounceMs = config.get<number>("debounceMs", 200);
+
+  // Validate settings
+  if (cacheSize < 10 || cacheSize > 1000) {
+    vscode.window.showErrorMessage(
+      `OmniContext: Invalid cache size ${cacheSize}. Must be between 10 and 1000.`
+    );
+    return;
+  }
+
+  if (cacheTtlSeconds < 60 || cacheTtlSeconds > 3600) {
+    vscode.window.showErrorMessage(
+      `OmniContext: Invalid cache TTL ${cacheTtlSeconds}. Must be between 60 and 3600 seconds.`
+    );
+    return;
+  }
+
+  if (debounceMs < 50 || debounceMs > 1000) {
+    vscode.window.showErrorMessage(
+      `OmniContext: Invalid debounce delay ${debounceMs}. Must be between 50 and 1000 milliseconds.`
+    );
+    return;
+  }
+
+  // Update EventTracker
+  if (eventTracker) {
+    eventTracker.setEnabled(enabled);
+    eventTracker.setDebounceMs(debounceMs);
+    outputChannel.appendLine(
+      `[config] Pre-fetch ${enabled ? "enabled" : "disabled"}, debounce: ${debounceMs}ms`
+    );
+  }
+
+  // Send config updates to daemon via IPC
+  if (ipcClient) {
+    try {
+      await sendIpcRequest("update_config", {
+        cache_size: cacheSize,
+        cache_ttl_seconds: cacheTtlSeconds,
+      });
+      outputChannel.appendLine(
+        `[config] Updated daemon cache: size=${cacheSize}, ttl=${cacheTtlSeconds}s`
+      );
+      vscode.window.showInformationMessage(
+        `OmniContext: Configuration updated successfully`
+      );
+    } catch (err: any) {
+      outputChannel.appendLine(`[config] Failed to update daemon: ${err.message}`);
+      vscode.window.showWarningMessage(
+        `OmniContext: Failed to update daemon configuration. Changes will apply on next daemon restart.`
+      );
+    }
+  } else {
+    outputChannel.appendLine(
+      `[config] Daemon not connected, configuration will apply on next daemon start`
+    );
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -202,9 +414,17 @@ async function startDaemon(silent: boolean = false) {
 }
 
 function stopDaemon() {
+  // Clear reconnection timer
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  reconnectAttempts = 0;
+  currentRepoRoot = null;
+
   if (ipcClient) {
     try {
-      sendIpcRequest("shutdown", {}).catch(() => {});
+      sendIpcRequest("shutdown", {}).catch(() => { });
     } catch {
       // Ignore errors during shutdown
     }
@@ -229,6 +449,9 @@ async function connectIpc(repoRoot: string): Promise<void> {
   const pipeName = derivePipeName(repoRoot);
   outputChannel.appendLine(`[ipc] connecting to: ${pipeName}`);
 
+  // Store repo root for reconnection
+  currentRepoRoot = repoRoot;
+
   return new Promise((resolve, reject) => {
     const client = net.createConnection(pipeName);
     let buffer = "";
@@ -236,6 +459,14 @@ async function connectIpc(repoRoot: string): Promise<void> {
     client.on("connect", () => {
       outputChannel.appendLine("[ipc] connected");
       ipcClient = client;
+
+      // Reset reconnection attempts on successful connection
+      reconnectAttempts = 0;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+
       resolve();
     });
 
@@ -266,12 +497,19 @@ async function connectIpc(repoRoot: string): Promise<void> {
     client.on("error", (err) => {
       outputChannel.appendLine(`[ipc] error: ${err.message}`);
       ipcClient = null;
+
+      // Trigger reconnection on error
+      scheduleReconnect();
+
       reject(err);
     });
 
     client.on("close", () => {
       outputChannel.appendLine("[ipc] disconnected");
       ipcClient = null;
+
+      // Trigger reconnection on close
+      scheduleReconnect();
     });
 
     // Timeout
@@ -282,6 +520,54 @@ async function connectIpc(repoRoot: string): Promise<void> {
       }
     }, 5000);
   });
+}
+
+function scheduleReconnect(): void {
+  // Don't schedule if already scheduled
+  if (reconnectTimer) {
+    return;
+  }
+
+  // Don't schedule if no repo root (never connected)
+  if (!currentRepoRoot) {
+    return;
+  }
+
+  // Give up after max attempts
+  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+    outputChannel.appendLine(
+      `[ipc] max reconnection attempts (${MAX_RECONNECT_ATTEMPTS}) reached, giving up`
+    );
+    statusBarItem.text = "$(error) OmniContext";
+    statusBarItem.tooltip = "OmniContext: Connection failed";
+    return;
+  }
+
+  // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 32s (capped at 30s)
+  const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+  reconnectAttempts++;
+
+  outputChannel.appendLine(
+    `[ipc] scheduling reconnection attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS} in ${delay}ms`
+  );
+
+  reconnectTimer = setTimeout(async () => {
+    reconnectTimer = null;
+
+    outputChannel.appendLine(
+      `[ipc] attempting reconnection (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`
+    );
+
+    try {
+      await connectIpc(currentRepoRoot!);
+      outputChannel.appendLine("[ipc] reconnection successful");
+      statusBarItem.text = "$(zap) OmniContext";
+      statusBarItem.tooltip = "OmniContext: Daemon active, context injection ON";
+    } catch (err: any) {
+      outputChannel.appendLine(`[ipc] reconnection failed: ${err.message}`);
+      // scheduleReconnect will be called by connectIpc's error handler
+    }
+  }, delay);
 }
 
 function sendIpcRequest(method: string, params: any): Promise<any> {
@@ -302,7 +588,23 @@ function sendIpcRequest(method: string, params: any): Promise<any> {
     pendingRequests.set(id, { resolve, reject });
 
     const payload = JSON.stringify(request) + "\n";
-    ipcClient.write(payload);
+
+    // Handle write errors
+    const writeSuccess = ipcClient.write(payload, (err) => {
+      if (err) {
+        outputChannel.appendLine(`[ipc] write error: ${err.message}`);
+        pendingRequests.delete(id);
+        ipcClient = null;
+        scheduleReconnect();
+        reject(err);
+      }
+    });
+
+    if (!writeSuccess) {
+      outputChannel.appendLine("[ipc] write buffer full");
+      pendingRequests.delete(id);
+      reject(new Error("IPC write buffer full"));
+    }
 
     // Timeout after 30s
     setTimeout(() => {
@@ -351,10 +653,11 @@ function registerChatParticipant(context: vscode.ExtensionContext) {
         const contextResult = await getPreflightContext(request.prompt);
 
         if (contextResult) {
+          const cacheIndicator = contextResult.from_cache ? "[cached]" : "[fresh search]";
           stream.markdown(
             `*OmniContext injected ${contextResult.entries_count} code chunks ` +
-              `(${contextResult.tokens_used}/${contextResult.token_budget} tokens, ` +
-              `${contextResult.elapsed_ms}ms)*\n\n`,
+            `(${contextResult.tokens_used}/${contextResult.token_budget} tokens, ` +
+            `${contextResult.elapsed_ms}ms ${cacheIndicator})*\n\n`,
           );
           stream.markdown(contextResult.system_context);
         } else {
@@ -399,7 +702,32 @@ async function getPreflightContext(
         token_budget: tokenBudget,
       });
 
-      return result as PreflightResponse;
+      const response = result as PreflightResponse;
+
+      // Add cache indicators and logging
+      if (response.from_cache) {
+        // Estimate time saved (typical fresh search: 100-500ms)
+        const estimatedTimeSaved = Math.max(0, 300 - response.elapsed_ms);
+        outputChannel.appendLine(
+          `[preflight] Cache HIT: ${response.elapsed_ms}ms (saved ~${estimatedTimeSaved}ms)`
+        );
+
+        // Add cache hit indicator to context
+        response.system_context =
+          `[Cached context, ${response.elapsed_ms}ms]\n\n` +
+          response.system_context;
+      } else {
+        outputChannel.appendLine(
+          `[preflight] Cache MISS: ${response.elapsed_ms}ms (fresh search)`
+        );
+
+        // Add cache miss indicator to context
+        response.system_context =
+          `[Fresh search, ${response.elapsed_ms}ms]\n\n` +
+          response.system_context;
+      }
+
+      return response;
     } catch (err: any) {
       outputChannel.appendLine(`[preflight] IPC error: ${err.message}`);
     }
@@ -455,6 +783,7 @@ function getCliContext(prompt: string): PreflightResponse | null {
       tokens_used: tokensUsed,
       token_budget: tokenBudget,
       elapsed_ms: data.elapsed_ms || 0,
+      from_cache: false, // CLI fallback never uses cache
     };
   } catch {
     return null;
@@ -467,6 +796,7 @@ interface PreflightResponse {
   tokens_used: number;
   token_budget: number;
   elapsed_ms: number;
+  from_cache: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -483,7 +813,7 @@ async function runIndex(silent: boolean = false) {
       if (!silent) {
         vscode.window.showInformationMessage(
           `OmniContext: Indexed ${result.files_processed} files, ` +
-            `${result.chunks_created} chunks in ${result.elapsed_ms}ms`,
+          `${result.chunks_created} chunks in ${result.elapsed_ms}ms`,
         );
       }
       return;
@@ -516,8 +846,8 @@ async function runIndex(silent: boolean = false) {
     if (!silent) {
       vscode.window.showInformationMessage(
         `OmniContext: Indexed ${data.files_processed} files, ` +
-          `${data.chunks_created} chunks, ${data.symbols_extracted} symbols ` +
-          `in ${data.elapsed_ms}ms`,
+        `${data.chunks_created} chunks, ${data.symbols_extracted} symbols ` +
+        `in ${data.elapsed_ms}ms`,
       );
     }
   } catch (err: any) {
@@ -574,11 +904,11 @@ async function runSearch() {
       line: r.line_start,
     }));
 
-    const selected = await vscode.window.showQuickPick(items, {
+    const selected = (await vscode.window.showQuickPick(items, {
       placeHolder: `${data.results.length} results for "${query}"`,
       matchOnDescription: true,
       matchOnDetail: true,
-    });
+    })) as any;
 
     if (selected) {
       const uri = vscode.Uri.file(path.join(root, selected.file));
@@ -667,6 +997,12 @@ function toggleContextInjection() {
   contextInjectionEnabled = !contextInjectionEnabled;
   const state = contextInjectionEnabled ? "ON" : "OFF";
   statusBarItem.tooltip = `OmniContext: Context injection ${state}`;
+
+  // Enable/disable event tracking along with context injection
+  if (eventTracker) {
+    eventTracker.setEnabled(contextInjectionEnabled);
+  }
+
   vscode.window.showInformationMessage(
     `OmniContext: Context injection ${state}`,
   );

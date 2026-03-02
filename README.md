@@ -157,6 +157,7 @@ watcher --> parser --> chunker --> embedder --> index
 - **Semantic**: Code-trained embeddings understand structure, not just text patterns
 - **Zero-hassle**: Auto-downloads model, auto-indexes on MCP startup
 - **Offline**: Fully functional without internet (after initial model download)
+- **Pre-Fetch Caching**: VS Code extension intelligently caches context based on your IDE activity (⚡ cache hits, 🔍 fresh searches)
 
 ## Supported Languages
 
@@ -164,6 +165,47 @@ watcher --> parser --> chunker --> embedder --> index
 - TypeScript / JavaScript
 - Rust
 - Go
+
+## VS Code Extension
+
+The OmniContext VS Code extension provides intelligent pre-fetch caching and automatic context injection for AI coding assistants.
+
+> **📸 Screenshot Coming Soon**: VS Code sidebar showing OmniContext cache statistics and controls
+
+### Key Features
+
+- **🚀 Pre-Fetch Caching**: Tracks IDE events (file opens, cursor movements, edits) and pre-fetches relevant context before you ask
+- **⚡ Cache Indicators**: Visual indicators show when context is served from cache (instant) vs. fresh search
+- **📊 Real-Time Statistics**: Monitor cache hit rate, hits, misses, and size directly in the sidebar
+- **🎯 Automatic Injection**: Seamlessly injects cached context into AI chat requests (GitHub Copilot, etc.)
+- **🔧 Configurable**: Fine-tune cache size (10-1000 entries), TTL (60-3600s), and debounce timing (50-1000ms)
+
+### Installation
+
+```bash
+# Install from VS Code Marketplace (coming soon)
+# Or build from source
+cd editors/vscode
+npm install
+npm run compile
+```
+
+### Configuration
+
+Configure pre-fetch behavior in VS Code Settings (`Ctrl+,` or `Cmd+,`) → Search "OmniContext":
+
+- `omnicontext.prefetch.enabled` - Enable/disable pre-fetch (default: true)
+- `omnicontext.prefetch.cacheSize` - Max cache entries (default: 100, range: 10-1000)
+- `omnicontext.prefetch.cacheTtlSeconds` - Cache TTL in seconds (default: 300, range: 60-3600)
+- `omnicontext.prefetch.debounceMs` - Event debounce delay (default: 200ms, range: 50-1000)
+
+### Cache Hit Rate Expectations
+
+- **Good (>60%)**: Focused work in specific codebase area
+- **Fair (30-60%)**: Exploring different parts of codebase
+- **Poor (<30%)**: Rapid context switching - consider increasing cache size or TTL
+
+For detailed documentation, troubleshooting, and configuration guide, see [VS Code Extension README](editors/vscode/README.md).
 
 ## Documentation
 
