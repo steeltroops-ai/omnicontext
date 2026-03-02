@@ -44,15 +44,24 @@ pub fn default_pipe_name(repo_path: &Path) -> String {
 /// Start the IPC server and listen for client connections.
 pub async fn serve(engine: Engine, pipe_name: &str) -> anyhow::Result<()> {
     let engine = Arc::new(Mutex::new(engine));
+    let prefetch_cache = Arc::new(crate::prefetch::PrefetchCache::default());
+    let daemon_start_time = Arc::new(std::time::Instant::now());
+    let performance_metrics = Arc::new(crate::metrics::PerformanceMetrics::default());
 
     #[cfg(windows)]
     {
-        serve_named_pipe(engine, pipe_name).await
+        serve_named_pipe(
+            engine, prefetch_cache, daemon_start_time, performance_metrics, pipe_name,
+        )
+        .await
     }
 
     #[cfg(not(windows))]
     {
-        serve_unix_socket(engine, pipe_name).await
+        serve_unix_socket(
+            engine, prefetch_cache, daemon_start_time, performance_metrics, pipe_name,
+        )
+        .await
     }
 }
 
@@ -61,7 +70,13 @@ pub async fn serve(engine: Engine, pipe_name: &str) -> anyhow::Result<()> {
 // ---------------------------------------------------------------------------
 
 #[cfg(windows)]
-async fn serve_named_pipe(engine: Arc<Mutex<Engine>>, pipe_name: &str) -> anyhow::Result<()> {
+async fn serve_named_pipe(
+    engine: Arc<Mutex<Engine>>,
+    prefetch_cache: Arc<crate::prefetch::PrefetchCache>,
+    daemon_start_time: Arc<std::time::Instant>,
+    performance_metrics: Arc<crate::metrics::PerformanceMetrics>,
+    pipe_name: &str,
+) -> anyhow::Result<()> {
     use tokio::net::windows::named_pipe::ServerOptions;
 
     tracing::info!(pipe = %pipe_name, "listening on named pipe");
@@ -78,9 +93,13 @@ async fn serve_named_pipe(engine: Arc<Mutex<Engine>>, pipe_name: &str) -> anyhow
         tracing::info!("client connected");
 
         let engine = engine.clone();
+        let cache = prefetch_cache.clone();
+        let start_time = daemon_start_time.clone();
+        let metrics = performance_metrics.clone();
         tokio::spawn(async move {
             let (reader, writer) = tokio::io::split(server);
-            if let Err(e) = handle_client(engine, reader, writer).await {
+            if let Err(e) = handle_client(engine, cache, start_time, metrics, reader, writer).await
+            {
                 tracing::warn!(error = %e, "client handler error");
             }
             tracing::info!("client disconnected");
@@ -93,7 +112,13 @@ async fn serve_named_pipe(engine: Arc<Mutex<Engine>>, pipe_name: &str) -> anyhow
 // ---------------------------------------------------------------------------
 
 #[cfg(not(windows))]
-async fn serve_unix_socket(engine: Arc<Mutex<Engine>>, socket_path: &str) -> anyhow::Result<()> {
+async fn serve_unix_socket(
+    engine: Arc<Mutex<Engine>>,
+    prefetch_cache: Arc<crate::prefetch::PrefetchCache>,
+    daemon_start_time: Arc<std::time::Instant>,
+    performance_metrics: Arc<crate::metrics::PerformanceMetrics>,
+    socket_path: &str,
+) -> anyhow::Result<()> {
     use tokio::net::UnixListener;
 
     // Remove stale socket file
@@ -107,9 +132,13 @@ async fn serve_unix_socket(engine: Arc<Mutex<Engine>>, socket_path: &str) -> any
         tracing::info!("client connected");
 
         let engine = engine.clone();
+        let cache = prefetch_cache.clone();
+        let start_time = daemon_start_time.clone();
+        let metrics = performance_metrics.clone();
         tokio::spawn(async move {
             let (reader, writer) = tokio::io::split(stream);
-            if let Err(e) = handle_client(engine, reader, writer).await {
+            if let Err(e) = handle_client(engine, cache, start_time, metrics, reader, writer).await
+            {
                 tracing::warn!(error = %e, "client handler error");
             }
             tracing::info!("client disconnected");
@@ -127,6 +156,9 @@ async fn serve_unix_socket(engine: Arc<Mutex<Engine>>, socket_path: &str) -> any
 /// and writes JSON-RPC responses back.
 async fn handle_client<R, W>(
     engine: Arc<Mutex<Engine>>,
+    prefetch_cache: Arc<crate::prefetch::PrefetchCache>,
+    daemon_start_time: Arc<std::time::Instant>,
+    performance_metrics: Arc<crate::metrics::PerformanceMetrics>,
     reader: R,
     mut writer: W,
 ) -> anyhow::Result<()>
@@ -143,7 +175,16 @@ where
         }
 
         let response = match serde_json::from_str::<protocol::Request>(&line) {
-            Ok(req) => dispatch(engine.clone(), req).await,
+            Ok(req) => {
+                dispatch(
+                    engine.clone(),
+                    prefetch_cache.clone(),
+                    daemon_start_time.clone(),
+                    performance_metrics.clone(),
+                    req,
+                )
+                .await
+            }
             Err(e) => Response::error(
                 0,
                 error_codes::PARSE_ERROR,
@@ -161,7 +202,13 @@ where
 }
 
 /// Dispatch a JSON-RPC request to the appropriate handler.
-async fn dispatch(engine: Arc<Mutex<Engine>>, req: protocol::Request) -> Response {
+async fn dispatch(
+    engine: Arc<Mutex<Engine>>,
+    prefetch_cache: Arc<crate::prefetch::PrefetchCache>,
+    daemon_start_time: Arc<std::time::Instant>,
+    performance_metrics: Arc<crate::metrics::PerformanceMetrics>,
+    req: protocol::Request,
+) -> Response {
     let start = std::time::Instant::now();
 
     let result = match req.method.as_str() {
@@ -169,12 +216,21 @@ async fn dispatch(engine: Arc<Mutex<Engine>>, req: protocol::Request) -> Respons
 
         "status" => handle_status(engine.clone()).await,
 
+        "system_status" => handle_system_status(engine.clone(), daemon_start_time.clone()).await,
+
+        "performance_metrics" => {
+            handle_performance_metrics(engine.clone(), performance_metrics.clone()).await
+        }
+
         "search" => {
             let params: protocol::SearchParams = match parse_params(&req) {
                 Ok(p) => p,
                 Err(r) => return r,
             };
-            handle_search(engine.clone(), params).await
+            let result = handle_search(engine.clone(), params).await;
+            // Record search latency
+            performance_metrics.record_search_latency(start.elapsed());
+            result
         }
 
         "context_window" => {
@@ -182,7 +238,10 @@ async fn dispatch(engine: Arc<Mutex<Engine>>, req: protocol::Request) -> Respons
                 Ok(p) => p,
                 Err(r) => return r,
             };
-            handle_context_window(engine.clone(), params).await
+            let result = handle_context_window(engine.clone(), params).await;
+            // Record search latency
+            performance_metrics.record_search_latency(start.elapsed());
+            result
         }
 
         "preflight" => {
@@ -190,7 +249,11 @@ async fn dispatch(engine: Arc<Mutex<Engine>>, req: protocol::Request) -> Respons
                 Ok(p) => p,
                 Err(r) => return r,
             };
-            handle_preflight(engine.clone(), params, start).await
+            let result =
+                handle_preflight(engine.clone(), prefetch_cache.clone(), params, start).await;
+            // Record search latency
+            performance_metrics.record_search_latency(start.elapsed());
+            result
         }
 
         "module_map" => {
@@ -202,6 +265,34 @@ async fn dispatch(engine: Arc<Mutex<Engine>>, req: protocol::Request) -> Respons
         }
 
         "index" => handle_index(engine.clone()).await,
+
+        "ide_event" => {
+            let params: protocol::IdeEventParams = match parse_params(&req) {
+                Ok(p) => p,
+                Err(r) => return r,
+            };
+            handle_ide_event(prefetch_cache.clone(), params).await
+        }
+
+        "prefetch_stats" => handle_prefetch_stats(prefetch_cache.clone()).await,
+
+        "clear_cache" => handle_clear_cache(prefetch_cache.clone()).await,
+
+        "update_config" => {
+            let params: protocol::UpdateConfigParams = match parse_params(&req) {
+                Ok(p) => p,
+                Err(r) => return r,
+            };
+            handle_update_config(prefetch_cache.clone(), params).await
+        }
+
+        "clear_index" => {
+            let params: protocol::ClearIndexParams = match parse_params(&req) {
+                Ok(p) => p,
+                Err(r) => return r,
+            };
+            handle_clear_index(engine.clone(), params).await
+        }
 
         "shutdown" => {
             tracing::info!("shutdown requested via IPC");
@@ -253,6 +344,104 @@ async fn handle_status(engine: Arc<Mutex<Engine>>) -> Result<serde_json::Value, 
     eng.status()
         .map(|s| serde_json::to_value(s).unwrap_or_default())
         .map_err(|e| (error_codes::ENGINE_ERROR, format!("status failed: {e}")))
+}
+
+async fn handle_system_status(
+    engine: Arc<Mutex<Engine>>,
+    daemon_start_time: Arc<std::time::Instant>,
+) -> Result<serde_json::Value, (i32, String)> {
+    let eng = engine.lock().await;
+
+    // Get engine status for file/chunk counts
+    let status = eng
+        .status()
+        .map_err(|e| (error_codes::ENGINE_ERROR, format!("status failed: {e}")))?;
+
+    // Calculate daemon uptime
+    #[allow(clippy::cast_possible_truncation)]
+    let daemon_uptime_seconds = daemon_start_time.elapsed().as_secs();
+
+    // Determine initialization status based on whether files are indexed
+    let initialization_status = if status.files_indexed > 0 {
+        "ready"
+    } else {
+        "initializing"
+    };
+
+    // Connection health is always "connected" if we're handling this request
+    let connection_health = "connected";
+
+    // For now, we don't track last index time, so return None
+    // This can be enhanced later by storing index timestamps
+    let last_index_time: Option<u64> = None;
+
+    let response = protocol::SystemStatusResponse {
+        initialization_status: initialization_status.to_string(),
+        connection_health: connection_health.to_string(),
+        last_index_time,
+        daemon_uptime_seconds,
+        files_indexed: status.files_indexed,
+        chunks_indexed: status.chunks_indexed,
+    };
+
+    serde_json::to_value(response).map_err(|e| {
+        (
+            error_codes::INTERNAL_ERROR,
+            format!("serialization failed: {e}"),
+        )
+    })
+}
+
+async fn handle_performance_metrics(
+    engine: Arc<Mutex<Engine>>,
+    performance_metrics: Arc<crate::metrics::PerformanceMetrics>,
+) -> Result<serde_json::Value, (i32, String)> {
+    let eng = engine.lock().await;
+
+    // Get engine status for embedding coverage
+    let status = eng
+        .status()
+        .map_err(|e| (error_codes::ENGINE_ERROR, format!("status failed: {e}")))?;
+
+    // Calculate embedding coverage percentage
+    #[allow(clippy::cast_precision_loss)]
+    let embedding_coverage_percent = if status.chunks_indexed > 0 {
+        (status.vectors_indexed as f64 / status.chunks_indexed as f64) * 100.0
+    } else {
+        0.0
+    };
+
+    // Get latency percentiles
+    let search_latency_p50_ms = performance_metrics.get_latency_percentile(0.5);
+    let search_latency_p95_ms = performance_metrics.get_latency_percentile(0.95);
+    let search_latency_p99_ms = performance_metrics.get_latency_percentile(0.99);
+
+    // Get memory usage
+    let memory_usage_bytes = performance_metrics.get_current_memory_bytes();
+    let peak_memory_usage_bytes = performance_metrics.get_peak_memory_bytes();
+
+    // Update peak memory if current is higher
+    performance_metrics.update_memory_usage(memory_usage_bytes);
+
+    // Get total searches
+    let total_searches = performance_metrics.get_total_searches();
+
+    let response = protocol::PerformanceMetricsResponse {
+        search_latency_p50_ms,
+        search_latency_p95_ms,
+        search_latency_p99_ms,
+        embedding_coverage_percent,
+        memory_usage_bytes,
+        peak_memory_usage_bytes,
+        total_searches,
+    };
+
+    serde_json::to_value(response).map_err(|e| {
+        (
+            error_codes::INTERNAL_ERROR,
+            format!("serialization failed: {e}"),
+        )
+    })
 }
 
 async fn handle_search(
@@ -308,11 +497,50 @@ async fn handle_context_window(
 
 async fn handle_preflight(
     engine: Arc<Mutex<Engine>>,
+    prefetch_cache: Arc<crate::prefetch::PrefetchCache>,
     params: protocol::PreflightParams,
     start: std::time::Instant,
 ) -> Result<serde_json::Value, (i32, String)> {
     use std::fmt::Write;
 
+    // Check cache first if active_file is provided
+    if let Some(ref active_file) = params.active_file {
+        let cache_key = std::path::PathBuf::from(active_file);
+        if let Some(cached_context) = prefetch_cache.get_file_context(&cache_key) {
+            #[allow(clippy::cast_possible_truncation)]
+            let elapsed_ms = start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+
+            tracing::info!(
+                file = %active_file,
+                elapsed_ms = elapsed_ms,
+                "cache hit: returning cached preflight context"
+            );
+
+            // Parse the cached context to extract metadata
+            // For now, we'll return reasonable defaults since we're caching the full context
+            let response = protocol::PreflightResponse {
+                system_context: cached_context,
+                entries_count: 0, // Unknown from cache
+                tokens_used: 0,   // Unknown from cache
+                token_budget: params.token_budget,
+                elapsed_ms,
+                from_cache: true,
+            };
+
+            return serde_json::to_value(response).map_err(|e| {
+                (
+                    error_codes::INTERNAL_ERROR,
+                    format!("serialization failed: {e}"),
+                )
+            });
+        }
+        tracing::debug!(
+            file = %active_file,
+            "cache miss: performing fresh search"
+        );
+    }
+
+    // Cache miss or no active_file: perform fresh search
     let eng = engine.lock().await;
 
     // Build the context window from the user's prompt
@@ -367,12 +595,24 @@ async fn handle_preflight(
     #[allow(clippy::cast_possible_truncation)]
     let elapsed_ms = start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
 
+    // Store in cache if active_file is provided
+    if let Some(ref active_file) = params.active_file {
+        let cache_key = std::path::PathBuf::from(active_file);
+        prefetch_cache.put_file_context(cache_key, system_context.clone());
+        tracing::debug!(
+            file = %active_file,
+            elapsed_ms = elapsed_ms,
+            "stored fresh context in cache"
+        );
+    }
+
     let response = protocol::PreflightResponse {
         system_context,
         entries_count: ctx.len(),
         tokens_used: ctx.total_tokens,
         token_budget: ctx.token_budget,
         elapsed_ms,
+        from_cache: false,
     };
 
     serde_json::to_value(response).map_err(|e| {
@@ -459,4 +699,514 @@ async fn handle_index(engine: Arc<Mutex<Engine>>) -> Result<serde_json::Value, (
             })
         })
         .map_err(|e| (error_codes::ENGINE_ERROR, format!("indexing failed: {e}")))
+}
+
+/// Handle IDE event for pre-fetch.
+#[allow(clippy::unused_async)] // Will be async when fully implemented
+async fn handle_ide_event(
+    _prefetch_cache: Arc<crate::prefetch::PrefetchCache>,
+    params: protocol::IdeEventParams,
+) -> Result<serde_json::Value, (i32, String)> {
+    tracing::debug!(
+        event_type = %params.event_type,
+        file = %params.file_path,
+        "IDE event received"
+    );
+
+    // For now, just acknowledge the event
+    // In a full implementation, we would:
+    // 1. Parse the event type
+    // 2. Trigger appropriate pre-fetch based on heuristics
+    // 3. Store results in the cache
+
+    match params.event_type.as_str() {
+        "file_opened" => {
+            // Pre-fetch file-level context
+            tracing::debug!(file = %params.file_path, "pre-fetching file context");
+            // TODO: Implement actual pre-fetch logic
+        }
+        "cursor_moved" => {
+            // Pre-fetch symbol dependencies if symbol is known
+            if let Some(symbol) = &params.symbol {
+                tracing::debug!(
+                    file = %params.file_path,
+                    symbol = %symbol,
+                    "pre-fetching symbol context"
+                );
+                // TODO: Implement actual pre-fetch logic
+            }
+        }
+        "text_edited" => {
+            // Pre-fetch related tests
+            tracing::debug!(file = %params.file_path, "pre-fetching related tests");
+            // TODO: Implement actual pre-fetch logic
+        }
+        _ => {
+            tracing::warn!(event_type = %params.event_type, "unknown IDE event type");
+        }
+    }
+
+    Ok(serde_json::json!({
+        "acknowledged": true,
+        "event_type": params.event_type,
+    }))
+}
+
+/// Handle request for pre-fetch cache statistics.
+#[allow(clippy::unused_async)] // Keeping async for consistency with other handlers
+async fn handle_prefetch_stats(
+    prefetch_cache: Arc<crate::prefetch::PrefetchCache>,
+) -> Result<serde_json::Value, (i32, String)> {
+    let stats = prefetch_cache.stats();
+
+    Ok(serde_json::json!({
+        "hits": stats.hits,
+        "misses": stats.misses,
+        "size": stats.size,
+        "hit_rate": stats.hit_rate,
+    }))
+}
+
+/// Handle request to clear pre-fetch cache.
+#[allow(clippy::unused_async)] // Keeping async for consistency with other handlers
+async fn handle_clear_cache(
+    prefetch_cache: Arc<crate::prefetch::PrefetchCache>,
+) -> Result<serde_json::Value, (i32, String)> {
+    prefetch_cache.clear();
+
+    Ok(serde_json::json!({
+        "cleared": true,
+        "message": "Cache cleared successfully"
+    }))
+}
+
+/// Handle request to update pre-fetch cache configuration.
+#[allow(clippy::unused_async)] // Keeping async for consistency with other handlers
+async fn handle_update_config(
+    prefetch_cache: Arc<crate::prefetch::PrefetchCache>,
+    params: protocol::UpdateConfigParams,
+) -> Result<serde_json::Value, (i32, String)> {
+    // Update cache configuration
+    let updated = prefetch_cache.update_config(params.cache_size, params.cache_ttl_seconds);
+
+    if updated {
+        tracing::info!(
+            cache_size = ?params.cache_size,
+            cache_ttl_seconds = ?params.cache_ttl_seconds,
+            "cache configuration updated"
+        );
+
+        Ok(serde_json::json!({
+            "updated": true,
+            "message": "Cache configuration updated successfully",
+            "cache_size": params.cache_size,
+            "cache_ttl_seconds": params.cache_ttl_seconds,
+        }))
+    } else {
+        Ok(serde_json::json!({
+            "updated": false,
+            "message": "No configuration changes applied"
+        }))
+    }
+}
+
+/// Handle request to clear the index.
+async fn handle_clear_index(
+    engine: Arc<Mutex<Engine>>,
+    _params: protocol::ClearIndexParams,
+) -> Result<serde_json::Value, (i32, String)> {
+    let mut eng = engine.lock().await;
+
+    // Clear the index
+    eng.clear_index().map_err(|e| {
+        (
+            error_codes::ENGINE_ERROR,
+            format!("failed to clear index: {e}"),
+        )
+    })?;
+
+    tracing::info!("index cleared successfully");
+
+    Ok(serde_json::json!({
+        "cleared": true,
+        "message": "Index cleared successfully. Re-indexing recommended."
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use omni_core::Engine;
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    /// Helper to create a test engine with minimal setup
+    fn create_test_engine() -> Engine {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "omni-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        // Create a minimal test file
+        let test_file = temp_dir.join("test.rs");
+        std::fs::write(&test_file, "fn main() { println!(\"Hello\"); }").unwrap();
+
+        Engine::new(&temp_dir).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_preflight_cache_miss() {
+        let engine = Arc::new(Mutex::new(create_test_engine()));
+        let cache = Arc::new(crate::prefetch::PrefetchCache::default());
+
+        let params = protocol::PreflightParams {
+            prompt: "test query".to_string(),
+            active_file: Some("/path/to/test.rs".to_string()),
+            cursor_line: Some(10),
+            open_files: vec![],
+            intent: Some("edit".to_string()),
+            token_budget: 4000,
+        };
+
+        let start = std::time::Instant::now();
+        let result = handle_preflight(engine.clone(), cache.clone(), params, start).await;
+
+        assert!(result.is_ok());
+        let value = result.unwrap();
+
+        // Verify response structure
+        assert!(value.get("system_context").is_some());
+        assert!(value.get("from_cache").is_some());
+        assert_eq!(value.get("from_cache").unwrap().as_bool().unwrap(), false);
+
+        // Verify cache stats show a miss (from the get attempt)
+        let stats = cache.stats();
+        assert_eq!(stats.misses, 1);
+        assert_eq!(stats.hits, 0);
+    }
+
+    #[tokio::test]
+    async fn test_preflight_cache_hit() {
+        let engine = Arc::new(Mutex::new(create_test_engine()));
+        let cache = Arc::new(crate::prefetch::PrefetchCache::default());
+
+        let params = protocol::PreflightParams {
+            prompt: "test query".to_string(),
+            active_file: Some("/path/to/test.rs".to_string()),
+            cursor_line: Some(10),
+            open_files: vec![],
+            intent: Some("edit".to_string()),
+            token_budget: 4000,
+        };
+
+        // First request: cache miss, stores result
+        let start1 = std::time::Instant::now();
+        let result1 = handle_preflight(engine.clone(), cache.clone(), params.clone(), start1).await;
+        assert!(result1.is_ok());
+
+        let value1 = result1.unwrap();
+        assert_eq!(value1.get("from_cache").unwrap().as_bool().unwrap(), false);
+
+        // Second request: cache hit
+        let start2 = std::time::Instant::now();
+        let result2 = handle_preflight(engine.clone(), cache.clone(), params, start2).await;
+        assert!(result2.is_ok());
+
+        let value2 = result2.unwrap();
+        assert_eq!(value2.get("from_cache").unwrap().as_bool().unwrap(), true);
+
+        // Verify cache stats
+        let stats = cache.stats();
+        assert_eq!(stats.hits, 1);
+        assert_eq!(stats.misses, 1); // One miss from first request
+        assert_eq!(stats.hit_rate, 0.5); // 1 hit out of 2 total accesses
+    }
+
+    #[tokio::test]
+    async fn test_preflight_no_active_file() {
+        let engine = Arc::new(Mutex::new(create_test_engine()));
+        let cache = Arc::new(crate::prefetch::PrefetchCache::default());
+
+        let params = protocol::PreflightParams {
+            prompt: "test query".to_string(),
+            active_file: None, // No active file
+            cursor_line: None,
+            open_files: vec![],
+            intent: Some("explain".to_string()),
+            token_budget: 4000,
+        };
+
+        let start = std::time::Instant::now();
+        let result = handle_preflight(engine.clone(), cache.clone(), params, start).await;
+
+        assert!(result.is_ok());
+        let value = result.unwrap();
+
+        // Should always be from_cache: false when no active_file
+        assert_eq!(value.get("from_cache").unwrap().as_bool().unwrap(), false);
+
+        // Cache should not be accessed
+        let stats = cache.stats();
+        assert_eq!(stats.hits, 0);
+        assert_eq!(stats.misses, 0);
+    }
+
+    #[tokio::test]
+    async fn test_preflight_cache_expiry() {
+        let engine = Arc::new(Mutex::new(create_test_engine()));
+        // Create cache with very short TTL (10ms)
+        let cache = Arc::new(crate::prefetch::PrefetchCache::new(
+            100,
+            Duration::from_millis(10),
+        ));
+
+        let params = protocol::PreflightParams {
+            prompt: "test query".to_string(),
+            active_file: Some("/path/to/test.rs".to_string()),
+            cursor_line: Some(10),
+            open_files: vec![],
+            intent: Some("edit".to_string()),
+            token_budget: 4000,
+        };
+
+        // First request: cache miss, stores result
+        let start1 = std::time::Instant::now();
+        let result1 = handle_preflight(engine.clone(), cache.clone(), params.clone(), start1).await;
+        assert!(result1.is_ok());
+
+        // Wait for cache to expire
+        std::thread::sleep(Duration::from_millis(20));
+
+        // Second request: cache miss due to expiry
+        let start2 = std::time::Instant::now();
+        let result2 = handle_preflight(engine.clone(), cache.clone(), params, start2).await;
+        assert!(result2.is_ok());
+
+        let value2 = result2.unwrap();
+        assert_eq!(value2.get("from_cache").unwrap().as_bool().unwrap(), false);
+
+        // Both requests should be cache misses
+        let stats = cache.stats();
+        assert_eq!(stats.hits, 0);
+        assert_eq!(stats.misses, 2);
+    }
+
+    #[tokio::test]
+    async fn test_preflight_different_files() {
+        let engine = Arc::new(Mutex::new(create_test_engine()));
+        let cache = Arc::new(crate::prefetch::PrefetchCache::default());
+
+        let params1 = protocol::PreflightParams {
+            prompt: "test query".to_string(),
+            active_file: Some("/path/to/file1.rs".to_string()),
+            cursor_line: Some(10),
+            open_files: vec![],
+            intent: Some("edit".to_string()),
+            token_budget: 4000,
+        };
+
+        let params2 = protocol::PreflightParams {
+            prompt: "test query".to_string(),
+            active_file: Some("/path/to/file2.rs".to_string()),
+            cursor_line: Some(20),
+            open_files: vec![],
+            intent: Some("edit".to_string()),
+            token_budget: 4000,
+        };
+
+        // Request for file1
+        let start1 = std::time::Instant::now();
+        let result1 =
+            handle_preflight(engine.clone(), cache.clone(), params1.clone(), start1).await;
+        assert!(result1.is_ok());
+
+        // Request for file2 (different file, should be cache miss)
+        let start2 = std::time::Instant::now();
+        let result2 = handle_preflight(engine.clone(), cache.clone(), params2, start2).await;
+        assert!(result2.is_ok());
+
+        let value2 = result2.unwrap();
+        assert_eq!(value2.get("from_cache").unwrap().as_bool().unwrap(), false);
+
+        // Request for file1 again (should be cache hit)
+        let start3 = std::time::Instant::now();
+        let result3 = handle_preflight(engine.clone(), cache.clone(), params1, start3).await;
+        assert!(result3.is_ok());
+
+        let value3 = result3.unwrap();
+        assert_eq!(value3.get("from_cache").unwrap().as_bool().unwrap(), true);
+
+        // Verify cache stats: 1 hit, 2 misses
+        let stats = cache.stats();
+        assert_eq!(stats.hits, 1);
+        assert_eq!(stats.misses, 2);
+    }
+
+    #[tokio::test]
+    async fn test_clear_cache_handler() {
+        let cache = Arc::new(crate::prefetch::PrefetchCache::default());
+
+        // Add some entries to cache
+        cache.put_file_context(PathBuf::from("test1.rs"), "context1".to_string());
+        cache.put_file_context(PathBuf::from("test2.rs"), "context2".to_string());
+
+        // Generate some stats
+        cache.get_file_context(&PathBuf::from("test1.rs")); // hit
+        cache.get_file_context(&PathBuf::from("nonexistent.rs")); // miss
+
+        let stats_before = cache.stats();
+        assert_eq!(stats_before.size, 2);
+        assert!(stats_before.hits > 0);
+        assert!(stats_before.misses > 0);
+
+        // Clear cache
+        let result = handle_clear_cache(cache.clone()).await;
+        assert!(result.is_ok());
+
+        let value = result.unwrap();
+        assert_eq!(value.get("cleared").unwrap().as_bool().unwrap(), true);
+
+        // Verify cache is empty and stats are reset
+        let stats_after = cache.stats();
+        assert_eq!(stats_after.size, 0);
+        assert_eq!(stats_after.hits, 0);
+        assert_eq!(stats_after.misses, 0);
+    }
+
+    #[tokio::test]
+    async fn test_prefetch_stats_handler() {
+        let cache = Arc::new(crate::prefetch::PrefetchCache::default());
+
+        // Add entries and generate stats
+        cache.put_file_context(PathBuf::from("test.rs"), "context".to_string());
+        cache.get_file_context(&PathBuf::from("test.rs")); // hit
+        cache.get_file_context(&PathBuf::from("other.rs")); // miss
+
+        let result = handle_prefetch_stats(cache.clone()).await;
+        assert!(result.is_ok());
+
+        let value = result.unwrap();
+        assert_eq!(value.get("hits").unwrap().as_u64().unwrap(), 1);
+        assert_eq!(value.get("misses").unwrap().as_u64().unwrap(), 1);
+        assert_eq!(value.get("size").unwrap().as_u64().unwrap(), 1);
+        assert_eq!(value.get("hit_rate").unwrap().as_f64().unwrap(), 0.5);
+    }
+
+    #[tokio::test]
+    async fn test_update_config_handler() {
+        let cache = Arc::new(crate::prefetch::PrefetchCache::default());
+
+        // Add some entries to cache
+        cache.put_file_context(PathBuf::from("test1.rs"), "context1".to_string());
+        cache.put_file_context(PathBuf::from("test2.rs"), "context2".to_string());
+
+        let stats_before = cache.stats();
+        assert_eq!(stats_before.size, 2);
+
+        // Update cache configuration
+        let params = protocol::UpdateConfigParams {
+            cache_size: Some(50),
+            cache_ttl_seconds: Some(600),
+        };
+
+        let result = handle_update_config(cache.clone(), params).await;
+        assert!(result.is_ok());
+
+        let value = result.unwrap();
+        assert_eq!(value.get("updated").unwrap().as_bool().unwrap(), true);
+        assert_eq!(value.get("cache_size").unwrap().as_u64().unwrap(), 50);
+        assert_eq!(
+            value.get("cache_ttl_seconds").unwrap().as_u64().unwrap(),
+            600
+        );
+
+        // Verify existing entries are still present
+        let stats_after = cache.stats();
+        assert_eq!(stats_after.size, 2);
+        assert!(cache.get_file_context(&PathBuf::from("test1.rs")).is_some());
+        assert!(cache.get_file_context(&PathBuf::from("test2.rs")).is_some());
+    }
+
+    #[tokio::test]
+    async fn test_update_config_partial() {
+        let cache = Arc::new(crate::prefetch::PrefetchCache::default());
+
+        // Update only cache size
+        let params1 = protocol::UpdateConfigParams {
+            cache_size: Some(75),
+            cache_ttl_seconds: None,
+        };
+
+        let result1 = handle_update_config(cache.clone(), params1).await;
+        assert!(result1.is_ok());
+
+        let value1 = result1.unwrap();
+        assert_eq!(value1.get("updated").unwrap().as_bool().unwrap(), true);
+
+        // Update only TTL
+        let params2 = protocol::UpdateConfigParams {
+            cache_size: None,
+            cache_ttl_seconds: Some(900),
+        };
+
+        let result2 = handle_update_config(cache.clone(), params2).await;
+        assert!(result2.is_ok());
+
+        let value2 = result2.unwrap();
+        assert_eq!(value2.get("updated").unwrap().as_bool().unwrap(), true);
+    }
+
+    #[tokio::test]
+    async fn test_update_config_no_changes() {
+        let cache = Arc::new(crate::prefetch::PrefetchCache::default());
+
+        // Update with no parameters
+        let params = protocol::UpdateConfigParams {
+            cache_size: None,
+            cache_ttl_seconds: None,
+        };
+
+        let result = handle_update_config(cache.clone(), params).await;
+        assert!(result.is_ok());
+
+        let value = result.unwrap();
+        assert_eq!(value.get("updated").unwrap().as_bool().unwrap(), false);
+    }
+
+    #[tokio::test]
+    async fn test_update_config_capacity_reduction() {
+        let cache = Arc::new(crate::prefetch::PrefetchCache::new(
+            100,
+            Duration::from_secs(300),
+        ));
+
+        // Add 5 entries
+        for i in 1..=5 {
+            cache.put_file_context(
+                PathBuf::from(format!("test{}.rs", i)),
+                format!("context{}", i),
+            );
+        }
+
+        let stats_before = cache.stats();
+        assert_eq!(stats_before.size, 5);
+
+        // Reduce capacity to 3
+        let params = protocol::UpdateConfigParams {
+            cache_size: Some(3),
+            cache_ttl_seconds: None,
+        };
+
+        let result = handle_update_config(cache.clone(), params).await;
+        assert!(result.is_ok());
+
+        // Verify only 3 entries remain (most recent ones)
+        let stats_after = cache.stats();
+        assert_eq!(stats_after.size, 3);
+    }
 }

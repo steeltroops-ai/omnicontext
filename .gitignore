@@ -12,9 +12,12 @@ models/*.onnx
 onnx.zip
 onnx_extract/
 
-# IDE
-.idea/
-.vscode/
+# IDE - Keep shared configs, ignore user-specific ones
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/settings.json
+!.vscode/extensions.json
 *.swp
 *.swo
 *~
@@ -38,6 +41,8 @@ Thumbs.db
 # Generated reports and local documentation
 docs/reports/
 docs/local/
+docs/fixes_logs/
+docs/planning/
 
 # Junk files
 out.json
@@ -51,12 +56,19 @@ log/local/
 # JS/TS and VSCode Extension
 node_modules/
 editors/vscode/node_modules/
-bun.lock
-bun.lockb
-package-lock.json
-yarn.lock
 editors/vscode/out/
 editors/vscode/dist/
+editors/vscode/.vscode-test/
+editors/vscode/*.vsix
+
+# Keep lockfiles for reproducible builds
+# !bun.lock
+# !bun.lockb
+# !package-lock.json
+# !yarn.lock
+
+# Agent/Task Artifacts
+editors/vscode/TASK_*_COMPLETE.md
 
 # Other tools
 .kiro/

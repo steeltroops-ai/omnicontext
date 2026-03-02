@@ -21,6 +21,8 @@
 //! ```
 
 mod ipc;
+mod metrics;
+mod prefetch;
 mod protocol;
 
 use anyhow::Result;

@@ -60,6 +60,21 @@ impl Registry {
         );
         analyzers.insert(Language::Css, Box::new(super::languages::css::CssAnalyzer));
 
+        // Phase 4 languages (code -- full tree-sitter AST)
+        analyzers.insert(
+            Language::Ruby,
+            Box::new(super::languages::ruby::RubyAnalyzer),
+        );
+        analyzers.insert(Language::Php, Box::new(super::languages::php::PhpAnalyzer));
+        analyzers.insert(
+            Language::Swift,
+            Box::new(super::languages::swift::SwiftAnalyzer),
+        );
+        analyzers.insert(
+            Language::Kotlin,
+            Box::new(super::languages::kotlin::KotlinAnalyzer),
+        );
+
         // Document and config formats (section-based text chunking)
         analyzers.insert(
             Language::Markdown,
@@ -131,6 +146,11 @@ mod tests {
         assert!(reg.get(Language::Cpp).is_some());
         assert!(reg.get(Language::CSharp).is_some());
         assert!(reg.get(Language::Css).is_some());
+        // Phase 4 - Additional Languages
+        assert!(reg.get(Language::Ruby).is_some());
+        assert!(reg.get(Language::Php).is_some());
+        assert!(reg.get(Language::Swift).is_some());
+        assert!(reg.get(Language::Kotlin).is_some());
     }
 
     #[test]

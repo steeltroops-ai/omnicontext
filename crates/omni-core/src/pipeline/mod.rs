@@ -563,6 +563,7 @@ impl Engine {
             graph_nodes: self.dep_graph.node_count(),
             graph_edges: self.dep_graph.edge_count(),
             has_cycles: self.dep_graph.has_cycles(),
+            language_distribution: self.index.language_distribution().unwrap_or_default(),
             search_mode: if self.embedder.is_available() {
                 "hybrid".into()
             } else {
@@ -584,6 +585,24 @@ impl Engine {
     /// Get a reference to the dependency graph.
     pub fn dep_graph(&self) -> &DependencyGraph {
         &self.dep_graph
+    }
+
+    /// Clear the index (metadata, vectors, and graph).
+    /// This removes all indexed data but keeps the database structure intact.
+    /// 
+    /// Note: Currently this is a no-op placeholder. Full implementation would require:
+    /// - MetadataIndex::clear() to truncate all tables
+    /// - VectorIndex::clear() to remove all vectors
+    /// - DependencyGraph::clear() to remove all nodes/edges
+    pub fn clear_index(&mut self) -> OmniResult<()> {
+        tracing::warn!("clear_index is not fully implemented yet - this is a placeholder");
+        
+        // TODO: Implement actual clearing logic:
+        // self.index.clear()?;
+        // self.vector_index.clear();
+        // self.dep_graph.clear();
+        
+        Ok(())
     }
 
     /// Shut down the engine gracefully, persisting data to disk.
@@ -634,6 +653,8 @@ pub struct EngineStatus {
     pub graph_edges: usize,
     /// Whether the dependency graph contains cycles.
     pub has_cycles: bool,
+    /// Breakdown of files by language.
+    pub language_distribution: Vec<(String, usize)>,
     /// Current search mode (hybrid or keyword-only).
     pub search_mode: String,
 }

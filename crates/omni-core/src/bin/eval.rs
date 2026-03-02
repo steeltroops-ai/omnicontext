@@ -3,14 +3,17 @@
 //! This evaluates how well the search engine ranks relevant results.
 //! Higher NDCG = better ranking quality.
 //!
-//! Run with: cargo run --package omni-core --bin eval
+//! Run with: `cargo run --package omni-core --bin eval`
+
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::doc_markdown)]
 
 use std::collections::HashMap;
 
 /// A query with known relevant documents and their relevance scores.
 struct EvalQuery {
     query: &'static str,
-    /// Map of symbol_path -> relevance score (3=highly relevant, 2=relevant, 1=marginally relevant)
+    /// Map of `symbol_path` -> relevance score (3=highly relevant, 2=relevant, 1=marginally relevant)
     relevant: HashMap<&'static str, u32>,
 }
 

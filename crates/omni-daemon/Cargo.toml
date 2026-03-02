@@ -37,6 +37,9 @@ tracing-subscriber = { workspace = true }
 # CLI args
 clap = { workspace = true }
 
+# Caching
+lru = { workspace = true }
+
 # Hashing (for pipe name derivation)
 sha2 = { workspace = true }
 hex = { workspace = true }

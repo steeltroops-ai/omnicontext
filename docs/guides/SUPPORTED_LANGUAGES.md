@@ -4,18 +4,20 @@
 
 | Language   | Grammar                             | Structural Extractor | Import Resolver | Test Fixture | Status  |
 | ---------- | ----------------------------------- | -------------------- | --------------- | ------------ | ------- |
-| Python     | `tree-sitter-python`                | Planned              | Planned         | Planned      | Phase 1 |
-| TypeScript | `tree-sitter-typescript`            | Planned              | Planned         | Planned      | Phase 1 |
-| JavaScript | `tree-sitter-javascript`            | Planned              | Planned         | Planned      | Phase 1 |
-| Rust       | `tree-sitter-rust`                  | Planned              | Planned         | Planned      | Phase 1 |
-| Go         | `tree-sitter-go`                    | Planned              | Planned         | Planned      | Phase 1 |
-| Java       | `tree-sitter-java`                  | Planned              | Planned         | Planned      | Phase 2 |
-| C/C++      | `tree-sitter-c` / `tree-sitter-cpp` | --                   | --              | --           | Phase 2 |
-| C#         | `tree-sitter-c-sharp`               | --                   | --              | --           | Phase 2 |
-| Ruby       | `tree-sitter-ruby`                  | --                   | --              | --           | Phase 3 |
-| PHP        | `tree-sitter-php`                   | --                   | --              | --           | Phase 3 |
-| Swift      | `tree-sitter-swift`                 | --                   | --              | --           | Phase 3 |
-| Kotlin     | `tree-sitter-kotlin`                | --                   | --              | --           | Phase 3 |
+| Python     | `tree-sitter-python`                | ✅                   | ✅              | ✅           | Phase 1 |
+| TypeScript | `tree-sitter-typescript`            | ✅                   | ✅              | ✅           | Phase 1 |
+| JavaScript | `tree-sitter-javascript`            | ✅                   | ✅              | ✅           | Phase 1 |
+| Rust       | `tree-sitter-rust`                  | ✅                   | ✅              | ✅           | Phase 1 |
+| Go         | `tree-sitter-go`                    | ✅                   | ✅              | ✅           | Phase 1 |
+| Java       | `tree-sitter-java`                  | ✅                   | ✅              | ✅           | Phase 2 |
+| C          | `tree-sitter-c`                     | ✅                   | ✅              | ✅           | Phase 2 |
+| C++        | `tree-sitter-cpp`                   | ✅                   | ✅              | ✅           | Phase 2 |
+| C#         | `tree-sitter-c-sharp`               | ✅                   | ✅              | ✅           | Phase 2 |
+| CSS        | `tree-sitter-css`                   | ✅                   | N/A             | ✅           | Phase 2 |
+| Ruby       | `tree-sitter-ruby`                  | ✅                   | ✅              | ✅           | Phase 4 |
+| PHP        | `tree-sitter-php`                   | ✅                   | ✅              | ✅           | Phase 4 |
+| Swift      | `tree-sitter-swift`                 | ✅                   | ✅              | ✅           | Phase 4 |
+| Kotlin     | `tree-sitter-kotlin-ng`             | ✅                   | ✅              | ✅           | Phase 4 |
 
 ## Language Analyzer Components
 

@@ -53,6 +53,14 @@ pub enum Language {
     CSharp,
     /// CSS / SCSS (.css, .scss)
     Css,
+    /// Ruby (.rb)
+    Ruby,
+    /// PHP (.php)
+    Php,
+    /// Swift (.swift)
+    Swift,
+    /// Kotlin (.kt, .kts)
+    Kotlin,
     /// HTML (.html, .htm)
     Html,
     /// Shell / Bash (.sh, .bash, .zsh)
@@ -83,6 +91,10 @@ impl Language {
             "cpp" | "cc" | "cxx" | "hpp" | "hxx" | "hh" => Self::Cpp,
             "cs" => Self::CSharp,
             "css" | "scss" => Self::Css,
+            "rb" => Self::Ruby,
+            "php" => Self::Php,
+            "swift" => Self::Swift,
+            "kt" | "kts" => Self::Kotlin,
             "html" | "htm" => Self::Html,
             "sh" | "bash" | "zsh" => Self::Shell,
             "md" | "mdx" => Self::Markdown,
@@ -106,6 +118,10 @@ impl Language {
             Self::Cpp => "cpp",
             Self::CSharp => "csharp",
             Self::Css => "css",
+            Self::Ruby => "ruby",
+            Self::Php => "php",
+            Self::Swift => "swift",
+            Self::Kotlin => "kotlin",
             Self::Html => "html",
             Self::Shell => "shell",
             Self::Markdown => "markdown",
@@ -130,6 +146,10 @@ impl Language {
                 | Self::Cpp
                 | Self::CSharp
                 | Self::Css
+                | Self::Ruby
+                | Self::Php
+                | Self::Swift
+                | Self::Kotlin
         )
     }
 

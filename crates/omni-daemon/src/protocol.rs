@@ -148,6 +148,92 @@ pub struct PreflightResponse {
     pub token_budget: u32,
     /// Time taken in milliseconds.
     pub elapsed_ms: u64,
+    /// Whether this response was served from cache.
+    pub from_cache: bool,
+}
+
+/// Parameters for IDE event notifications (for pre-fetch).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdeEventParams {
+    /// Event type: `file_opened`, `cursor_moved`, `text_edited`.
+    pub event_type: String,
+    /// File path for the event.
+    pub file_path: String,
+    /// Cursor line (for `cursor_moved` events).
+    pub cursor_line: Option<u32>,
+    /// Symbol at cursor (if available).
+    pub symbol: Option<String>,
+}
+
+/// Parameters for getting pre-fetch cache statistics.
+#[allow(dead_code)] // TODO: Remove when used in VS Code extension
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PrefetchStatsResponse {
+    /// Number of cache hits.
+    pub hits: u64,
+    /// Number of cache misses.
+    pub misses: u64,
+    /// Current cache size.
+    pub size: usize,
+    /// Hit rate (0.0 to 1.0).
+    pub hit_rate: f64,
+}
+
+/// Parameters for updating pre-fetch cache configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateConfigParams {
+    /// New cache capacity (maximum number of entries).
+    pub cache_size: Option<usize>,
+    /// New cache TTL in seconds.
+    pub cache_ttl_seconds: Option<u64>,
+}
+
+/// Parameters for clearing the index.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClearIndexParams {
+    /// Whether to also clear the vector index.
+    #[serde(default = "default_true")]
+    pub clear_vectors: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// System status response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemStatusResponse {
+    /// Initialization status: "initializing", "ready", "error".
+    pub initialization_status: String,
+    /// Connection health: "connected", "disconnected", "reconnecting".
+    pub connection_health: String,
+    /// Last index time (Unix timestamp in seconds).
+    pub last_index_time: Option<u64>,
+    /// Daemon uptime in seconds.
+    pub daemon_uptime_seconds: u64,
+    /// Number of files indexed.
+    pub files_indexed: usize,
+    /// Number of chunks indexed.
+    pub chunks_indexed: usize,
+}
+
+/// Performance metrics response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PerformanceMetricsResponse {
+    /// Search latency P50 (median) in milliseconds.
+    pub search_latency_p50_ms: f64,
+    /// Search latency P95 in milliseconds.
+    pub search_latency_p95_ms: f64,
+    /// Search latency P99 in milliseconds.
+    pub search_latency_p99_ms: f64,
+    /// Embedding coverage percentage (0.0 to 100.0).
+    pub embedding_coverage_percent: f64,
+    /// Current memory usage in bytes.
+    pub memory_usage_bytes: u64,
+    /// Peak memory usage in bytes since daemon start.
+    pub peak_memory_usage_bytes: u64,
+    /// Total number of searches performed.
+    pub total_searches: u64,
 }
 
 fn default_limit() -> usize {
