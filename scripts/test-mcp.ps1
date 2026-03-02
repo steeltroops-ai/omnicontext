@@ -143,10 +143,10 @@ $configPath = "$env:USERPROFILE\.kiro\settings\mcp.json"
 if (Test-Path $configPath) {
     try {
         $config = Get-Content $configPath -Raw | ConvertFrom-Json
-        if ($config.powers.mcpServers.omnicontext) {
+        if ($config.mcpServers.omnicontext) {
             Write-Success "OmniContext configured in MCP settings"
-            Write-Info "  Command: $($config.powers.mcpServers.omnicontext.command)"
-            Write-Info "  Repo: $($config.powers.mcpServers.omnicontext.args[1])"
+            Write-Info "  Command: $($config.mcpServers.omnicontext.command)"
+            Write-Info "  Repo: $($config.mcpServers.omnicontext.args[1])"
             $testsPassed++
         } else {
             Write-Error "OmniContext not found in MCP configuration"

@@ -132,9 +132,6 @@ if (-not (Test-Path $configDir)) {
 # Read or create config
 $config = @{
     mcpServers = @{}
-    powers = @{
-        mcpServers = @{}
-    }
 }
 
 if (Test-Path $ConfigPath) {
@@ -149,7 +146,7 @@ if (Test-Path $ConfigPath) {
 
 # Add/update omnicontext server
 $repoPath = (Resolve-Path $Repo).Path
-$config.powers.mcpServers.omnicontext = @{
+$config.mcpServers.omnicontext = @{
     command = $binaryPath
     args = @("--repo", $repoPath)
     disabled = $false
@@ -157,6 +154,13 @@ $config.powers.mcpServers.omnicontext = @{
         "search_code",
         "get_symbol",
         "get_file_summary",
+        "get_dependencies",
+        "find_patterns",
+        "get_architecture",
+        "explain_codebase",
+        "get_module_map",
+        "context_window",
+        "search_by_intent",
         "get_status"
     )
 }
