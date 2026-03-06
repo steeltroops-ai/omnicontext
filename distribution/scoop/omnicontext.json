@@ -1,12 +1,12 @@
 {
-  "version": "0.5.3",
-  "description": "Universal code context engine for AI coding agents. Auto-configures MCP for Claude, Cursor, Continue, Kiro, Windsurf, Cline.",
+  "version": "0.6.1",
+  "description": "Universal code context engine for AI coding agents",
   "homepage": "https://github.com/steeltroops-ai/omnicontext",
   "license": "Apache-2.0",
   "architecture": {
     "64bit": {
-      "url": "https://github.com/steeltroops-ai/omnicontext/releases/download/v0.5.3/omnicontext-0.5.3-x86_64-pc-windows-msvc.zip",
-      "hash": "PLACEHOLDER_SHA256"
+      "url": "https://github.com/steeltroops-ai/omnicontext/releases/download/v0.6.1/omnicontext-0.6.1-x86_64-pc-windows-msvc.zip",
+      "hash": "36CC67DFAD7741B816F9858D78191170F26CF10EE6E6CD9F214B4C798A7A922E"
     }
   },
   "bin": ["omnicontext.exe", "omnicontext-mcp.exe", "omnicontext-daemon.exe"],
