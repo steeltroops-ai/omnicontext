@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.0] - 2026-03-06
+
+## What's Changed
+
+### 🔧 Other Changes
+
+-  ()
+
 ## [0.5.3] - 2026-03-02
 
 ## What's Changed
