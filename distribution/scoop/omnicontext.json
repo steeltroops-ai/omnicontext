@@ -1,31 +1,26 @@
 {
-  "version": "0.6.1",
-  "description": "Universal code context engine for AI coding agents. Semantic search, MCP server, auto-configures Claude, Cursor, Windsurf and more.",
+  "version": "0.7.0",
+  "description": "Universal code context engine for AI coding agents",
   "homepage": "https://github.com/steeltroops-ai/omnicontext",
   "license": "Apache-2.0",
   "architecture": {
     "64bit": {
-      "url": "https://github.com/steeltroops-ai/omnicontext/releases/download/v0.6.1/omnicontext-0.6.1-x86_64-pc-windows-msvc.zip",
-      "hash": "36cc67dfad7741b816f9858d78191170f26cf10ee6e6cd9f214b4c798a7a922e"
+      "url": "https://github.com/steeltroops-ai/omnicontext/releases/download/v0.7.0/omnicontext-0.7.0-x86_64-pc-windows-msvc.zip",
+      "hash": "BECBE3C0B44A395E30D2F60ABFD7ECB6FC0E5326995B13BE322056101A7309CA"
     }
   },
   "bin": ["omnicontext.exe", "omnicontext-mcp.exe", "omnicontext-daemon.exe"],
-  "post_install": [
-    "Write-Host 'OmniContext installed. Run: omnicontext index . to index your repo.' -ForegroundColor Green",
-    "Write-Host 'MCP config docs: https://github.com/steeltroops-ai/omnicontext#mcp-integration' -ForegroundColor Cyan"
-  ],
   "checkver": {
-    "github": "https://github.com/steeltroops-ai/omnicontext",
-    "regex": "releases/tag/v([\\d.]+)"
+    "github": "https://github.com/steeltroops-ai/omnicontext"
   },
   "autoupdate": {
     "architecture": {
       "64bit": {
-        "url": "https://github.com/steeltroops-ai/omnicontext/releases/download/v$version/omnicontext-$version-x86_64-pc-windows-msvc.zip",
-        "hash": {
-          "url": "https://github.com/steeltroops-ai/omnicontext/releases/download/v$version/omnicontext-$version-x86_64-pc-windows-msvc.zip.sha256"
-        }
+        "url": "https://github.com/steeltroops-ai/omnicontext/releases/download/v$version/omnicontext-$version-x86_64-pc-windows-msvc.zip"
       }
+    },
+    "hash": {
+      "url": "$url.sha256"
     }
   }
 }
