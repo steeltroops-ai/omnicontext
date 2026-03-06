@@ -1,6 +1,7 @@
 class Omnicontext < Formula
-  desc "Universal code context engine for AI coding agents"
+  desc "Universal code context engine for AI coding agents (MCP, semantic search, local-first)"
   homepage "https://github.com/steeltroops-ai/omnicontext"
+  # Version and SHA256s are auto-updated by the release workflow (update-manifests job)
   version "0.6.1"
 
   on_macos do
@@ -22,6 +23,29 @@ class Omnicontext < Formula
     bin.install "omnicontext"
     bin.install "omnicontext-mcp"
     bin.install "omnicontext-daemon" if File.exist?("omnicontext-daemon")
+  end
+
+  def caveats
+    <<~EOS
+      OmniContext requires the Jina AI embedding model (~550 MB) which is
+      automatically downloaded on first use:
+
+        omnicontext index /path/to/your/repo
+
+      For MCP integration with AI clients (Claude, Cursor, Windsurf, etc.),
+      add the following to your client's MCP config:
+
+        {
+          "mcpServers": {
+            "omnicontext": {
+              "command": "#{bin}/omnicontext-mcp",
+              "args": ["--repo", "/path/to/your/repo"]
+            }
+          }
+        }
+
+      Documentation: https://github.com/steeltroops-ai/omnicontext
+    EOS
   end
 
   test do

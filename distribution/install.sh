@@ -1,423 +1,378 @@
 #!/usr/bin/env bash
-
-# OmniContext Installer
-#
-# This script determines the OS and architecture, downloads the correct
-# OmniContext release binary, moves it to a directory in your PATH,
-# and initializes the system by pre-downloading the Jina AI code embedding model.
+# OmniContext Installer — macOS / Linux
+# Usage: curl -fsSL https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install.sh | bash
 
 set -euo pipefail
 
+# ---------------------------------------------------------------------------
+# constants
+# ---------------------------------------------------------------------------
 REPO_OWNER="steeltroops-ai"
 REPO_NAME="omnicontext"
+BIN_DIR="${HOME}/.local/bin"
+DATA_DIR="${HOME}/.omnicontext"
+MODEL_PATH="${DATA_DIR}/models/jina-embeddings-v2-base-code.onnx"
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
-
-info() { echo -e "${CYAN}ℹ${NC} $*"; }
-success() { echo -e "${GREEN}✓${NC} $*"; }
-warning() { echo -e "${YELLOW}⚠${NC} $*"; }
-error() { echo -e "${RED}✗${NC} $*"; }
-
-echo "========================================="
-echo " 🚀 Installing OmniContext"
-echo "========================================="
-
-# Fetch version from source code (Cargo.toml)
-info "Fetching latest version from source..."
-CARGO_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/Cargo.toml"
-
-if CARGO_CONTENT=$(curl -sSL -f "$CARGO_URL"); then
-    if SOURCE_VERSION=$(echo "$CARGO_CONTENT" | grep -m1 'version\s*=' | sed -E 's/.*version\s*=\s*"([^"]+)".*/\1/'); then
-        if [ -n "$SOURCE_VERSION" ]; then
-            VERSION="v${SOURCE_VERSION}"
-            success "Latest version from source: $VERSION"
-        else
-            warning "Could not parse version from Cargo.toml"
-            VERSION=""
-        fi
-    else
-        warning "Could not parse version from Cargo.toml"
-        VERSION=""
-    fi
+# ---------------------------------------------------------------------------
+# color helpers (degrade gracefully when no tty)
+# ---------------------------------------------------------------------------
+if [ -t 1 ]; then
+    BOLD=$'\033[1m';  DIM=$'\033[2m';  RESET=$'\033[0m'
+    RED=$'\033[31m';  GREEN=$'\033[32m'; YELLOW=$'\033[33m'
+    BLUE=$'\033[34m'; CYAN=$'\033[36m';  WHITE=$'\033[97m'
 else
-    warning "Could not fetch Cargo.toml from GitHub"
-    VERSION=""
+    BOLD=""; DIM=""; RESET=""; RED=""; GREEN=""; YELLOW=""
+    BLUE=""; CYAN=""; WHITE=""
 fi
 
-# Fallback: Check GitHub releases if source version fetch failed
+step()    { printf "${BOLD}${CYAN}  [%s]${RESET} %s\n" "$1" "$2"; }
+ok()      { printf "${GREEN}  [+]${RESET} %s\n" "$*"; }
+info()    { printf "${BLUE}  [-]${RESET} %s\n" "$*"; }
+warn()    { printf "${YELLOW}  [!]${RESET} %s\n" "$*"; }
+err()     { printf "${RED}  [x]${RESET} %s\n" "$*"; }
+hr()      { printf "${DIM}%s${RESET}\n" "──────────────────────────────────────────────────────"; }
+blank()   { echo ""; }
+
+die() { blank; err "$1"; blank; exit 1; }
+
+SECONDS=0
+
+# ---------------------------------------------------------------------------
+# banner
+# ---------------------------------------------------------------------------
+blank
+printf "${BOLD}${CYAN}"
+cat <<'EOF'
+   ____                  _  ______            __            __ 
+  / __ \____ ___  ____  (_)/ ____/___  ____  / /____  _  __/ /_
+ / / / / __ `__ \/ __ \/ // /   / __ \/ __ \/ __/ _ \| |/_/ __/
+/ /_/ / / / / / / / / / // /___/ /_/ / / / / /_/  __/_>  </ /_ 
+\____/_/ /_/ /_/_/ /_/_/ \____/\____/_/ /_/\__/\___/_/|_|\__/  
+EOF
+printf "${RESET}"
+printf "${DIM}  Universal Code Context Engine — macOS / Linux Installer${RESET}\n"
+hr
+blank
+
+# ---------------------------------------------------------------------------
+# step 1 — resolve version
+# ---------------------------------------------------------------------------
+step "1/7" "Resolving latest version"
+
+VERSION=""
+
+# Primary: parse Cargo.toml
+CARGO_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/Cargo.toml"
+if CARGO_CONTENT=$(curl -sSLf "$CARGO_URL" 2>/dev/null); then
+    if SOURCE_VER=$(echo "$CARGO_CONTENT" | grep -m1 '^version' | sed -E 's/.*"([^"]+)".*/\1/' 2>/dev/null); then
+        if [ -n "$SOURCE_VER" ]; then
+            VERSION="v${SOURCE_VER}"
+            ok "Version resolved from source  ${DIM}(${VERSION})${RESET}"
+        fi
+    fi
+fi
+
+# Fallback: GitHub Releases API (skip empty-asset releases)
 if [ -z "$VERSION" ]; then
-    info "Trying GitHub releases..."
-    RELEASES_JSON=$(curl -sSL "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases" || echo "[]")
-
-    # Check if any releases exist
-    RELEASE_COUNT=$(echo "$RELEASES_JSON" | grep -c '"tag_name"' || echo "0")
-
-    if [ "$RELEASE_COUNT" -eq 0 ]; then
-        error "No pre-built releases available yet"
-        echo ""
-        warning "OmniContext doesn't have pre-built releases yet."
-        info "You'll need to build from source."
-        echo ""
-        echo "To build from source:"
-        echo "  1. Install Rust: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
-        echo "  2. Clone the repo: git clone https://github.com/steeltroops-ai/omnicontext.git"
-        echo "  3. Build: cd omnicontext && cargo build --release"
-        echo "  4. Binaries will be in: target/release/"
-        echo ""
-        echo "For detailed instructions, see:"
-        echo "  https://github.com/steeltroops-ai/omnicontext/blob/main/CONTRIBUTING.md"
-        echo ""
-        exit 1
+    warn "Cargo.toml fetch failed — querying GitHub Releases API"
+    API="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases"
+    if RELEASES=$(curl -sSLf "$API" 2>/dev/null); then
+        # Pick first release whose assets array is non-empty
+        # Use python3 if available for reliable JSON parsing
+        if command -v python3 >/dev/null 2>&1; then
+            VERSION=$(python3 -c "
+import json, sys
+releases = json.load(sys.stdin)
+for r in releases:
+    if r.get('assets'):
+        print(r['tag_name'])
+        break
+" <<< "$RELEASES" 2>/dev/null || echo "")
+        else
+            VERSION=$(echo "$RELEASES" | grep '"tag_name":' | head -n1 | sed -E 's/.*"([^"]+)".*/\1/' || echo "")
+        fi
     fi
-
-    # Get the latest release tag
-    LATEST_RELEASE=$(echo "$RELEASES_JSON" | grep '"tag_name":' | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/' || echo "")
-
-    if [ -z "$LATEST_RELEASE" ]; then
-        error "Could not determine version. Please build from source."
-        echo "See: https://github.com/steeltroops-ai/omnicontext/blob/main/CONTRIBUTING.md"
-        exit 1
-    else
-        VERSION="$LATEST_RELEASE"
-        success "Using release version: $VERSION"
-    fi
+    [ -n "$VERSION" ] || die "Could not resolve a published release version."
+    ok "Latest release with assets  ${DIM}(${VERSION})${RESET}"
 fi
 
-# Determine OS and architecture
+CLEAN_VERSION="${VERSION#v}"
+
+# ---------------------------------------------------------------------------
+# step 2 — detect platform
+# ---------------------------------------------------------------------------
+blank
+step "2/7" "Detecting platform"
+
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 
 case "$OS" in
-    Linux)
-        OS_NAME="unknown-linux-gnu"
-        ;;
-    Darwin)
-        OS_NAME="apple-darwin"
-        ;;
-    *)
-        error "Operating system $OS is not supported"
-        exit 1
-        ;;
+    Linux)  OS_NAME="unknown-linux-gnu" ;;
+    Darwin) OS_NAME="apple-darwin" ;;
+    *)      die "Unsupported OS: $OS" ;;
 esac
 
 case "$ARCH" in
-    x86_64|amd64)
-        ARCH_NAME="x86_64"
-        ;;
-    arm64|aarch64)
-        ARCH_NAME="aarch64"
-        ;;
-    *)
-        error "CPU architecture $ARCH is not supported"
-        exit 1
-        ;;
+    x86_64|amd64) ARCH_NAME="x86_64" ;;
+    arm64|aarch64) ARCH_NAME="aarch64" ;;
+    *) die "Unsupported architecture: $ARCH" ;;
 esac
 
-success "Platform: $ARCH_NAME-$OS_NAME"
-
-ASSET_NAME="omnicontext-${VERSION}-${ARCH_NAME}-${OS_NAME}.tar.gz"
+ASSET_NAME="omnicontext-${CLEAN_VERSION}-${ARCH_NAME}-${OS_NAME}.tar.gz"
 DOWNLOAD_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${VERSION}/${ASSET_NAME}"
 
-# Download and extract
+ok "Platform  ${DIM}${ARCH_NAME}-${OS_NAME}${RESET}"
+info "Asset    ${DIM}${ASSET_NAME}${RESET}"
+
+# ---------------------------------------------------------------------------
+# step 3 — download
+# ---------------------------------------------------------------------------
+blank
+step "3/7" "Downloading release archive"
+
 TEMP_DIR="$(mktemp -d)"
+# Guarantee cleanup even on error
 trap 'rm -rf -- "$TEMP_DIR"' EXIT
 
-info "Downloading $ASSET_NAME..."
-info "URL: $DOWNLOAD_URL"
+info "URL  ${DIM}${DOWNLOAD_URL}${RESET}"
 
-if ! curl -sSL -f "$DOWNLOAD_URL" -o "${TEMP_DIR}/${ASSET_NAME}"; then
-    error "Failed to download release"
-    info "URL: $DOWNLOAD_URL"
-    info ""
-    info "Possible causes:"
-    info "- Release $VERSION doesn't exist for $ARCH_NAME-$OS_NAME"
-    info "- No internet connection"
-    info "- GitHub is down"
-    exit 1
+if ! curl -#Lf "$DOWNLOAD_URL" -o "${TEMP_DIR}/${ASSET_NAME}" 2>&1; then
+    blank
+    err "Download failed."
+    info "Verify release: https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/tag/${VERSION}"
+    die "Aborting."
 fi
 
-success "Download complete"
+ARCHIVE_SIZE=$(du -sh "${TEMP_DIR}/${ASSET_NAME}" 2>/dev/null | cut -f1 || echo "?")
+ok "Downloaded ${ARCHIVE_SIZE}"
 
-# Stop running instances
-info "Checking for running instances..."
-pkill -x omnicontext-mcp 2>/dev/null && success "Stopped omnicontext-mcp" || true
-pkill -x omnicontext 2>/dev/null && success "Stopped omnicontext" || true
-pkill -x omnicontext-daemon 2>/dev/null && success "Stopped omnicontext-daemon" || true
+# ---------------------------------------------------------------------------
+# step 4 — stop running instances
+# ---------------------------------------------------------------------------
+blank
+step "4/7" "Stopping active processes"
 
-# Extract
-info "Extracting..."
+STOPPED=0
+for proc in omnicontext-daemon omnicontext-mcp omnicontext; do
+    if pkill -x "$proc" 2>/dev/null; then
+        ok "  Stopped ${proc}"
+        STOPPED=$((STOPPED+1))
+    fi
+done
+if [ "$STOPPED" -eq 0 ]; then
+    info "No active OmniContext processes found"
+fi
+sleep 0.4
+
+# ---------------------------------------------------------------------------
+# step 5 — extract and install
+# ---------------------------------------------------------------------------
+blank
+step "5/7" "Extracting and installing binaries"
+
 tar -xzf "${TEMP_DIR}/${ASSET_NAME}" -C "$TEMP_DIR"
 
-# Find binaries (handle both flat and nested structures)
-OMNICONTEXT_BIN=""
-OMNICONTEXT_MCP_BIN=""
-OMNICONTEXT_DAEMON_BIN=""
+# Locate binaries — handles flat, nested, or searched layout
+locate_bin() {
+    local name="$1"
+    # flat
+    [ -f "${TEMP_DIR}/${name}" ] && { echo "${TEMP_DIR}/${name}"; return; }
+    # nested dir matching archive name
+    local sub="${TEMP_DIR}/${ASSET_NAME%.tar.gz}"
+    [ -f "${sub}/${name}" ] && { echo "${sub}/${name}"; return; }
+    # recursive search
+    find "$TEMP_DIR" -name "$name" -type f | head -n1
+}
 
-# Check for flat structure first
-if [ -f "${TEMP_DIR}/omnicontext" ]; then
-    OMNICONTEXT_BIN="${TEMP_DIR}/omnicontext"
-    OMNICONTEXT_MCP_BIN="${TEMP_DIR}/omnicontext-mcp"
-    OMNICONTEXT_DAEMON_BIN="${TEMP_DIR}/omnicontext-daemon"
-else
-    # Check for nested structure
-    SUBDIR="${ASSET_NAME%.tar.gz}"
-    if [ -d "${TEMP_DIR}/${SUBDIR}" ]; then
-        OMNICONTEXT_BIN="${TEMP_DIR}/${SUBDIR}/omnicontext"
-        OMNICONTEXT_MCP_BIN="${TEMP_DIR}/${SUBDIR}/omnicontext-mcp"
-        OMNICONTEXT_DAEMON_BIN="${TEMP_DIR}/${SUBDIR}/omnicontext-daemon"
-    else
-        # Search recursively
-        OMNICONTEXT_BIN=$(find "$TEMP_DIR" -name "omnicontext" -type f | head -n 1)
-        OMNICONTEXT_MCP_BIN=$(find "$TEMP_DIR" -name "omnicontext-mcp" -type f | head -n 1)
-        OMNICONTEXT_DAEMON_BIN=$(find "$TEMP_DIR" -name "omnicontext-daemon" -type f | head -n 1)
-    fi
-fi
+BIN_OMNI=$(locate_bin "omnicontext")
+BIN_MCP=$(locate_bin "omnicontext-mcp")
+BIN_DAEMON=$(locate_bin "omnicontext-daemon")
 
-# Verify binaries found
-if [ -z "$OMNICONTEXT_BIN" ] || [ ! -f "$OMNICONTEXT_BIN" ]; then
-    error "Could not locate omnicontext binary in archive"
-    find "$TEMP_DIR" -type f
-    exit 1
-fi
+[ -n "$BIN_OMNI" ]  || die "omnicontext binary not found in archive."
+[ -n "$BIN_MCP" ]   || die "omnicontext-mcp binary not found in archive."
 
-if [ -z "$OMNICONTEXT_MCP_BIN" ] || [ ! -f "$OMNICONTEXT_MCP_BIN" ]; then
-    error "Could not locate omnicontext-mcp binary in archive"
-    exit 1
-fi
-
-success "Found binaries"
-
-# Install to ~/.local/bin
-BIN_DIR="${HOME}/.local/bin"
 mkdir -p "$BIN_DIR"
 
-info "Installing to $BIN_DIR..."
-mv "$OMNICONTEXT_BIN" "$BIN_DIR/"
-mv "$OMNICONTEXT_MCP_BIN" "$BIN_DIR/"
-[ -f "$OMNICONTEXT_DAEMON_BIN" ] && mv "$OMNICONTEXT_DAEMON_BIN" "$BIN_DIR/" || true
+install -m 755 "$BIN_OMNI"  "${BIN_DIR}/omnicontext"
+install -m 755 "$BIN_MCP"   "${BIN_DIR}/omnicontext-mcp"
+[ -n "$BIN_DAEMON" ] && [ -f "$BIN_DAEMON" ] && install -m 755 "$BIN_DAEMON" "${BIN_DIR}/omnicontext-daemon"
 
-chmod +x "${BIN_DIR}/omnicontext" "${BIN_DIR}/omnicontext-mcp"
-[ -f "${BIN_DIR}/omnicontext-daemon" ] && chmod +x "${BIN_DIR}/omnicontext-daemon" || true
+ok "Installed to  ${DIM}${BIN_DIR}${RESET}"
 
-success "Binaries installed"
+BIN_CLI_SIZE=$(du -sh "${BIN_DIR}/omnicontext" 2>/dev/null | cut -f1 || echo "?")
+BIN_MCP_SIZE=$(du -sh "${BIN_DIR}/omnicontext-mcp" 2>/dev/null | cut -f1 || echo "?")
+info "omnicontext          ${DIM}${BIN_CLI_SIZE}${RESET}"
+info "omnicontext-mcp      ${DIM}${BIN_MCP_SIZE}${RESET}"
+[ -f "${BIN_DIR}/omnicontext-daemon" ] && \
+    info "omnicontext-daemon   ${DIM}$(du -sh "${BIN_DIR}/omnicontext-daemon" | cut -f1)${RESET}"
 
-# Ensure ~/.local/bin is in PATH
+# ---------------------------------------------------------------------------
+# PATH bootstrap (non-login shells)
+# ---------------------------------------------------------------------------
 export PATH="${BIN_DIR}:${PATH}"
 
-if ! command -v omnicontext >/dev/null 2>&1; then
-    warning "${BIN_DIR} is not in your PATH"
-    info "Add this to your shell configuration (~/.bashrc or ~/.zshrc):"
-    echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
-    echo ""
+SHELL_RC=""
+case "${SHELL:-}" in
+    */zsh)  SHELL_RC="${HOME}/.zshrc" ;;
+    */bash) SHELL_RC="${HOME}/.bashrc" ;;
+    *)      SHELL_RC="${HOME}/.profile" ;;
+esac
+
+PATH_LINE='export PATH="$HOME/.local/bin:$PATH"'
+if ! grep -qF "$PATH_LINE" "$SHELL_RC" 2>/dev/null; then
+    {
+        echo ""
+        echo "# OmniContext"
+        echo "$PATH_LINE"
+    } >> "$SHELL_RC"
+    ok "PATH entry added to  ${DIM}${SHELL_RC}${RESET}"
 fi
 
-# Download embedding model
-echo ""
-info "Downloading Jina AI embedding model (~550MB)..."
-info "This requires a good internet connection and may take several minutes."
-info "The model enables semantic code search and AI agent capabilities."
-echo ""
-
-MODEL_PATH="${HOME}/.omnicontext/models/jina-embeddings-v2-base-code.onnx"
+# ---------------------------------------------------------------------------
+# step 6 — download embedding model
+# ---------------------------------------------------------------------------
+blank
+step "6/7" "Embedding model  ${DIM}(jina-embeddings-v2-base-code, ~550 MB)${RESET}"
 
 if [ -f "$MODEL_PATH" ]; then
-    success "Model already downloaded"
+    MODEL_SIZE=$(du -sh "$MODEL_PATH" 2>/dev/null | cut -f1 || echo "?")
+    ok "Model already cached  ${DIM}${MODEL_SIZE}${RESET}"
 else
-    # Create temporary directory with dummy file
-    INIT_TEMP="$(mktemp -d)"
-    
-    # Create dummy source file
-    echo "// Dummy file for model download" > "${INIT_TEMP}/dummy.rs"
-    echo "fn main() {}" >> "${INIT_TEMP}/dummy.rs"
-    
-    # Run index command to trigger model download
-    info "Triggering model download..."
-    (
-        cd "$INIT_TEMP"
-        "${BIN_DIR}/omnicontext" index . || warning "Model download may have failed"
-    )
-    
+    info "Triggering download via  ${DIM}omnicontext index${RESET}"
+    info "This may take several minutes on a slow connection..."
+    blank
+    INIT_TMP="$(mktemp -d)"
+    echo "fn main() {}" > "${INIT_TMP}/dummy.rs"
+    (cd "$INIT_TMP" && "${BIN_DIR}/omnicontext" index . 2>&1) || true
+    rm -rf "$INIT_TMP"
+
     if [ -f "$MODEL_PATH" ]; then
-        success "Model download complete"
+        MODEL_SIZE=$(du -sh "$MODEL_PATH" 2>/dev/null | cut -f1 || echo "?")
+        ok "Model downloaded  ${DIM}${MODEL_SIZE}${RESET}"
     else
-        warning "Model not downloaded (will download on first use)"
+        warn "Model not found — will auto-download on first  ${DIM}omnicontext index${RESET}"
     fi
-    
-    # Cleanup
-    rm -rf "$INIT_TEMP"
 fi
 
-# Installation verification
-echo ""
-info "Running installation verification..."
+# ---------------------------------------------------------------------------
+# step 7 — MCP auto-configure
+# ---------------------------------------------------------------------------
+blank
+step "7/7" "Auto-configuring MCP for AI clients"
 
-VERIFICATION_PASSED=0
-VERIFICATION_FAILED=0
+MCP_BIN="${BIN_DIR}/omnicontext-mcp"
+MCP_ENTRY="{\"command\":\"${MCP_BIN}\",\"args\":[\"--repo\",\".\"],\"disabled\":false}"
 
-# Test 1: Binary execution
-if VERSION_OUTPUT=$("${BIN_DIR}/omnicontext" --version 2>&1); then
-    success "Binary works: $VERSION_OUTPUT"
-    ((VERIFICATION_PASSED++))
-else
-    error "Binary execution failed"
-    ((VERIFICATION_FAILED++))
-fi
-
-# Test 2: Model file
-if [ -f "$MODEL_PATH" ]; then
-    MODEL_SIZE=$(du -h "$MODEL_PATH" | cut -f1)
-    success "Model file: $MODEL_SIZE"
-    ((VERIFICATION_PASSED++))
-else
-    warning "Model not downloaded (will download on first use)"
-    ((VERIFICATION_FAILED++))
-fi
-
-# Test 3: PATH
-if command -v omnicontext >/dev/null 2>&1; then
-    success "PATH configured correctly"
-    ((VERIFICATION_PASSED++))
-else
-    warning "PATH not updated (restart terminal or add to shell config)"
-    ((VERIFICATION_FAILED++))
-fi
-
-# Auto-Configure MCP for detected AI clients
-echo ""
-info "Configuring MCP for detected AI clients..."
-
-MCP_BINARY="${BIN_DIR}/omnicontext-mcp"
-MCP_CONFIGURED=""
-
-# Function to upsert omnicontext entry into a JSON config file
-configure_mcp_client() {
-    local name="$1"
-    local config_path="$2"
-    local use_powers="$3"  # "true" or "false"
-    
+_write_mcp_config() {
+    local config_path="$1"
+    local use_powers="$2"
     local config_dir
-    config_dir=$(dirname "$config_path")
-    
-    # Skip if client config directory doesn't exist (client not installed)
+    config_dir="$(dirname "$config_path")"
     [ -d "$config_dir" ] || return 1
 
-    # Build the MCP entry
-    local entry
-    entry=$(cat <<ENTRY_EOF
-{"command":"${MCP_BINARY}","args":["--repo","."],"disabled":false}
-ENTRY_EOF
-)
-
     if command -v python3 >/dev/null 2>&1; then
-        python3 -c "
+        python3 - "$config_path" "$use_powers" "$MCP_BIN" <<'PYEOF' 2>/dev/null && return 0
 import json, sys, os
 
-config_path = '$config_path'
-use_powers = '$use_powers' == 'true'
-entry = json.loads('$entry')
+path, use_powers, mcp_bin = sys.argv[1], sys.argv[2] == "true", sys.argv[3]
+entry = {"command": mcp_bin, "args": ["--repo", "."], "disabled": False}
 
-config = {}
-if os.path.exists(config_path):
+cfg = {}
+if os.path.exists(path):
     try:
-        with open(config_path) as f:
-            config = json.load(f)
-    except:
-        config = {}
+        with open(path) as f: cfg = json.load(f)
+    except: cfg = {}
 
 if use_powers:
-    config.setdefault('powers', {}).setdefault('mcpServers', {})['omnicontext'] = entry
+    cfg.setdefault("powers", {}).setdefault("mcpServers", {})["omnicontext"] = entry
 else:
-    config.setdefault('mcpServers', {})['omnicontext'] = entry
+    cfg.setdefault("mcpServers", {})["omnicontext"] = entry
 
-with open(config_path, 'w') as f:
-    json.dump(config, f, indent=2)
-" 2>/dev/null && return 0
+os.makedirs(os.path.dirname(path), exist_ok=True)
+with open(path, "w") as f:
+    json.dump(cfg, f, indent=2)
+PYEOF
     fi
 
-    # Fallback: write a fresh config if python3 not available
+    # Fallback: basic JSON write (no merging)
+    mkdir -p "$config_dir"
     if [ "$use_powers" = "true" ]; then
-        echo "{\"powers\":{\"mcpServers\":{\"omnicontext\":${entry}}}}" > "$config_path"
+        printf '{"powers":{"mcpServers":{"omnicontext":%s}}}\n' "$MCP_ENTRY" > "$config_path"
     else
-        echo "{\"mcpServers\":{\"omnicontext\":${entry}}}" > "$config_path"
+        printf '{"mcpServers":{"omnicontext":%s}}\n' "$MCP_ENTRY" > "$config_path"
     fi
     return 0
 }
 
-# macOS paths
 if [ "$(uname -s)" = "Darwin" ]; then
-    CLAUDE_CONFIG="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
+    CLAUDE_CFG="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
 else
-    CLAUDE_CONFIG="$HOME/.config/claude/claude_desktop_config.json"
+    CLAUDE_CFG="$HOME/.config/claude/claude_desktop_config.json"
 fi
 
-# Configure each known client
-mcp_targets=(
-    "Claude Desktop|${CLAUDE_CONFIG}|false"
-    "Cursor|${HOME}/.cursor/mcp.json|false"
-    "Continue.dev|${HOME}/.continue/config.json|false"
-    "Kiro|${HOME}/.kiro/settings/mcp.json|true"
-    "Windsurf|${HOME}/.windsurf/mcp_config.json|false"
-    "Cline|${HOME}/.cline/mcp_settings.json|false"
+declare -A MCP_TARGETS=(
+    ["Claude Desktop"]="${CLAUDE_CFG}:false"
+    ["Claude Code CLI"]="${HOME}/.claude.json:false"
+    ["Cursor"]="${HOME}/.cursor/mcp.json:false"
+    ["Continue.dev"]="${HOME}/.continue/config.json:false"
+    ["Kiro"]="${HOME}/.kiro/settings/mcp.json:true"
+    ["Windsurf"]="${HOME}/.windsurf/mcp_config.json:false"
+    ["Cline"]="${HOME}/.cline/mcp_settings.json:false"
+    ["RooCode"]="${HOME}/.roo-cline/mcp_settings.json:false"
+    ["Trae"]="${HOME}/.trae/mcp.json:false"
+    ["Antigravity"]="${HOME}/.gemini/antigravity/mcp_config.json:false"
 )
 
-for target_spec in "${mcp_targets[@]}"; do
-    IFS='|' read -r client_name client_path client_powers <<< "$target_spec"
-    if configure_mcp_client "$client_name" "$client_path" "$client_powers"; then
-        MCP_CONFIGURED="${MCP_CONFIGURED:+$MCP_CONFIGURED, }$client_name"
-        success "  $client_name: configured"
+MCP_CONFIGURED=""
+for client in "${!MCP_TARGETS[@]}"; do
+    spec="${MCP_TARGETS[$client]}"
+    config_path="${spec%%:*}"
+    use_powers="${spec##*:}"
+    if _write_mcp_config "$config_path" "$use_powers"; then
+        MCP_CONFIGURED="${MCP_CONFIGURED:+${MCP_CONFIGURED}, }${client}"
+        ok "  ${client}  ${DIM}${config_path}${RESET}"
     fi
 done
 
 if [ -z "$MCP_CONFIGURED" ]; then
-    warning "  No AI clients detected. Install Claude/Cursor/etc and re-run."
+    warn "No AI clients detected — install Claude/Cursor/etc and re-run to auto-configure"
 else
-    success "  Configured: $MCP_CONFIGURED"
+    blank
+    ok "$(echo "$MCP_CONFIGURED" | tr ',' '\n' | wc -l | tr -d ' ') client(s) configured"
 fi
 
-# Summary
-echo ""
-echo "========================================="
-echo " Installation Complete!"
-echo "========================================="
-echo ""
-echo "Verification: $VERIFICATION_PASSED passed, $VERIFICATION_FAILED warnings"
-echo ""
-echo "Installation Details:"
-echo "  Binaries: $BIN_DIR"
-echo "  Model: $MODEL_PATH"
-echo "  Version: $VERSION"
-echo ""
-echo -e "${CYAN}Quick Start:${NC}"
-echo "  1. Open a NEW terminal (to load PATH changes)"
-echo "  2. Navigate to your code: cd /path/to/your/repo"
-echo "  3. Index your code: omnicontext index ."
-echo "  4. Search your code: omnicontext search \"authentication\""
-echo ""
+# ---------------------------------------------------------------------------
+# verification
+# ---------------------------------------------------------------------------
+blank
+hr
+ELAPSED=$SECONDS
+if command -v omnicontext >/dev/null 2>&1; then
+    INSTALLED_VER=$(omnicontext --version 2>/dev/null || echo "?")
+    printf "${BOLD}${GREEN}  OmniContext ${CLEAN_VERSION} installed${RESET}  ${DIM}(${ELAPSED}s)${RESET}\n"
+else
+    printf "${BOLD}${GREEN}  OmniContext ${CLEAN_VERSION} installed${RESET}  ${DIM}(${ELAPSED}s — restart shell to apply PATH)${RESET}\n"
+fi
+hr
+blank
+
+printf "${BOLD}  Quick Start${RESET}\n"
+printf "  cd /path/to/your/repo\n"
+printf "  omnicontext index .\n"
+printf "  omnicontext search \"error handling\"\n"
+blank
 
 if [ -n "$MCP_CONFIGURED" ]; then
-    echo -e "${CYAN}MCP Auto-Configured: $MCP_CONFIGURED${NC}"
-    echo "  Default: '--repo .' (current dir). Edit config for specific repos."
+    printf "${BOLD}  MCP${RESET}  ${DIM}auto-configured for: ${MCP_CONFIGURED}${RESET}\n"
+    printf "  Default --repo is '.' (cwd). Edit config files for project-specific paths.\n"
 else
-    echo -e "${CYAN}MCP Manual Setup:${NC}"
-    echo "  Command: ${BIN_DIR}/omnicontext-mcp"
-    echo "  Args:    [\"--repo\", \"/path/to/your/repo\"]"
+    printf "${BOLD}  MCP manual config${RESET}\n"
+    printf "  command: %s\n" "$MCP_BIN"
+    printf '  args:    ["--repo", "/path/to/repo"]\n'
 fi
 
-echo ""
-echo -e "${CYAN}Update:${NC} Re-run this script anytime."
-echo "Documentation: https://github.com/steeltroops-ai/omnicontext"
-echo ""
-
-if [ $VERIFICATION_FAILED -gt 0 ]; then
-    warning "Installation completed with $VERIFICATION_FAILED warnings"
-    if ! command -v omnicontext >/dev/null 2>&1; then
-        info "Add ${BIN_DIR} to your PATH by adding this to ~/.bashrc or ~/.zshrc:"
-        echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
-    fi
-fi
-
+blank
+printf "  ${DIM}Update:    re-run this script anytime${RESET}\n"
+printf "  ${DIM}Docs:      https://github.com/${REPO_OWNER}/${REPO_NAME}${RESET}\n"
+blank

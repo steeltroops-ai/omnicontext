@@ -25,6 +25,7 @@
     clippy::missing_errors_doc,
     clippy::must_use_candidate,
     clippy::non_canonical_partial_ord_impl,
+    clippy::similar_names,
     clippy::too_many_arguments,
     clippy::too_many_lines,
     clippy::unused_self

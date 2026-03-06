@@ -1,287 +1,139 @@
-# OmniContext Installation Guide
+# Installation Guide
 
-## For End Users (Recommended Methods)
+OmniContext provides a streamlined, zero-config installation experience across Windows, macOS, and Linux. Automated tooling resolves binary releases directly from CI/CD artifacts to your standard system routes.
 
-Choose ONE method based on your platform:
+## Recommended One-Liners (Zero-Config)
 
-### Windows
+These scripts download the latest optimized binary for your architecture, update your `PATH`, pre-cache the Jina AI embedding model (~550MB), and **auto-configure MCP** for Claude Desktop, Cursor, Windsurf, Kiro, Cline, RooCode, Trae, Antigravity, and Claude Code.
 
-**Option 1: Direct Install (Recommended)**
+**Windows (PowerShell)**:
 
 ```powershell
 irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install.ps1 | iex
 ```
 
-**Option 2: Scoop Package Manager**
+**macOS / Linux (Bash)**:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install.sh | bash
+```
+
+---
+
+## Package Managers
+
+For developers who prefer managed lifecycle and version tracking.
+
+### Windows
+
+**Scoop (Recommended)**:
 
 ```powershell
 scoop bucket add omnicontext https://github.com/steeltroops-ai/omnicontext
 scoop install omnicontext
 ```
 
-### Rust Developers
+**WinGet**:
 
-**cargo-binstall (pre-built binary)**
-
-```bash
-cargo binstall omni-cli
+```powershell
+winget install omnicontext
 ```
 
-### macOS / Linux
+### macOS & Linux
 
-**Option 1: Direct Install (Recommended)**
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install.sh | bash
-```
-
-**Option 2: Homebrew (macOS/Linux)**
+**Homebrew**:
 
 ```bash
 brew tap steeltroops-ai/omnicontext
 brew install omnicontext
 ```
 
-## What Gets Installed
+### Modern Cross-Platform
 
-All installation methods install to the same locations:
-
-### Binaries
-
-- **Windows**: `%USERPROFILE%\.omnicontext\bin\`
-  - `omnicontext.exe` - CLI tool
-  - `omnicontext-mcp.exe` - MCP server
-  - `omnicontext-daemon.exe` - Background indexer (optional)
-
-- **Unix/Linux/macOS**: `~/.local/bin/`
-  - `omnicontext` - CLI tool
-  - `omnicontext-mcp` - MCP server
-  - `omnicontext-daemon` - Background indexer (optional)
-
-### Data & Models
-
-- **All platforms**: `~/.omnicontext/`
-  - `models/jina-embeddings-v2-base-code.onnx` (~550MB) - AI embedding model
-  - `repos/{hash}/` - Indexed repository data per project
-    - `index.db` - SQLite database (metadata, FTS5)
-    - `vectors.usearch` - Vector index (HNSW)
-    - `graph.bin` - Dependency graph
-
-### Configuration
-
-- **MCP Config**: `~/.kiro/settings/mcp.json` (if using with Kiro/Claude)
-
-## Installation Process
-
-All methods perform these steps:
-
-1. **Download** - Fetch latest release binary for your platform
-2. **Stop Processes** - Gracefully stop any running instances
-3. **Install Binaries** - Place executables in PATH
-4. **Download Model** - Fetch Jina AI embedding model (~550MB, one-time)
-5. **Verify** - Test binary execution and model presence
-6. **Configure PATH** - Ensure binaries are accessible
-7. **Auto-Configure MCP** - Detect and configure installed AI clients (Claude, Cursor, Continue, Kiro, Windsurf, Cline)
-
-## Post-Installation
-
-### Verify Installation
+**Pkgx**:
 
 ```bash
-omnicontext --version
+pkgx install omnicontext
 ```
 
-### Index Your First Repository
+**Cargo Binstall (Pre-compiled Rust standard)**:
 
 ```bash
-cd /path/to/your/code
-omnicontext index .
+cargo binstall omni-cli
 ```
 
-### Search Your Code
+---
 
-```bash
-omnicontext search "authentication"
-```
+## Developer Lifecycle
 
-### MCP Integration (Zero-Config)
+OmniContext includes dedicated scripts for seamless updates and clean removals.
 
-The installer **automatically configures** MCP for all detected AI clients:
+### Updating
 
-- Claude Desktop
-- Cursor
-- Continue.dev
-- Kiro
-- Windsurf
-- Cline / Roo Code
+To sync with the latest stable release while preserving your indexed data and MCP configurations:
 
-The VS Code extension also auto-syncs MCP to all clients when the daemon starts.
+**Windows**:
 
-To manually configure or add a specific repo path:
-
-```json
-{
-  "mcpServers": {
-    "omnicontext": {
-      "command": "omnicontext-mcp",
-      "args": ["--repo", "/path/to/your/repo"],
-      "disabled": false
-    }
-  }
-}
-```
-
-## Updating
-
-### All Platforms
-
-```bash
-# Windows
+```powershell
 irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/update.ps1 | iex
-
-# Unix/Linux/macOS
-curl -fsSL https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install.sh | bash
 ```
 
-### Package Managers
+**macOS / Linux**:
 
 ```bash
-# Scoop (Windows)
-scoop update omnicontext
-
-# Homebrew (macOS/Linux)
-brew upgrade omnicontext
+curl -fsSL https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/update.sh | bash
 ```
 
-**Note**: Updates preserve all indexed data and configuration.
+### Uninstalling
 
-## Uninstalling
+Routinely wipe binaries and cache. Use `--keep-data` or `-KeepData` if you wish to preserve your vector indices.
 
-### Windows
+**Windows**:
 
 ```powershell
 irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/uninstall.ps1 | iex
 ```
 
-### Package Managers
+**macOS / Linux**:
 
 ```bash
-# Scoop
-scoop uninstall omnicontext
-
-# Homebrew
-brew uninstall omnicontext
+curl -fsSL https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/uninstall.sh | bash
 ```
 
-**Options**:
+---
 
-- Keep indexed data: Add `-KeepData` flag
-- Keep MCP config: Add `-KeepConfig` flag
+## Verification & Usage
 
-## For Developers
-
-If you're contributing to OmniContext or need to build from source:
-
-### Build from Source
+After installation, restart your terminal or source your shell RC (`~/.zshrc` or `~/.bashrc`).
 
 ```bash
-# Clone repository
-git clone https://github.com/steeltroops-ai/omnicontext.git
-cd omnicontext
+# Verify version
+omnicontext --version
 
-# Build release binaries
-cargo build --release
-
-# Binaries in: target/release/
-```
-
-### Development Scripts
-
-Located in `scripts/` (for contributors only):
-
-- `install-mcp.ps1` - Build and configure MCP server from source
-- `install-mcp-quick.ps1` - Quick config update (no build)
-- `test-mcp.ps1` - Run MCP integration tests
-- `test-mcp-protocol.py` - Protocol compliance tests
-
-### Run Tests
-
-```bash
-cargo test --workspace
-```
-
-## Troubleshooting
-
-### Model Download Fails
-
-The installer automatically downloads the embedding model. If it fails:
-
-```bash
-# Manually trigger download
-cd /tmp
+# Index a repository (one-time setup for the repo)
 omnicontext index .
+
+# Perform a semantic search
+omnicontext search "how do we handle database migrations?"
 ```
 
-### Binary Not in PATH
+## IDE & MCP Integration Targets
 
-**Windows**: Add to PowerShell profile (`$PROFILE`):
+OmniContext auto-detects and injects its MCP server into the following environments:
 
-```powershell
-$env:PATH += ";$env:USERPROFILE\.omnicontext\bin"
-```
+| Client              | Configuration Path                 | Support |
+| :------------------ | :--------------------------------- | :------ |
+| **Claude Desktop**  | `claude_desktop_config.json`       | native  |
+| **Claude Code**     | `~/.claude.json`                   | native  |
+| **Cursor**          | `cursor.mcp/config.json`           | native  |
+| **Trae IDE**        | `.trae/mcp.json` / `globalStorage` | native  |
+| **Antigravity**     | `mcp_config.json`                  | native  |
+| **Windsurf**        | `mcp_config.json`                  | native  |
+| **Cline / RooCode** | `mcp_settings.json`                | native  |
+| **Continue.dev**    | `config.json`                      | native  |
+| **Kiro**            | `mcp.json`                         | native  |
 
-**Unix/Linux/macOS**: Add to `~/.bashrc` or `~/.zshrc`:
+---
 
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-### Permission Denied (Unix/Linux/macOS)
-
-```bash
-chmod +x ~/.local/bin/omnicontext*
-```
-
-### Scoop/Homebrew Not Working
-
-Fall back to direct install method - it's the most reliable.
-
-## Edge Cases Handled
-
-All installation methods handle:
-
-- ✅ Existing installations (seamless updates)
-- ✅ Running processes (graceful shutdown)
-- ✅ Nested/flat archive structures
-- ✅ Missing directories (auto-created)
-- ✅ PATH not configured (instructions provided)
-- ✅ Model already downloaded (skip re-download)
-- ✅ Network failures (clear error messages)
-- ✅ Architecture detection (x86_64, aarch64)
-- ✅ OS detection (Windows, macOS, Linux)
-
-## FAQ
-
-**Q: Which installation method should I use?**
-A: Direct install (`install.ps1` or `install.sh`) is recommended. Package managers are convenient if you already use them.
-
-**Q: Does Scoop really work on Windows?**
-A: Yes! Scoop is a popular Windows package manager. It works like Homebrew for macOS.
-
-**Q: Can I use multiple installation methods?**
-A: No, choose ONE method. All install to the same location, so mixing methods can cause conflicts.
-
-**Q: Do I need to re-index after updating?**
-A: No, indexed data is preserved. Re-index only if you want to pick up new features.
-
-**Q: How much disk space is needed?**
-A: ~600MB minimum (550MB model + 50MB binary). Indexed repos add ~1-5MB per 1000 files.
-
-**Q: Can I install without internet?**
-A: No, the embedding model must be downloaded. After first install, OmniContext works offline.
-
-## Support
-
-- Documentation: https://github.com/steeltroops-ai/omnicontext
-- Issues: https://github.com/steeltroops-ai/omnicontext/issues
-- Discussions: https://github.com/steeltroops-ai/omnicontext/discussions
+Documentation: [GitHub Repository](https://github.com/steeltroops-ai/omnicontext)
+Issues: [Report a Bug](https://github.com/steeltroops-ai/omnicontext/issues)

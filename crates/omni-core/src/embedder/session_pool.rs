@@ -53,14 +53,14 @@ pub struct SessionGuard<'a> {
     pool: &'a SessionPool,
 }
 
-impl<'a> SessionGuard<'a> {
+impl SessionGuard<'_> {
     /// Get a mutable reference to the ONNX session.
     pub fn session_mut(&mut self) -> &mut Session {
         self.session.as_mut().expect("session was already returned")
     }
 }
 
-impl<'a> Drop for SessionGuard<'a> {
+impl Drop for SessionGuard<'_> {
     fn drop(&mut self) {
         if let Some(session) = self.session.take() {
             self.pool.return_session(session);

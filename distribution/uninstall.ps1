@@ -1,138 +1,233 @@
-#!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-    Uninstall OmniContext completely
+    OmniContext Uninstaller for Windows
+
 .DESCRIPTION
-    Removes all OmniContext files, configurations, and PATH entries.
-    Optionally preserves indexed data.
+    Removes OmniContext binaries, PATH entry, indexed data, cached models,
+    and unlinks the MCP entry from all known AI client config files.
+    Use -KeepData to preserve the vector index and embedding model.
+    Use -KeepConfig to leave MCP client configurations untouched.
+
 .PARAMETER KeepData
-    Keep indexed repositories and models
+    Preserve ~/.omnicontext (models, vector indices, repos).
+
 .PARAMETER KeepConfig
-    Keep MCP configuration
+    Preserve MCP configuration entries in all AI clients.
+
+.PARAMETER Silent
+    Skip the confirmation prompt.
+
 .EXAMPLE
-    .\uninstall.ps1
+    irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/uninstall.ps1 | iex
+
 .EXAMPLE
     .\uninstall.ps1 -KeepData -KeepConfig
 #>
 
 param(
     [switch]$KeepData,
-    [switch]$KeepConfig
+    [switch]$KeepConfig,
+    [switch]$Silent
 )
 
+#Requires -Version 5.1
 $ErrorActionPreference = "Stop"
 
-function Write-Success { Write-Host "✓ $args" -ForegroundColor Green }
-function Write-Info { Write-Host "ℹ $args" -ForegroundColor Cyan }
-function Write-Warning { Write-Host "⚠ $args" -ForegroundColor Yellow }
-function Write-Error { Write-Host "✗ $args" -ForegroundColor Red }
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
+$ESC = [char]27
+function c($code) { "$ESC[${code}m" }
 
-Write-Host "`n=== OmniContext Uninstaller ===" -ForegroundColor Magenta
-Write-Host ""
+$BOLD   = c "1"; $DIM  = c "2"; $RESET = c "0"
+$RED    = c "31"; $GREEN = c "32"; $YELLOW = c "33"
+$BLUE   = c "34"; $CYAN  = c "36"
 
-# Confirm uninstallation
-Write-Warning "This will remove OmniContext from your system"
-if (-not $KeepData) {
-    Write-Warning "All indexed data and models will be deleted (~600MB+)"
+function step  { param($n,$t) Write-Host "$BOLD$CYAN  [$n]$RESET $t" }
+function ok    { param($t)    Write-Host "$GREEN  [+]$RESET $t" }
+function info  { param($t)    Write-Host "$BLUE  [-]$RESET $t" }
+function warn  { param($t)    Write-Host "$YELLOW  [!]$RESET $t" }
+function fail  { param($t)    Write-Host "$RED  [x]$RESET $t" }
+$HR      = $DIM + ('-' * 54) + $RESET
+function hr    { Write-Host $HR }
+function blank { Write-Host '' }
+function Exit-Err { param($m) blank; fail $m; blank; exit 1 }
+
+$StartTime = Get-Date
+$BinDir    = Join-Path $HOME ".omnicontext\bin"
+$DataDir   = Join-Path $HOME ".omnicontext"
+
+# ---------------------------------------------------------------------------
+# banner
+# ---------------------------------------------------------------------------
+blank
+Write-Host "$BOLD$RED   ____                  _  ______            __            __ $RESET"
+Write-Host "$BOLD$RED  / __ \____ ___  ____  (_)/ ____/___  ____  / /____  _  __/ /_$RESET"
+Write-Host "$BOLD$RED / / / / __ ``__ \/ __ \/ // /   / __ \/ __ \/ __/ _ \| |/_/ __/$RESET"
+Write-Host "$BOLD$RED/ /_/ / / / / / / / / / // /___/ /_/ / / / / /_/  __/_>  </ /_ $RESET"
+Write-Host "$BOLD$RED\____/_/ /_/ /_/_/ /_/_/ \____/\____/_/ /_/\__/\___/_/|_|\__/  $RESET"
+Write-Host "${DIM}  Universal Code Context Engine -- Uninstaller${RESET}"
+hr
+blank
+
+# ---------------------------------------------------------------------------
+# confirm
+# ---------------------------------------------------------------------------
+warn "This will remove OmniContext from your system."
+if (-not $KeepData)   { warn "Indexed data and AI models (~600 MB+) will be deleted." }
+if (-not $KeepConfig) { warn "MCP client configurations will have omnicontext removed." }
+
+blank
+
+if (-not $Silent) {
+    $confirm = Read-Host "  Proceed with uninstallation? [y/N]"
+    if ($confirm -notmatch "^[yY]") {
+        info "Uninstallation cancelled."
+        blank
+        exit 0
+    }
 }
-if (-not $KeepConfig) {
-    Write-Warning "MCP configuration will be removed"
-}
 
-$confirmation = Read-Host "`nContinue? (yes/no)"
-if ($confirmation -ne "yes") {
-    Write-Info "Uninstallation cancelled"
-    exit 0
-}
+blank
 
-Write-Host ""
+# ---------------------------------------------------------------------------
+# step 1 – terminate processes
+# ---------------------------------------------------------------------------
+step "1/4" "Stopping active processes"
 
-# Stop running processes
-Write-Info "Stopping running processes..."
-$processes = Get-Process -Name "omnicontext", "omnicontext-mcp", "omnicontext-daemon" -ErrorAction SilentlyContinue
-if ($processes) {
-    $processes | Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 1
-    Write-Success "Stopped $($processes.Count) process(es)"
+$procs = Get-Process -Name "omnicontext","omnicontext-mcp","omnicontext-daemon" -EA SilentlyContinue
+if ($procs) {
+    $procs | Stop-Process -Force -EA SilentlyContinue
+    Start-Sleep -Milliseconds 600
+    ok "Stopped $($procs.Count) process(es)"
 } else {
-    Write-Info "No running processes found"
+    info "No active OmniContext processes found"
 }
 
-# Remove binaries
-$binDir = "$env:USERPROFILE\.omnicontext\bin"
-if (Test-Path $binDir) {
-    Write-Info "Removing binaries from $binDir..."
-    Remove-Item -Path $binDir -Recurse -Force
-    Write-Success "Binaries removed"
+# ---------------------------------------------------------------------------
+# step 2 – remove binaries + PATH
+# ---------------------------------------------------------------------------
+blank
+step "2/4" "Removing binaries"
+
+if (Test-Path $BinDir) {
+    $exes = Get-ChildItem $BinDir -Filter "omnicontext*.exe" -EA SilentlyContinue
+    foreach ($exe in $exes) {
+        Remove-Item $exe.FullName -Force -EA SilentlyContinue
+        info "Removed  $DIM$($exe.Name)$RESET"
+    }
+    Remove-Item $BinDir -Recurse -Force -EA SilentlyContinue
+    ok "Binary directory removed  $DIM$BinDir$RESET"
 } else {
-    Write-Info "Binary directory not found"
+    info "Binary directory not found  $DIM$BinDir$RESET"
 }
 
 # Remove from PATH
-Write-Info "Removing from PATH..."
 $UserPath = [Environment]::GetEnvironmentVariable("PATH", "User")
-if ($UserPath -like "*$binDir*") {
-    $NewPath = ($UserPath -split ';' | Where-Object { $_ -ne $binDir }) -join ';'
-    [Environment]::SetEnvironmentVariable("PATH", $NewPath, "User")
-    Write-Success "Removed from PATH"
+if ($UserPath -like "*$BinDir*") {
+    $newPath = ($UserPath -split ';' | Where-Object { $_.Trim() -ne "" -and $_ -ne $BinDir }) -join ';'
+    [Environment]::SetEnvironmentVariable("PATH", $newPath, "User")
+    ok "Removed from User PATH"
 } else {
-    Write-Info "Not in PATH"
+    info "Not found in User PATH"
 }
 
-# Remove data directory
+# ---------------------------------------------------------------------------
+# step 3 – remove data / models
+# ---------------------------------------------------------------------------
+blank
+step "3/4" "Removing data"
+
 if (-not $KeepData) {
-    $dataDir = "$env:USERPROFILE\.omnicontext"
-    if (Test-Path $dataDir) {
-        Write-Info "Removing data directory..."
-        $dataSize = (Get-ChildItem -Path $dataDir -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB
-        Remove-Item -Path $dataDir -Recurse -Force
-        Write-Success "Removed data directory ($([math]::Round($dataSize, 2)) MB)"
+    if (Test-Path $DataDir) {
+        $sizeMb = [math]::Round(
+            (Get-ChildItem $DataDir -Recurse -EA SilentlyContinue | Measure-Object -Property Length -Sum).Sum / 1MB,
+            1
+        )
+        Remove-Item $DataDir -Recurse -Force -EA SilentlyContinue
+        ok "Data directory removed  $DIM$DataDir  (${sizeMb} MB freed)$RESET"
     } else {
-        Write-Info "Data directory not found"
+        info "Data directory not found  $DIM$DataDir$RESET"
     }
 } else {
-    Write-Info "Keeping data directory (--KeepData flag)"
+    ok ("Data directory preserved  " + $DIM + "(-KeepData)" + $RESET)
 }
 
-# Remove MCP configuration
+# ---------------------------------------------------------------------------
+# step 4 – remove MCP from all known clients
+# ---------------------------------------------------------------------------
+blank
+step "4/4" "Unlinking MCP configurations"
+
 if (-not $KeepConfig) {
-    $configPath = "$env:USERPROFILE\.kiro\settings\mcp.json"
-    if (Test-Path $configPath) {
-        Write-Info "Removing MCP configuration..."
+
+    function Remove-McpEntry {
+        param($Name, $Path, [bool]$Powers)
+        if (-not (Test-Path $Path)) { return }
         try {
-            $config = Get-Content $configPath -Raw | ConvertFrom-Json -AsHashtable
-            if ($config.mcpServers.omnicontext) {
-                $config.mcpServers.Remove("omnicontext")
-                $config | ConvertTo-Json -Depth 10 | Set-Content $configPath -Encoding UTF8
-                Write-Success "Removed from MCP configuration"
+            $raw = Get-Content $Path -Raw -EA SilentlyContinue
+            if (-not $raw) { return }
+            $cfg = $raw | ConvertFrom-Json -AsHashtable -EA SilentlyContinue
+            if (-not $cfg) { return }
+
+            $changed = $false
+            if ($Powers) {
+                if ($cfg["powers"] -and $cfg["powers"]["mcpServers"] -and $cfg["powers"]["mcpServers"]["omnicontext"]) {
+                    $cfg["powers"]["mcpServers"].Remove("omnicontext")
+                    $changed = $true
+                }
             } else {
-                Write-Info "Not in MCP configuration"
+                if ($cfg["mcpServers"] -and $cfg["mcpServers"]["omnicontext"]) {
+                    $cfg["mcpServers"].Remove("omnicontext")
+                    $changed = $true
+                }
+            }
+
+            if ($changed) {
+                $cfg | ConvertTo-Json -Depth 10 | Set-Content $Path -Encoding UTF8
+                ok "  Unlinked  $DIM$Name$RESET"
+            } else {
+                info "  Not configured  $DIM$Name$RESET"
             }
         } catch {
-            Write-Warning "Failed to update MCP configuration: $_"
+            warn "  Could not update  $DIM$Name$RESET  ($($_.Exception.Message))"
         }
-    } else {
-        Write-Info "MCP configuration not found"
+    }
+
+    $mcpClients = @(
+        @{ Name = "Claude Desktop"; Path = "$env:APPDATA\Claude\claude_desktop_config.json";                                    Powers = $false },
+        @{ Name = "Claude Code CLI";Path = "$env:USERPROFILE\.claude.json";                                                      Powers = $false },
+        @{ Name = "Cursor";         Path = "$env:APPDATA\Cursor\User\globalStorage\cursor.mcp\config.json";                     Powers = $false },
+        @{ Name = "Cline (VS Code)";Path = "$env:APPDATA\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json"; Powers = $false },
+        @{ Name = "Continue.dev";   Path = "$env:USERPROFILE\.continue\config.json";                                            Powers = $false },
+        @{ Name = "Kiro";           Path = "$env:USERPROFILE\.kiro\settings\mcp.json";                                          Powers = $true  },
+        @{ Name = "Windsurf";       Path = "$env:APPDATA\Windsurf\User\globalStorage\codeium.windsurf\mcp_config.json";         Powers = $false },
+        @{ Name = "RooCode";        Path = "$env:APPDATA\Code\User\globalStorage\rooveterinaryinc.roo-cline\settings\mcp_settings.json"; Powers = $false },
+        @{ Name = "Trae";           Path = "$env:APPDATA\Trae\User\globalStorage\trae-ide.trae-ai\mcp_settings.json";           Powers = $false },
+        @{ Name = "Antigravity";    Path = "$env:USERPROFILE\.gemini\antigravity\mcp_config.json";                              Powers = $false }
+    )
+
+    foreach ($client in $mcpClients) {
+        Remove-McpEntry -Name $client.Name -Path $client.Path -Powers $client.Powers
     }
 } else {
-    Write-Info "Keeping MCP configuration (--KeepConfig flag)"
+    ok ("MCP configurations preserved  " + $DIM + "(-KeepConfig)" + $RESET)
 }
 
-# Summary
-Write-Host "`n=== Uninstallation Complete ===" -ForegroundColor Green
-Write-Host ""
-Write-Host "OmniContext has been removed from your system"
-Write-Host ""
+# ---------------------------------------------------------------------------
+# summary
+# ---------------------------------------------------------------------------
+$elapsed = [math]::Round(((Get-Date) - $StartTime).TotalSeconds, 1)
+blank
+hr
+Write-Host ("${BOLD}${GREEN}  OmniContext removed${RESET}  " + $DIM + "(${elapsed}s)" + $RESET)
+hr
+blank
 
-if ($KeepData) {
-    Write-Info "Data preserved at: $env:USERPROFILE\.omnicontext"
-}
+if ($KeepData)   { info "Data preserved at  $DIM$DataDir$RESET" }
+if ($KeepConfig) { info "MCP configurations untouched" }
 
-if ($KeepConfig) {
-    Write-Info "MCP configuration preserved"
-}
-
-Write-Host "`nTo reinstall OmniContext, visit:"
-Write-Host "https://github.com/steeltroops-ai/omnicontext"
-Write-Host ""
-
+blank
+Write-Host "  $DIMTo reinstall: $RESET"
+Write-Host "  irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install.ps1 | iex"
+blank

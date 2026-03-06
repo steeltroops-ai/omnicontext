@@ -216,7 +216,7 @@ impl Reranker {
                 Ok(batch_scores) => {
                     let batch_max = batch_scores
                         .iter()
-                        .cloned()
+                        .copied()
                         .fold(f32::NEG_INFINITY, f32::max);
 
                     // If the best score in this batch is below threshold,

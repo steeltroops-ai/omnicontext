@@ -30,6 +30,8 @@
 //! Malkov & Yashunin, "Efficient and robust approximate nearest neighbor
 //! using Hierarchical Navigable Small World graphs", 2018.
 
+#![allow(clippy::missing_panics_doc, clippy::unwrap_used)]
+
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashSet};
 
@@ -42,6 +44,7 @@ struct HnswNode {
     /// Neighbors per layer. `neighbors[layer]` = Vec of (node_index, distance).
     neighbors: Vec<Vec<usize>>,
     /// The maximum layer this node appears in.
+    #[allow(dead_code)]
     max_layer: usize,
 }
 

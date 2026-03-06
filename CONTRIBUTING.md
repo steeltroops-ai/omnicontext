@@ -1,130 +1,38 @@
-# Contributing to OmniContext
+# System Engineering Constraints & Contribution Protocols
 
-Thank you for your interest in contributing to OmniContext! This document provides guidelines and instructions for contributors.
+OmniContext enforces deterministic build flows, formal syntax structures, and semantic deployment checks via pre-commit and CI chains. Adhere rigidly.
 
-## Commit Message Format
+## Standard Formats
 
-OmniContext uses [Conventional Commits](https://www.conventionalcommits.org/) for automatic version bumping and changelog generation.
+Semantic versioning triggers via **Conventional Commits**:
 
-**Format**: `<type>[optional scope]: <description>`
+- `feat:` (Minor jump)
+- `fix:` (Patch jump)
+- `feat!:` or `BREAKING CHANGE:` (Major ABI jump)
 
-**Types**:
-- `feat:` - New feature (triggers minor version bump)
-- `fix:` - Bug fix (triggers patch version bump)
-- `feat!:` or `BREAKING CHANGE:` - Breaking change (triggers major version bump)
-- `chore:`, `docs:`, `style:`, `refactor:`, `perf:`, `test:`, `ci:` - No version bump
+Do not bypass formatting or naming standards. See `docs/CONVENTIONAL_COMMITS.md`.
 
-**Examples**:
-```bash
-git commit -m "feat: add cross-encoder reranking"
-git commit -m "fix(parser): handle empty files"
-git commit -m "feat!: change MCP API (breaking)"
-```
+## Quality Constraints
 
-See [docs/CONVENTIONAL_COMMITS.md](docs/CONVENTIONAL_COMMITS.md) for detailed guide.
+Code must compile warning-free and execute with zero failing conditions:
 
-## Development Setup
+1. `cargo fmt --all -- --check`
+2. `cargo clippy --workspace -- -D warnings`
+3. `cargo test --workspace`
 
-After cloning the repository, run the setup script to install git hooks:
+Pre-commit hooks block execution of invalid states. Use automation setup points to bind these locally to your `.git/hooks` namespace:
 
-**Unix/Linux/macOS:**
-```bash
-./scripts/setup-dev.sh
-```
+- **Unix**: `./scripts/setup-dev.sh`
+- **Windows**: `.\scripts\setup-dev.ps1`
 
-**Windows:**
-```powershell
-.\scripts\setup-dev.ps1
-```
+## Continuous Integration Policy
 
-This will configure git hooks that automatically check code quality before commits and pushes.
+The `steeltroops-ai/omnicontext/ci.yml` matrix prevents non-compliant branches from executing `main` merges. CI validates correctness across `msvc` and `gnu` targets simultaneously.
 
-## Code Quality Standards
+## Module Structure Principles
 
-All code must pass the following checks before being merged:
+See `.kiro/steering/structure.md` and `.kiro/steering/tech.md`. Submodules must isolate responsibilities (e.g., semantic resolution via `jina-embeddings` within `omni-core`).
 
-1. **Formatting**: `cargo fmt --all -- --check`
-2. **Linting**: `cargo clippy -- -D warnings` (on main crates)
-3. **Tests**: `cargo test --workspace`
+## Protocol Compliance
 
-### Pre-commit Checks
-
-The pre-commit hook automatically runs:
-- Code formatting check
-- Clippy linting on main crates (omni-mcp, omni-daemon, omni-cli, omni-core)
-
-If any check fails, the commit will be blocked. Fix the issues before committing.
-
-### Pre-push Checks
-
-The pre-push hook automatically runs:
-- Full test suite
-
-If tests fail, the push will be blocked.
-
-## Manual Checks
-
-You can run these checks manually at any time:
-
-```bash
-# Format code
-cargo fmt --all
-
-# Check formatting
-cargo fmt --all -- --check
-
-# Run clippy
-cargo clippy -p omni-mcp -p omni-daemon -p omni-cli --bins -- -D warnings
-cargo clippy -p omni-core --lib -- -D warnings
-
-# Run tests
-cargo test --workspace
-
-# Run all checks
-cargo fmt --all -- --check && \
-cargo clippy -p omni-mcp -p omni-daemon -p omni-cli --bins -- -D warnings && \
-cargo clippy -p omni-core --lib -- -D warnings && \
-cargo test --workspace
-```
-
-## CI Pipeline
-
-All pull requests must pass the CI pipeline, which enforces:
-
-1. **Check**: `cargo check --workspace --all-targets`
-2. **Test**: `cargo test --workspace` (on Ubuntu, Windows, macOS)
-3. **Format**: `cargo fmt --all -- --check`
-4. **Clippy**: Linting on main crates with `-D warnings`
-5. **CI Success**: All above checks must pass
-
-The CI pipeline cannot be bypassed. Even if you bypass local hooks, CI will catch issues.
-
-## Bypassing Hooks (Not Recommended)
-
-In rare cases where you need to bypass hooks:
-
-```bash
-git commit --no-verify
-git push --no-verify
-```
-
-**Warning**: Bypassing hooks may result in CI failures. Only use this for work-in-progress commits.
-
-## Branch Protection
-
-The `main` branch is protected and requires:
-- All CI checks to pass
-- Code review approval
-- Up-to-date branch before merging
-
-## Project Structure
-
-See `.kiro/steering/structure.md` for detailed project structure and module organization guidelines.
-
-## Tech Stack
-
-See `.kiro/steering/tech.md` for technology stack details and common commands.
-
-## Questions?
-
-If you have questions about contributing, please open an issue or discussion on GitHub.
+Commit streams explicitly. Document test matrices. Avoid regressions.

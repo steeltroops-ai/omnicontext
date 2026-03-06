@@ -33,11 +33,12 @@ use std::path::Path;
 use crate::error::{OmniError, OmniResult};
 
 /// Distance metric used for nearest neighbor search.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum DistanceMetric {
     /// Cosine similarity (dot product of L2-normalized vectors).
     /// Range: [-1, 1], higher is more similar.
     /// Default for most embedding models.
+    #[default]
     Cosine,
     /// Euclidean distance (L2 norm of difference vector).
     /// Range: [0, inf), lower is more similar.
@@ -47,12 +48,6 @@ pub enum DistanceMetric {
     /// Raw dot product (no normalization assumed).
     /// Range: (-inf, inf), higher is more similar.
     DotProduct,
-}
-
-impl Default for DistanceMetric {
-    fn default() -> Self {
-        Self::Cosine
-    }
 }
 
 /// Vector index for nearest neighbor search.

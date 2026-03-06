@@ -1,156 +1,211 @@
-#!/usr/bin/env pwsh
 <#
 .SYNOPSIS
-    Update OmniContext to the latest version
+    OmniContext Updater for Windows
+
 .DESCRIPTION
-    Downloads and installs the latest OmniContext release while preserving
-    configuration and indexed data.
+    Upgrades OmniContext to the latest release while preserving all indexed data,
+    cached models, and MCP client configurations. Backs up all known MCP configs
+    before the update and restores them if the installer modifies them unexpectedly.
+
 .PARAMETER Force
-    Force update even if already on latest version
+    Reinstall even if already on the latest version.
+
 .EXAMPLE
-    .\update.ps1
+    irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/update.ps1 | iex
+
 .EXAMPLE
     .\update.ps1 -Force
 #>
 
-param(
-    [switch]$Force
-)
+param([switch]$Force)
 
+#Requires -Version 5.1
 $ErrorActionPreference = "Stop"
+$ProgressPreference    = "SilentlyContinue"
 
-function Write-Success { Write-Host "✓ $args" -ForegroundColor Green }
-function Write-Info { Write-Host "ℹ $args" -ForegroundColor Cyan }
-function Write-Warning { Write-Host "⚠ $args" -ForegroundColor Yellow }
-function Write-Error { Write-Host "✗ $args" -ForegroundColor Red }
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
+$ESC = [char]27
+function c($code) { "$ESC[${code}m" }
 
-Write-Host "`n=== OmniContext Updater ===" -ForegroundColor Magenta
-Write-Host ""
+$BOLD   = c "1"; $DIM  = c "2"; $RESET = c "0"
+$RED    = c "31"; $GREEN = c "32"; $YELLOW = c "33"
+$BLUE   = c "34"; $CYAN  = c "36"
 
-# Check if OmniContext is installed
-$binPath = "$env:USERPROFILE\.omnicontext\bin\omnicontext.exe"
-if (-not (Test-Path $binPath)) {
-    Write-Error "OmniContext not found at: $binPath"
-    Write-Info "Please install OmniContext first:"
-    Write-Info "  irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install.ps1 | iex"
-    exit 1
+function step  { param($n,$t) Write-Host "$BOLD$CYAN  [$n]$RESET $t" }
+function ok    { param($t)    Write-Host "$GREEN  [+]$RESET $t" }
+function info  { param($t)    Write-Host "$BLUE  [-]$RESET $t" }
+function warn  { param($t)    Write-Host "$YELLOW  [!]$RESET $t" }
+function fail  { param($t)    Write-Host "$RED  [x]$RESET $t" }
+$HR      = $DIM + ('-' * 54) + $RESET
+function hr    { Write-Host $HR }
+function blank { Write-Host '' }
+function Exit-Err { param($m) blank; fail $m; blank; exit 1 }
+
+$StartTime = Get-Date
+$BinDir    = Join-Path $HOME ".omnicontext\bin"
+$BinPath   = Join-Path $BinDir "omnicontext.exe"
+$RepoOwner = "steeltroops-ai"
+$RepoName  = "omnicontext"
+
+# ---------------------------------------------------------------------------
+# banner
+# ---------------------------------------------------------------------------
+blank
+Write-Host "$BOLD$CYAN   ____                  _  ______            __            __ $RESET"
+Write-Host "$BOLD$CYAN  / __ \____ ___  ____  (_)/ ____/___  ____  / /____  _  __/ /_$RESET"
+Write-Host "$BOLD$CYAN / / / / __ ``__ \/ __ \/ // /   / __ \/ __ \/ __/ _ \| |/_/ __/$RESET"
+Write-Host "$BOLD$CYAN/ /_/ / / / / / / / / / // /___/ /_/ / / / / /_/  __/_>  </ /_ $RESET"
+Write-Host "$BOLD$CYAN\____/_/ /_/ /_/_/ /_/_/ \____/\____/_/ /_/\__/\___/_/|_|\__/  $RESET"
+Write-Host "${DIM}  Universal Code Context Engine -- Updater${RESET}"
+hr
+blank
+
+# ---------------------------------------------------------------------------
+# step 1 – verify installed
+# ---------------------------------------------------------------------------
+step "1/4" "Checking installed version"
+
+if (-not (Test-Path $BinPath)) {
+    Exit-Err "OmniContext binary not found at: $BinPath"
 }
 
-# Get current version
-Write-Info "Checking current version..."
-try {
-    $currentVersion = & $binPath --version 2>&1 | Select-String -Pattern "omnicontext\s+(\S+)" | ForEach-Object { $_.Matches.Groups[1].Value }
-    Write-Success "Current version: $currentVersion"
-} catch {
-    Write-Warning "Could not determine current version"
+$currentRaw = & $BinPath --version 2>&1 | Select-Object -First 1
+# Expect "omnicontext X.Y.Z" or similar
+if ($currentRaw -match '(\d+\.\d+\.\d+)') {
+    $currentVersion = $Matches[1]
+    ok "Installed  $DIM$currentVersion$RESET"
+} else {
+    warn "Could not parse installed version — proceeding anyway"
     $currentVersion = "unknown"
 }
 
-# Get latest version
-Write-Info "Checking for updates..."
+# ---------------------------------------------------------------------------
+# step 2 – resolve latest
+# ---------------------------------------------------------------------------
+blank
+step "2/4" "Checking latest release"
+
+$latestVersion = $null
+$latestTag     = $null
+
+# Prefer Cargo.toml for ground-truth version
 try {
-    $latestRelease = Invoke-RestMethod -Uri "https://api.github.com/repos/steeltroops-ai/omnicontext/releases/latest" -UseBasicParsing
-    $latestVersion = $latestRelease.tag_name
-    Write-Success "Latest version: $latestVersion"
-} catch {
-    Write-Error "Failed to check for updates: $_"
-    exit 1
+    $cargoRaw = Invoke-RestMethod "https://raw.githubusercontent.com/$RepoOwner/$RepoName/main/Cargo.toml" -UseBasicParsing
+    if ($cargoRaw -match '(?m)^version\s*=\s*"([^"]+)"') {
+        $latestVersion = $Matches[1]
+        $latestTag     = "v$latestVersion"
+        ok "Latest from source  $DIM$latestTag$RESET"
+    }
+} catch { }
+
+# Fallback: latest release with assets
+if (-not $latestVersion) {
+    try {
+        $releases = Invoke-RestMethod "https://api.github.com/repos/$RepoOwner/$RepoName/releases" -UseBasicParsing
+        $r = $releases | Where-Object { $_.assets.Count -gt 0 } | Select-Object -First 1
+        if (-not $r) { Exit-Err "No releases with binary assets found." }
+        $latestTag     = $r.tag_name
+        $latestVersion = $latestTag -replace "^v", ""
+        ok "Latest release  $DIM$latestTag$RESET"
+    } catch {
+        Exit-Err "Failed to resolve latest version: $_"
+    }
 }
 
-# Compare versions
-if ($currentVersion -eq $latestVersion.TrimStart('v') -and -not $Force) {
-    Write-Success "Already on latest version!"
-    Write-Info "Use -Force to reinstall anyway"
+# version comparison
+if ($currentVersion -eq $latestVersion -and -not $Force) {
+    blank
+    ok ("Already on latest version  " + $DIM + "($latestVersion)" + $RESET)
+    info "Use  ${DIM}-Force${RESET}  to reinstall"
+    blank
     exit 0
 }
 
 if ($Force) {
-    Write-Info "Forcing update (--Force flag)"
+    warn ("Forcing reinstall  " + $DIM + "(-Force)" + $RESET)
 } else {
-    Write-Info "Update available: $currentVersion → $latestVersion"
+    ok "Update available  $DIM$currentVersion  ->  $latestVersion$RESET"
 }
 
-# Backup configuration
-Write-Info "Backing up configuration..."
-$configPath = "$env:USERPROFILE\.kiro\settings\mcp.json"
-$configBackup = $null
+# ---------------------------------------------------------------------------
+# step 3 – backup known MCP configs
+# ---------------------------------------------------------------------------
+blank
+step "3/4" "Backing up MCP configurations"
 
-if (Test-Path $configPath) {
-    try {
-        $configBackup = Get-Content $configPath -Raw
-        Write-Success "Configuration backed up"
-    } catch {
-        Write-Warning "Failed to backup configuration: $_"
+$mcpPaths = @(
+    "$env:APPDATA\Claude\claude_desktop_config.json",
+    "$env:USERPROFILE\.claude.json",
+    "$env:APPDATA\Cursor\User\globalStorage\cursor.mcp\config.json",
+    "$env:APPDATA\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json",
+    "$env:USERPROFILE\.continue\config.json",
+    "$env:USERPROFILE\.kiro\settings\mcp.json",
+    "$env:APPDATA\Windsurf\User\globalStorage\codeium.windsurf\mcp_config.json",
+    "$env:APPDATA\Code\User\globalStorage\rooveterinaryinc.roo-cline\settings\mcp_settings.json",
+    "$env:APPDATA\Trae\User\globalStorage\trae-ide.trae-ai\mcp_settings.json",
+    "$env:USERPROFILE\.gemini\antigravity\mcp_config.json"
+)
+
+$backupDir = Join-Path $env:TEMP "omnicontext_mcp_backup_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
+$backedUp = @()
+
+foreach ($p in $mcpPaths) {
+    if (Test-Path $p) {
+        $dest = Join-Path $backupDir (Split-Path $p -Leaf)
+        Copy-Item $p $dest -Force
+        $backedUp += @{ Src = $p; Bak = $dest }
+        info "Backed up  $DIM$(Split-Path $p -Leaf)$RESET"
     }
 }
 
-# Stop running processes
-Write-Info "Stopping running processes..."
-$processes = Get-Process -Name "omnicontext", "omnicontext-mcp", "omnicontext-daemon" -ErrorAction SilentlyContinue
-if ($processes) {
-    $processes | Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 1
-    Write-Success "Stopped $($processes.Count) process(es)"
+if ($backedUp.Count -eq 0) {
+    info "No existing MCP configs found to back up"
+} else {
+    ok "$($backedUp.Count) MCP config(s) backed up to  $DIM$backupDir$RESET"
 }
 
-# Download and install update
-Write-Info "Downloading update..."
-$installScript = "https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install.ps1"
+# ---------------------------------------------------------------------------
+# step 4 – run installer
+# ---------------------------------------------------------------------------
+blank
+step "4/4" ("Running installer  " + $DIM + "(install.ps1)" + $RESET)
+blank
 
 try {
-    $scriptContent = Invoke-RestMethod -Uri $installScript -UseBasicParsing
+    $installUrl     = "https://raw.githubusercontent.com/$RepoOwner/$RepoName/main/distribution/install.ps1"
+    $scriptContent  = Invoke-RestMethod -Uri $installUrl -UseBasicParsing
     Invoke-Expression $scriptContent
 } catch {
-    Write-Error "Update failed: $_"
-    
-    # Restore configuration if backup exists
-    if ($configBackup) {
-        Write-Info "Restoring configuration..."
-        $configBackup | Set-Content $configPath -Encoding UTF8
+    blank
+    fail "Installer failed: $_"
+    # Restore backups
+    if ($backedUp.Count -gt 0) {
+        warn "Restoring MCP configs from backup..."
+        foreach ($b in $backedUp) { Copy-Item $b.Bak $b.Src -Force -EA SilentlyContinue }
+        ok "MCP configs restored"
     }
-    
     exit 1
 }
 
-# Verify update
-Write-Info "Verifying update..."
-try {
-    $newVersion = & $binPath --version 2>&1 | Select-String -Pattern "omnicontext\s+(\S+)" | ForEach-Object { $_.Matches.Groups[1].Value }
-    
-    if ($newVersion -eq $latestVersion.TrimStart('v')) {
-        Write-Success "Update successful: $currentVersion → $newVersion"
-    } else {
-        Write-Warning "Update may have failed (version: $newVersion, expected: $latestVersion)"
-    }
-} catch {
-    Write-Warning "Could not verify update: $_"
+# ---------------------------------------------------------------------------
+# verify
+# ---------------------------------------------------------------------------
+$newRaw = & $BinPath --version 2>&1 | Select-Object -First 1
+if ($newRaw -match '(\d+\.\d+\.\d+)') { $newVersion = $Matches[1] } else { $newVersion = "?" }
+$elapsed = [math]::Round(((Get-Date) - $StartTime).TotalSeconds, 1)
+
+blank
+hr
+if ($newVersion -eq $latestVersion) {
+    Write-Host ("${BOLD}${GREEN}  Updated  $currentVersion  ->  $newVersion${RESET}  " + $DIM + "(${elapsed}s)" + $RESET)
+} else {
+    Write-Host "$BOLD$YELLOW  Installer ran but version mismatch: expected $latestVersion, got $newVersion$RESET"
 }
-
-# Restore configuration if needed
-if ($configBackup) {
-    Write-Info "Checking configuration..."
-    try {
-        $currentConfig = Get-Content $configPath -Raw
-        if ($currentConfig -ne $configBackup) {
-            Write-Info "Configuration was modified during update"
-            $restore = Read-Host "Restore previous configuration? (yes/no)"
-            if ($restore -eq "yes") {
-                $configBackup | Set-Content $configPath -Encoding UTF8
-                Write-Success "Configuration restored"
-            }
-        }
-    } catch {
-        Write-Warning "Could not check configuration: $_"
-    }
-}
-
-Write-Host "`n=== Update Complete ===" -ForegroundColor Green
-Write-Host ""
-Write-Host "OmniContext has been updated to $latestVersion"
-Write-Host ""
-Write-Host "Next steps:"
-Write-Host "1. Restart your IDE to reload the MCP server"
-Write-Host "2. Verify functionality with: omnicontext status"
-Write-Host "3. Re-index if needed: omnicontext index ."
-Write-Host ""
-
+hr
+blank
+info "Restart your IDE to reload the MCP server"
+info ("Verify:  " + $DIM + "omnicontext --version" + $RESET)
+blank

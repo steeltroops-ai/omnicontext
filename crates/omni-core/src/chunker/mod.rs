@@ -144,14 +144,12 @@ fn extract_module_declarations(source_lines: &[&str]) -> String {
         let trimmed = line.trim();
 
         // Skip empty lines and comments between declarations
-        if trimmed.is_empty()
+        if (trimmed.is_empty()
             || trimmed.starts_with("//")
-            || trimmed.starts_with('#') && trimmed.starts_with("#!")
-        {
-            if !in_multiline {
+            || trimmed.starts_with('#') && trimmed.starts_with("#!"))
+            && !in_multiline {
                 continue;
             }
-        }
 
         // Handle multi-line imports: `use std::{`  or  `from x import (`
         if in_multiline {

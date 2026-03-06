@@ -324,13 +324,11 @@ fn cmd_embed(path: &str, retry_failed: bool, json: bool) -> Result<()> {
 
         // Persist on shutdown
         engine.shutdown()?;
-    } else {
-        if !json {
-            println!();
-            println!("Usage: omnicontext embed --retry-failed");
-            println!();
-            println!("This command retries embedding chunks that failed during indexing.");
-        }
+    } else if !json {
+        println!();
+        println!("Usage: omnicontext embed --retry-failed");
+        println!();
+        println!("This command retries embedding chunks that failed during indexing.");
     }
 
     Ok(())

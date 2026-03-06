@@ -280,7 +280,7 @@ impl Embedder {
 
     /// Number of ONNX sessions available (1 primary + pool).
     pub fn pool_size(&self) -> usize {
-        let base = if self.session.is_some() { 1 } else { 0 };
+        let base = usize::from(self.session.is_some());
         base + self.pool.as_ref().map(|p| p.pool_size()).unwrap_or(0)
     }
 
@@ -303,7 +303,7 @@ impl Embedder {
         }
 
         let n_workers = (pool.pool_size() + 1).min(chunks.len() / self.config.batch_size + 1);
-        let sub_batch_size = (chunks.len() + n_workers - 1) / n_workers;
+        let sub_batch_size = chunks.len().div_ceil(n_workers);
 
         // Use scoped threads for safe borrow of &self
         let results: Vec<Vec<Option<Vec<f32>>>> = std::thread::scope(|scope| {
@@ -423,7 +423,7 @@ impl Embedder {
 
         // Process in batches with progress logging
         let total_batches =
-            (sanitized_refs.len() + self.config.batch_size - 1) / self.config.batch_size;
+            sanitized_refs.len().div_ceil(self.config.batch_size);
         for (batch_idx, batch) in sanitized_refs.chunks(self.config.batch_size).enumerate() {
             // Log progress every 10 batches
             if batch_idx % 10 == 0 {
