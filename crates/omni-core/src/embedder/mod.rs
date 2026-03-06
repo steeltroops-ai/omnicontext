@@ -986,4 +986,67 @@ mod tests {
             "embed_query on degraded should return error"
         );
     }
+
+    #[test]
+    fn test_pool_size_degraded() {
+        let config = EmbeddingConfig {
+            model_path: "/nonexistent/model.onnx".into(),
+            dimensions: 384,
+            batch_size: 32,
+            max_seq_length: 256,
+        };
+        let embedder = Embedder::degraded(&config);
+        assert_eq!(
+            embedder.pool_size(),
+            0,
+            "degraded embedder should have pool_size 0"
+        );
+    }
+
+    #[test]
+    fn test_embed_batch_parallel_degraded() {
+        let config = EmbeddingConfig {
+            model_path: "/nonexistent/model.onnx".into(),
+            dimensions: 384,
+            batch_size: 32,
+            max_seq_length: 256,
+        };
+        let embedder = Embedder::degraded(&config);
+        let results = embedder.embed_batch_parallel(&["test1", "test2"]);
+        assert_eq!(results.len(), 2);
+        assert!(
+            results.iter().all(|r| r.is_none()),
+            "degraded should return all None"
+        );
+    }
+
+    #[test]
+    fn test_embed_pipeline_cancellation() {
+        let config = EmbeddingConfig {
+            model_path: "/nonexistent/model.onnx".into(),
+            dimensions: 384,
+            batch_size: 32,
+            max_seq_length: 256,
+        };
+        let embedder = Embedder::degraded(&config);
+        let chunks: Vec<&str> = (0..100).map(|_| "test chunk content").collect();
+        let mut call_count = 0;
+        let results = embedder.embed_pipeline(&chunks, |_completed, _total| {
+            call_count += 1;
+            false // cancel immediately
+        });
+        assert_eq!(results.len(), 100, "should have 100 results (all None)");
+    }
+
+    #[test]
+    fn test_sanitize_for_embedding_removes_nulls() {
+        let result = sanitize_for_embedding("hello\x00world");
+        assert!(!result.contains('\0'));
+    }
+
+    #[test]
+    fn test_sanitize_for_embedding_preserves_normal_text() {
+        let result = sanitize_for_embedding("fn main() { println!(\"hello\"); }");
+        assert_eq!(result, "fn main() { println!(\"hello\"); }");
+    }
 }

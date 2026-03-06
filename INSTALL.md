@@ -7,24 +7,36 @@ Choose ONE method based on your platform:
 ### Windows
 
 **Option 1: Direct Install (Recommended)**
+
 ```powershell
 irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install.ps1 | iex
 ```
 
 **Option 2: Scoop Package Manager**
+
 ```powershell
 scoop bucket add omnicontext https://github.com/steeltroops-ai/omnicontext
 scoop install omnicontext
 ```
 
+### Rust Developers
+
+**cargo-binstall (pre-built binary)**
+
+```bash
+cargo binstall omni-cli
+```
+
 ### macOS / Linux
 
 **Option 1: Direct Install (Recommended)**
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install.sh | bash
 ```
 
 **Option 2: Homebrew (macOS/Linux)**
+
 ```bash
 brew tap steeltroops-ai/omnicontext
 brew install omnicontext
@@ -35,6 +47,7 @@ brew install omnicontext
 All installation methods install to the same locations:
 
 ### Binaries
+
 - **Windows**: `%USERPROFILE%\.omnicontext\bin\`
   - `omnicontext.exe` - CLI tool
   - `omnicontext-mcp.exe` - MCP server
@@ -46,6 +59,7 @@ All installation methods install to the same locations:
   - `omnicontext-daemon` - Background indexer (optional)
 
 ### Data & Models
+
 - **All platforms**: `~/.omnicontext/`
   - `models/jina-embeddings-v2-base-code.onnx` (~550MB) - AI embedding model
   - `repos/{hash}/` - Indexed repository data per project
@@ -54,6 +68,7 @@ All installation methods install to the same locations:
     - `graph.bin` - Dependency graph
 
 ### Configuration
+
 - **MCP Config**: `~/.kiro/settings/mcp.json` (if using with Kiro/Claude)
 
 ## Installation Process
@@ -66,28 +81,44 @@ All methods perform these steps:
 4. **Download Model** - Fetch Jina AI embedding model (~550MB, one-time)
 5. **Verify** - Test binary execution and model presence
 6. **Configure PATH** - Ensure binaries are accessible
+7. **Auto-Configure MCP** - Detect and configure installed AI clients (Claude, Cursor, Continue, Kiro, Windsurf, Cline)
 
 ## Post-Installation
 
 ### Verify Installation
+
 ```bash
 omnicontext --version
 ```
 
 ### Index Your First Repository
+
 ```bash
 cd /path/to/your/code
 omnicontext index .
 ```
 
 ### Search Your Code
+
 ```bash
 omnicontext search "authentication"
 ```
 
-### Configure MCP (for AI Agents)
+### MCP Integration (Zero-Config)
 
-Add to `~/.kiro/settings/mcp.json`:
+The installer **automatically configures** MCP for all detected AI clients:
+
+- Claude Desktop
+- Cursor
+- Continue.dev
+- Kiro
+- Windsurf
+- Cline / Roo Code
+
+The VS Code extension also auto-syncs MCP to all clients when the daemon starts.
+
+To manually configure or add a specific repo path:
+
 ```json
 {
   "mcpServers": {
@@ -103,6 +134,7 @@ Add to `~/.kiro/settings/mcp.json`:
 ## Updating
 
 ### All Platforms
+
 ```bash
 # Windows
 irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/update.ps1 | iex
@@ -112,6 +144,7 @@ curl -fsSL https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/dis
 ```
 
 ### Package Managers
+
 ```bash
 # Scoop (Windows)
 scoop update omnicontext
@@ -125,11 +158,13 @@ brew upgrade omnicontext
 ## Uninstalling
 
 ### Windows
+
 ```powershell
 irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/uninstall.ps1 | iex
 ```
 
 ### Package Managers
+
 ```bash
 # Scoop
 scoop uninstall omnicontext
@@ -139,6 +174,7 @@ brew uninstall omnicontext
 ```
 
 **Options**:
+
 - Keep indexed data: Add `-KeepData` flag
 - Keep MCP config: Add `-KeepConfig` flag
 
@@ -147,6 +183,7 @@ brew uninstall omnicontext
 If you're contributing to OmniContext or need to build from source:
 
 ### Build from Source
+
 ```bash
 # Clone repository
 git clone https://github.com/steeltroops-ai/omnicontext.git
@@ -168,6 +205,7 @@ Located in `scripts/` (for contributors only):
 - `test-mcp-protocol.py` - Protocol compliance tests
 
 ### Run Tests
+
 ```bash
 cargo test --workspace
 ```
@@ -175,7 +213,9 @@ cargo test --workspace
 ## Troubleshooting
 
 ### Model Download Fails
+
 The installer automatically downloads the embedding model. If it fails:
+
 ```bash
 # Manually trigger download
 cd /tmp
@@ -185,21 +225,25 @@ omnicontext index .
 ### Binary Not in PATH
 
 **Windows**: Add to PowerShell profile (`$PROFILE`):
+
 ```powershell
 $env:PATH += ";$env:USERPROFILE\.omnicontext\bin"
 ```
 
 **Unix/Linux/macOS**: Add to `~/.bashrc` or `~/.zshrc`:
+
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
 ### Permission Denied (Unix/Linux/macOS)
+
 ```bash
 chmod +x ~/.local/bin/omnicontext*
 ```
 
 ### Scoop/Homebrew Not Working
+
 Fall back to direct install method - it's the most reliable.
 
 ## Edge Cases Handled

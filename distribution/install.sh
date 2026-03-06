@@ -287,10 +287,102 @@ else
     ((VERIFICATION_FAILED++))
 fi
 
+# Auto-Configure MCP for detected AI clients
+echo ""
+info "Configuring MCP for detected AI clients..."
+
+MCP_BINARY="${BIN_DIR}/omnicontext-mcp"
+MCP_CONFIGURED=""
+
+# Function to upsert omnicontext entry into a JSON config file
+configure_mcp_client() {
+    local name="$1"
+    local config_path="$2"
+    local use_powers="$3"  # "true" or "false"
+    
+    local config_dir
+    config_dir=$(dirname "$config_path")
+    
+    # Skip if client config directory doesn't exist (client not installed)
+    [ -d "$config_dir" ] || return 1
+
+    # Build the MCP entry
+    local entry
+    entry=$(cat <<ENTRY_EOF
+{"command":"${MCP_BINARY}","args":["--repo","."],"disabled":false}
+ENTRY_EOF
+)
+
+    if command -v python3 >/dev/null 2>&1; then
+        python3 -c "
+import json, sys, os
+
+config_path = '$config_path'
+use_powers = '$use_powers' == 'true'
+entry = json.loads('$entry')
+
+config = {}
+if os.path.exists(config_path):
+    try:
+        with open(config_path) as f:
+            config = json.load(f)
+    except:
+        config = {}
+
+if use_powers:
+    config.setdefault('powers', {}).setdefault('mcpServers', {})['omnicontext'] = entry
+else:
+    config.setdefault('mcpServers', {})['omnicontext'] = entry
+
+with open(config_path, 'w') as f:
+    json.dump(config, f, indent=2)
+" 2>/dev/null && return 0
+    fi
+
+    # Fallback: write a fresh config if python3 not available
+    if [ "$use_powers" = "true" ]; then
+        echo "{\"powers\":{\"mcpServers\":{\"omnicontext\":${entry}}}}" > "$config_path"
+    else
+        echo "{\"mcpServers\":{\"omnicontext\":${entry}}}" > "$config_path"
+    fi
+    return 0
+}
+
+# macOS paths
+if [ "$(uname -s)" = "Darwin" ]; then
+    CLAUDE_CONFIG="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
+else
+    CLAUDE_CONFIG="$HOME/.config/claude/claude_desktop_config.json"
+fi
+
+# Configure each known client
+mcp_targets=(
+    "Claude Desktop|${CLAUDE_CONFIG}|false"
+    "Cursor|${HOME}/.cursor/mcp.json|false"
+    "Continue.dev|${HOME}/.continue/config.json|false"
+    "Kiro|${HOME}/.kiro/settings/mcp.json|true"
+    "Windsurf|${HOME}/.windsurf/mcp_config.json|false"
+    "Cline|${HOME}/.cline/mcp_settings.json|false"
+)
+
+for target_spec in "${mcp_targets[@]}"; do
+    IFS='|' read -r client_name client_path client_powers <<< "$target_spec"
+    if configure_mcp_client "$client_name" "$client_path" "$client_powers"; then
+        MCP_CONFIGURED="${MCP_CONFIGURED:+$MCP_CONFIGURED, }$client_name"
+        success "  $client_name: configured"
+    fi
+done
+
+if [ -z "$MCP_CONFIGURED" ]; then
+    warning "  No AI clients detected. Install Claude/Cursor/etc and re-run."
+else
+    success "  Configured: $MCP_CONFIGURED"
+fi
+
 # Summary
 echo ""
 echo "========================================="
-echo " ✅ Installation Complete!"
+echo " Installation Complete!"
 echo "========================================="
 echo ""
 echo "Verification: $VERIFICATION_PASSED passed, $VERIFICATION_FAILED warnings"
@@ -306,24 +398,19 @@ echo "  2. Navigate to your code: cd /path/to/your/repo"
 echo "  3. Index your code: omnicontext index ."
 echo "  4. Search your code: omnicontext search \"authentication\""
 echo ""
-echo -e "${CYAN}MCP Configuration (for AI agents):${NC}"
-echo "  Add to your MCP config (~/.kiro/settings/mcp.json):"
+
+if [ -n "$MCP_CONFIGURED" ]; then
+    echo -e "${CYAN}MCP Auto-Configured: $MCP_CONFIGURED${NC}"
+    echo "  Default: '--repo .' (current dir). Edit config for specific repos."
+else
+    echo -e "${CYAN}MCP Manual Setup:${NC}"
+    echo "  Command: ${BIN_DIR}/omnicontext-mcp"
+    echo "  Args:    [\"--repo\", \"/path/to/your/repo\"]"
+fi
+
 echo ""
-echo '  {'
-echo '    "mcpServers": {'
-echo '      "omnicontext": {'
-echo "        \"command\": \"${BIN_DIR}/omnicontext-mcp\","
-echo '        "args": ["--repo", "/path/to/your/repo"],'
-echo '        "disabled": false'
-echo '      }'
-echo '    }'
-echo '  }'
-echo ""
-echo -e "${CYAN}Update OmniContext:${NC}"
-echo "  Just re-run this installation script anytime!"
-echo ""
+echo -e "${CYAN}Update:${NC} Re-run this script anytime."
 echo "Documentation: https://github.com/steeltroops-ai/omnicontext"
-echo "Issues: https://github.com/steeltroops-ai/omnicontext/issues"
 echo ""
 
 if [ $VERIFICATION_FAILED -gt 0 ]; then
@@ -333,3 +420,4 @@ if [ $VERIFICATION_FAILED -gt 0 ]; then
         echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""
     fi
 fi
+

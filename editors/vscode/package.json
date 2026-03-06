@@ -40,8 +40,7 @@
     "workspaceContains:**/*.java",
     "workspaceContains:**/*.c",
     "workspaceContains:**/*.cpp",
-    "workspaceContains:**/*.cs",
-    "onView:omnicontext.mainView"
+    "workspaceContains:**/*.cs"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -126,9 +125,16 @@
           "description": "Enable pre-flight context injection into AI chat"
         },
         "omnicontext.tokenBudget": {
-          "number": 8192,
           "type": "number",
+          "default": 8192,
+          "minimum": 1024,
+          "maximum": 32768,
           "description": "Token budget for pre-flight context injection"
+        },
+        "omnicontext.autoSyncMcp": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically configure OmniContext MCP in detected AI clients (Claude, Cursor, Continue, Kiro, Windsurf, Cline) when the daemon starts"
         },
         "omnicontext.logLevel": {
           "type": "string",

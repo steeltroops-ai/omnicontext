@@ -5,11 +5,12 @@ Installs OmniContext and its required AI embedding model.
 .DESCRIPTION
 This script downloads the latest release of OmniContext from GitHub,
 installs it to your user directory ($HOME\.omnicontext\bin), adds it
-to your PATH, and pre-downloads the required ONNX AI model (~550MB)
-so it's ready for immediate zero-latency use.
+to your PATH, pre-downloads the required ONNX AI model (~550MB),
+and auto-configures MCP for detected AI clients (Claude, Cursor,
+Continue.dev, Kiro, Windsurf, Cline).
 
 .EXAMPLE
-powershell -c "irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install/install.ps1 | iex"
+powershell -c "irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install.ps1 | iex"
 #>
 
 $ErrorActionPreference = "Stop"
@@ -38,9 +39,9 @@ try {
     try {
         $Releases = Invoke-RestMethod -Uri "https://api.github.com/repos/$RepoOwner/$RepoName/releases" -UseBasicParsing
         if ($Releases.Count -eq 0) {
-            Write-Host "=========================================" -ForegroundColor Red
+            Write-Host "==========================================" -ForegroundColor Red
             Write-Host " No Pre-Built Releases Available Yet" -ForegroundColor Red
-            Write-Host "=========================================" -ForegroundColor Red
+            Write-Host "==========================================" -ForegroundColor Red
             Write-Host ""
             Write-Host "OmniContext doesn't have pre-built releases yet." -ForegroundColor Yellow
             Write-Host "You'll need to build from source." -ForegroundColor Yellow
@@ -85,14 +86,14 @@ $OutExe = Join-Path $OutDir "omnicontext.exe"
 $OutMcpExe = Join-Path $OutDir "omnicontext-mcp.exe"
 
 # 1. Provide Context
-Write-Host "=========================================" -ForegroundColor Cyan
-Write-Host " 🚀 Installing OmniContext" -ForegroundColor Cyan
-Write-Host "=========================================" -ForegroundColor Cyan
+Write-Host "==========================================" -ForegroundColor Cyan
+Write-Host " Installing OmniContext" -ForegroundColor Cyan
+Write-Host "==========================================" -ForegroundColor Cyan
 Write-Host "This script will:"
 Write-Host " 1. Download OmniContext $Version binaries"
 Write-Host " 2. Add them to your PATH ($OutDir)"
 Write-Host " 3. Download the Jina AI code embedding model (~550MB)"
-Write-Host "    (This model enables semantic code search and MCP AI agent capability)"
+Write-Host " 4. Auto-configure MCP for detected AI clients"
 Write-Host ""
 
 # Ensure architecture is x64
@@ -129,7 +130,6 @@ if (!(Test-Path $OutDir)) {
 }
 
 try {
-    # Extract to a temp staging directory first to properly flat-copy files
     $StagingDir = Join-Path $env:TEMP "omnicontext_staging"
     if (Test-Path $StagingDir) { Remove-Item -Path $StagingDir -Recurse -Force }
     New-Item -ItemType Directory -Force -Path $StagingDir | Out-Null
@@ -137,7 +137,6 @@ try {
     Expand-Archive -Path $TempZip -DestinationPath $StagingDir -Force
     Remove-Item -Path $TempZip -Force
 
-    # Copy files while preserving necessary relational structures if present
     Copy-Item -Path "$StagingDir\*" -Destination $OutDir -Recurse -Force
     Remove-Item -Path $StagingDir -Recurse -Force
 } catch {
@@ -150,31 +149,28 @@ if (!(Test-Path $OutExe) -or !(Test-Path $OutMcpExe)) {
     exit 1
 }
 
-# 4. Add to PATH
+# 5. Add to PATH
 $UserPath = [Environment]::GetEnvironmentVariable("PATH", "User")
 if ($UserPath -notlike "*$OutDir*") {
     Write-Host "Adding $OutDir to User PATH..." -ForegroundColor Yellow
     [Environment]::SetEnvironmentVariable("PATH", "$UserPath;$OutDir", "User")
-    $env:PATH = "$($env:PATH);$OutDir" # Update current session
+    $env:PATH = "$($env:PATH);$OutDir"
 }
 
-# 5. Initialize the system / Download the embedding model
+# 6. Initialize / Download the embedding model
 Write-Host ""
 Write-Host "Initializing OmniContext & downloading Jina AI embedding model..." -ForegroundColor Yellow
 Write-Host "This requires a robust internet connection. Please wait while the model downloads."
 
 try {
-    # Create temporary directory with dummy file to trigger model download
     $InitTemp = Join-Path $env:TEMP "omnicontext_init_temp"
     if (!(Test-Path $InitTemp)) {
         New-Item -ItemType Directory -Path $InitTemp | Out-Null
     }
     
-    # Create dummy source file
     "// Dummy file for model download" | Out-File -FilePath "$InitTemp\dummy.rs" -Encoding UTF8
     "fn main() {}" | Out-File -FilePath "$InitTemp\dummy.rs" -Append -Encoding UTF8
     
-    # Run index command to trigger model download
     Set-Location $InitTemp
     & $OutExe index .
     if ($LASTEXITCODE -ne 0) {
@@ -188,19 +184,75 @@ try {
     Write-Host "You can manually trigger it later by running: omnicontext index ." -ForegroundColor Magenta
 }
 
-Write-Host "=========================================" -ForegroundColor Green
-Write-Host " ✅ OmniContext installation complete!" -ForegroundColor Green
-Write-Host "=========================================" -ForegroundColor Green
+# 7. Auto-Configure MCP for detected AI clients
 Write-Host ""
-Write-Host "To keep OmniContext updated locally, just re-run this install command anytime!" -ForegroundColor Cyan
+Write-Host "Configuring MCP for detected AI clients..." -ForegroundColor Yellow
+
+$McpBinary = $OutMcpExe
+$McpConfigured = @()
+
+$McpTargets = @(
+    @{ Name = "Claude Desktop"; Path = (Join-Path $env:APPDATA "Claude\claude_desktop_config.json"); Namespace = $false },
+    @{ Name = "Cursor"; Path = (Join-Path $env:APPDATA "Cursor\User\globalStorage\cursor.mcp\config.json"); Namespace = $false },
+    @{ Name = "Continue.dev"; Path = (Join-Path $env:USERPROFILE ".continue\config.json"); Namespace = $false },
+    @{ Name = "Kiro"; Path = (Join-Path $env:USERPROFILE ".kiro\settings\mcp.json"); Namespace = $true },
+    @{ Name = "Windsurf"; Path = (Join-Path $env:APPDATA "Windsurf\User\globalStorage\codeium.windsurf\mcp_config.json"); Namespace = $false },
+    @{ Name = "Cline"; Path = (Join-Path $env:USERPROFILE ".cline\mcp_settings.json"); Namespace = $false }
+)
+
+$McpEntry = @{ command = $McpBinary; args = @("--repo", "."); disabled = $false }
+
+foreach ($target in $McpTargets) {
+    $configDir = Split-Path $target.Path -Parent
+    if (-not (Test-Path $configDir)) { continue }
+    try {
+        $config = @{}
+        if (Test-Path $target.Path) {
+            $raw = Get-Content $target.Path -Raw -ErrorAction SilentlyContinue
+            if ($raw) { $config = $raw | ConvertFrom-Json -AsHashtable -ErrorAction SilentlyContinue }
+            if (-not $config) { $config = @{} }
+        }
+        if ($target.Namespace) {
+            if (-not $config.ContainsKey("powers")) { $config["powers"] = @{} }
+            if (-not $config["powers"].ContainsKey("mcpServers")) { $config["powers"]["mcpServers"] = @{} }
+            $config["powers"]["mcpServers"]["omnicontext"] = $McpEntry
+        } else {
+            if (-not $config.ContainsKey("mcpServers")) { $config["mcpServers"] = @{} }
+            $config["mcpServers"]["omnicontext"] = $McpEntry
+        }
+        $config | ConvertTo-Json -Depth 10 | Set-Content $target.Path -Encoding UTF8
+        $McpConfigured += $target.Name
+        Write-Host "  [OK] $($target.Name)" -ForegroundColor Green
+    } catch {
+        Write-Host "  [--] $($target.Name): $($_.Exception.Message)" -ForegroundColor Yellow
+    }
+}
+
+if ($McpConfigured.Count -eq 0) {
+    Write-Host "  No AI clients detected. Install Claude/Cursor/etc and re-run." -ForegroundColor Yellow
+} else {
+    Write-Host "  Configured $($McpConfigured.Count) client(s): $($McpConfigured -join ', ')" -ForegroundColor Green
+}
+
+# Summary
 Write-Host ""
-Write-Host "Where to start indexing:"
-Write-Host "  Navigate to your code folder:  cd C:\Path\To\Your\Repo"
-Write-Host "  Create the search index:       omnicontext index ."
-Write-Host "  Test searching your code:      omnicontext search `"auth`""
+Write-Host "==========================================" -ForegroundColor Green
+Write-Host " OmniContext installation complete!" -ForegroundColor Green
+Write-Host "==========================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "To connect your MCP (Claude, AI Agents), use this configuration:"
-Write-Host "  Command:  omnicontext-mcp"
-Write-Host "  Args:     [""--repo"", ""C:\\Path\\To\\Your\\Repo""]"
+Write-Host "Quick Start:" -ForegroundColor Cyan
+Write-Host "  cd C:\Path\To\Your\Repo"
+Write-Host "  omnicontext index ."
+Write-Host "  omnicontext search `"authentication`""
 Write-Host ""
-Write-Host "Note: You may need to restart your terminal for PATH changes to take effect."
+if ($McpConfigured.Count -gt 0) {
+    Write-Host "MCP Auto-Configured: $($McpConfigured -join ', ')" -ForegroundColor Cyan
+    Write-Host "  Default: '--repo .' (current directory). Edit config for specific repos."
+} else {
+    Write-Host "MCP Manual Setup:" -ForegroundColor Cyan
+    Write-Host "  Command:  $McpBinary"
+    Write-Host "  Args:     [""--repo"", ""C:\\Path\\To\\Your\\Repo""]"
+}
+Write-Host ""
+Write-Host "Update: Re-run this script anytime." -ForegroundColor Cyan
+Write-Host "Restart your terminal for PATH changes."

@@ -214,7 +214,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: v${{ needs.analyze.outputs.new_version }}
-          name: OmniContext v${{ needs.analyze.outputs.new_version }}
+          name: omni v${{ needs.analyze.outputs.new_version }}
           body_path: /tmp/changelog.md
           draft: false
           prerelease: false
@@ -345,3 +345,126 @@ jobs:
         if: github.repository == 'steeltroops-ai/omnicontext' && env.OVSX_PAT != ''
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
+
+  # Step 5: Update package manager manifests with real SHA256 hashes
+  update-manifests:
+    name: Update Package Manifests
+    needs: [analyze, bump-and-tag, build]
+    if: needs.analyze.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download SHA256 files
+        run: |
+          version="${{ needs.bump-and-tag.outputs.version }}"
+          base_url="https://github.com/steeltroops-ai/omnicontext/releases/download/v${version}"
+
+          mkdir -p /tmp/shas
+          for target in x86_64-pc-windows-msvc x86_64-unknown-linux-gnu x86_64-apple-darwin aarch64-apple-darwin; do
+            if [ "$target" = "x86_64-pc-windows-msvc" ]; then
+              ext="zip"
+            else
+              ext="tar.gz"
+            fi
+            sha_file="omnicontext-${version}-${target}.${ext}.sha256"
+            curl -sSL -f "${base_url}/${sha_file}" -o "/tmp/shas/${target}.sha256" || echo "PLACEHOLDER_SHA256" > "/tmp/shas/${target}.sha256"
+          done
+
+      - name: Update Homebrew formula
+        run: |
+          version="${{ needs.bump-and-tag.outputs.version }}"
+
+          sha_arm64=$(cut -d' ' -f1 /tmp/shas/aarch64-apple-darwin.sha256)
+          sha_x64=$(cut -d' ' -f1 /tmp/shas/x86_64-apple-darwin.sha256)
+          sha_linux=$(cut -d' ' -f1 /tmp/shas/x86_64-unknown-linux-gnu.sha256)
+
+          cat > distribution/homebrew/omnicontext.rb << FORMULA_EOF
+          class Omnicontext < Formula
+            desc "Universal code context engine for AI coding agents"
+            homepage "https://github.com/steeltroops-ai/omnicontext"
+            version "${version}"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/steeltroops-ai/omnicontext/releases/download/v#{version}/omnicontext-#{version}-aarch64-apple-darwin.tar.gz"
+                sha256 "${sha_arm64}"
+              else
+                url "https://github.com/steeltroops-ai/omnicontext/releases/download/v#{version}/omnicontext-#{version}-x86_64-apple-darwin.tar.gz"
+                sha256 "${sha_x64}"
+              end
+            end
+
+            on_linux do
+              url "https://github.com/steeltroops-ai/omnicontext/releases/download/v#{version}/omnicontext-#{version}-x86_64-unknown-linux-gnu.tar.gz"
+              sha256 "${sha_linux}"
+            end
+
+            def install
+              bin.install "omnicontext"
+              bin.install "omnicontext-mcp"
+              bin.install "omnicontext-daemon" if File.exist?("omnicontext-daemon")
+            end
+
+            test do
+              assert_match "omnicontext", shell_output("#{bin}/omnicontext --version")
+            end
+          end
+          FORMULA_EOF
+
+          # Fix indentation (heredoc artifact)
+          sed -i 's/^          //' distribution/homebrew/omnicontext.rb
+
+      - name: Update Scoop manifest
+        run: |
+          version="${{ needs.bump-and-tag.outputs.version }}"
+          sha_win=$(cut -d' ' -f1 /tmp/shas/x86_64-pc-windows-msvc.sha256)
+
+          cat > distribution/scoop/omnicontext.json << SCOOP_EOF
+          {
+            "version": "${version}",
+            "description": "Universal code context engine for AI coding agents",
+            "homepage": "https://github.com/steeltroops-ai/omnicontext",
+            "license": "Apache-2.0",
+            "architecture": {
+              "64bit": {
+                "url": "https://github.com/steeltroops-ai/omnicontext/releases/download/v${version}/omnicontext-${version}-x86_64-pc-windows-msvc.zip",
+                "hash": "${sha_win}"
+              }
+            },
+            "bin": ["omnicontext.exe", "omnicontext-mcp.exe", "omnicontext-daemon.exe"],
+            "checkver": {
+              "github": "https://github.com/steeltroops-ai/omnicontext"
+            },
+            "autoupdate": {
+              "architecture": {
+                "64bit": {
+                  "url": "https://github.com/steeltroops-ai/omnicontext/releases/download/v\$version/omnicontext-\$version-x86_64-pc-windows-msvc.zip"
+                }
+              },
+              "hash": {
+                "url": "\$url.sha256"
+              }
+            }
+          }
+          SCOOP_EOF
+
+          sed -i 's/^          //' distribution/scoop/omnicontext.json
+
+      - name: Commit manifest updates
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add distribution/homebrew/omnicontext.rb distribution/scoop/omnicontext.json
+          if git diff --staged --quiet; then
+            echo "No manifest changes to commit"
+          else
+            git commit -m "chore(dist): update package manifests for v${{ needs.bump-and-tag.outputs.version }} [skip ci]"
+            git push origin main
+          fi
