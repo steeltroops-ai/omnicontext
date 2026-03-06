@@ -422,8 +422,7 @@ impl Embedder {
         let sanitized_refs: Vec<&str> = sanitized.iter().map(String::as_str).collect();
 
         // Process in batches with progress logging
-        let total_batches =
-            sanitized_refs.len().div_ceil(self.config.batch_size);
+        let total_batches = sanitized_refs.len().div_ceil(self.config.batch_size);
         for (batch_idx, batch) in sanitized_refs.chunks(self.config.batch_size).enumerate() {
             // Log progress every 10 batches
             if batch_idx % 10 == 0 {

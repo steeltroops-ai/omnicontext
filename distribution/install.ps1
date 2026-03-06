@@ -79,27 +79,30 @@ $RepoOwner = "steeltroops-ai"
 $RepoName  = "omnicontext"
 $Version   = $null
 
-# Primary: parse Cargo.toml from main branch
+# Primary: GitHub Releases API, ensures binary assets exist
 try {
-    $raw = Invoke-RestMethod -Uri "https://raw.githubusercontent.com/$RepoOwner/$RepoName/main/Cargo.toml" -UseBasicParsing
-    if ($raw -match '(?m)^version\s*=\s*"([^"]+)"') {
-        $Version = "v$($Matches[1])"
-        ok ("Version resolved from source  " + $DIM + "($Version)" + $RESET)
+    $releases = Invoke-RestMethod "https://api.github.com/repos/$RepoOwner/$RepoName/releases" -UseBasicParsing
+    $release  = $releases | Where-Object { $_.assets.Count -gt 0 } | Select-Object -First 1
+    if ($release) {
+        $Version = $release.tag_name
+        ok ("Latest release with assets  " + $DIM + "($Version)" + $RESET)
     }
 } catch { }
 
-# Fallback: GitHub Releases API, skip releases with no assets
+# Fallback: parse Cargo.toml from main branch if API failed
 if (-not $Version) {
-    warn "Cargo.toml fetch failed — querying GitHub Releases"
+    warn "GitHub API limit reached or network error - falling back to source"
     try {
-        $releases = Invoke-RestMethod "https://api.github.com/repos/$RepoOwner/$RepoName/releases" -UseBasicParsing
-        $release  = $releases | Where-Object { $_.assets.Count -gt 0 } | Select-Object -First 1
-        if (-not $release) { Exit-Err "No published releases with binary assets found." }
-        $Version = $release.tag_name
-        ok ("Latest release with assets  " + $DIM + "($Version)" + $RESET)
+        $raw = Invoke-RestMethod -Uri "https://raw.githubusercontent.com/$RepoOwner/$RepoName/main/Cargo.toml" -UseBasicParsing
+        if ($raw -match '(?m)^version\s*=\s*"([^"]+)"') {
+            $Version = "v$($Matches[1])"
+            ok ("Version resolved from source  " + $DIM + "($Version)" + $RESET)
+        }
     } catch {
-        Exit-Err "Could not resolve version: $_"
+        Exit-Err "Could not resolve version."
     }
+    
+    if (-not $Version) { Exit-Err "No published releases with binary assets found." }
 }
 
 $CleanVersion  = $Version -replace "^v", ""
@@ -160,7 +163,8 @@ New-Item -ItemType Directory -Force -Path $StagingDir | Out-Null
 New-Item -ItemType Directory -Force -Path $OutDir      | Out-Null
 
 try {
-    Expand-Archive -Path $TempZip -DestinationPath $StagingDir -Force
+    # Suppress verbose expansion output
+    $null = Expand-Archive -Path $TempZip -DestinationPath $StagingDir -Force
     Remove-Item $TempZip -Force -EA SilentlyContinue
     Copy-Item "$StagingDir\*" -Destination $OutDir -Recurse -Force
     Remove-Item $StagingDir -Recurse -Force -EA SilentlyContinue
@@ -176,6 +180,11 @@ info "omnicontext.exe        $DIM$([math]::Round((Get-Item $OutExe).Length/1KB))
 info "omnicontext-mcp.exe    $DIM$([math]::Round((Get-Item $OutMcpExe).Length/1KB)) KB$RESET"
 if (Test-Path $OutDaemonExe) {
     info "omnicontext-daemon.exe $DIM$([math]::Round((Get-Item $OutDaemonExe).Length/1KB)) KB$RESET"
+}
+
+$dllPath = Join-Path $OutDir "onnxruntime.dll"
+if (Test-Path $dllPath) {
+    info ("onnxruntime.dll        " + $DIM + "$([math]::Round((Get-Item $dllPath).Length/1MB)) MB" + $RESET)
 }
 
 # ---------------------------------------------------------------------------
@@ -205,7 +214,7 @@ if (Test-Path $ModelPath) {
     $modelSizeMb = [math]::Round((Get-Item $ModelPath).Length / 1MB, 0)
     ok "Model already cached  $DIM${modelSizeMb} MB$RESET"
 } else {
-    info "Triggering model download via  $DIM\`omnicontext index\`$RESET"
+    info ("Triggering model download via  " + $DIM + "'omnicontext index'" + $RESET)
     info "This may take several minutes on first run..."
     blank
     try {
@@ -218,14 +227,14 @@ if (Test-Path $ModelPath) {
         Remove-Item $InitTemp -Recurse -Force -EA SilentlyContinue
     } catch {
         warn "Model download may have been interrupted."
-        info "Trigger manually later: $DIM omnicontext index .$RESET"
+        info ("Trigger manually later: " + $DIM + "omnicontext index ." + $RESET)
     }
 
     if (Test-Path $ModelPath) {
         $modelSizeMb = [math]::Round((Get-Item $ModelPath).Length / 1MB, 0)
         ok "Model downloaded  $DIM${modelSizeMb} MB$RESET"
     } else {
-        warn "Model not found — will auto-download on first use"
+        warn "Model not found - will auto-download on first use"
     }
 }
 
@@ -287,7 +296,7 @@ foreach ($c in $clients) {
 }
 
 if ($configured.Count -eq 0) {
-    warn "No AI clients detected — install Claude/Cursor/etc and re-run to auto-configure"
+    warn "No AI clients detected - install Claude/Cursor/etc and re-run to auto-configure"
 } else {
     blank
     ok "$($configured.Count) client(s) configured"

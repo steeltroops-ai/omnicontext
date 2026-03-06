@@ -147,9 +147,10 @@ fn extract_module_declarations(source_lines: &[&str]) -> String {
         if (trimmed.is_empty()
             || trimmed.starts_with("//")
             || trimmed.starts_with('#') && trimmed.starts_with("#!"))
-            && !in_multiline {
-                continue;
-            }
+            && !in_multiline
+        {
+            continue;
+        }
 
         // Handle multi-line imports: `use std::{`  or  `from x import (`
         if in_multiline {

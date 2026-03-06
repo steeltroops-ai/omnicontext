@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# OmniContext Installer — macOS / Linux
+# OmniContext Installer - macOS / Linux
 # Usage: curl -fsSL https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install.sh | bash
 
 set -euo pipefail
@@ -50,37 +50,23 @@ cat <<'EOF'
 \____/_/ /_/ /_/_/ /_/_/ \____/\____/_/ /_/\__/\___/_/|_|\__/  
 EOF
 printf "${RESET}"
-printf "${DIM}  Universal Code Context Engine — macOS / Linux Installer${RESET}\n"
+printf "${DIM}  Universal Code Context Engine - macOS / Linux Installer${RESET}\n"
 hr
 blank
 
 # ---------------------------------------------------------------------------
-# step 1 — resolve version
+# step 1 - resolve version
 # ---------------------------------------------------------------------------
 step "1/7" "Resolving latest version"
 
 VERSION=""
 
-# Primary: parse Cargo.toml
-CARGO_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/Cargo.toml"
-if CARGO_CONTENT=$(curl -sSLf "$CARGO_URL" 2>/dev/null); then
-    if SOURCE_VER=$(echo "$CARGO_CONTENT" | grep -m1 '^version' | sed -E 's/.*"([^"]+)".*/\1/' 2>/dev/null); then
-        if [ -n "$SOURCE_VER" ]; then
-            VERSION="v${SOURCE_VER}"
-            ok "Version resolved from source  ${DIM}(${VERSION})${RESET}"
-        fi
-    fi
-fi
-
-# Fallback: GitHub Releases API (skip empty-asset releases)
-if [ -z "$VERSION" ]; then
-    warn "Cargo.toml fetch failed — querying GitHub Releases API"
-    API="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases"
-    if RELEASES=$(curl -sSLf "$API" 2>/dev/null); then
-        # Pick first release whose assets array is non-empty
-        # Use python3 if available for reliable JSON parsing
-        if command -v python3 >/dev/null 2>&1; then
-            VERSION=$(python3 -c "
+# Primary: GitHub Releases API (ensures we get a published version with assets)
+API="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases"
+if RELEASES=$(curl -sSLf "$API" 2>/dev/null); then
+    # Pick first release whose assets array is non-empty
+    if command -v python3 >/dev/null 2>&1; then
+        VERSION=$(python3 -c "
 import json, sys
 releases = json.load(sys.stdin)
 for r in releases:
@@ -88,18 +74,33 @@ for r in releases:
         print(r['tag_name'])
         break
 " <<< "$RELEASES" 2>/dev/null || echo "")
-        else
-            VERSION=$(echo "$RELEASES" | grep '"tag_name":' | head -n1 | sed -E 's/.*"([^"]+)".*/\1/' || echo "")
+    else
+        VERSION=$(echo "$RELEASES" | grep '"tag_name":' | head -n1 | sed -E 's/.*"([^"]+)".*/\1/' || echo "")
+    fi
+    if [ -n "$VERSION" ]; then
+        ok "Latest release with assets  ${DIM}(${VERSION})${RESET}"
+    fi
+fi
+
+# Fallback: parse Cargo.toml if API limit reached
+if [ -z "$VERSION" ]; then
+    warn "GitHub API limit reached or network error - falling back to source"
+    CARGO_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/Cargo.toml"
+    if CARGO_CONTENT=$(curl -sSLf "$CARGO_URL" 2>/dev/null); then
+        if SOURCE_VER=$(echo "$CARGO_CONTENT" | grep -m1 '^version' | sed -E 's/.*"([^"]+)".*/\1/' 2>/dev/null); then
+            if [ -n "$SOURCE_VER" ]; then
+                VERSION="v${SOURCE_VER}"
+                ok "Version resolved from source  ${DIM}(${VERSION})${RESET}"
+            fi
         fi
     fi
     [ -n "$VERSION" ] || die "Could not resolve a published release version."
-    ok "Latest release with assets  ${DIM}(${VERSION})${RESET}"
 fi
 
 CLEAN_VERSION="${VERSION#v}"
 
 # ---------------------------------------------------------------------------
-# step 2 — detect platform
+# step 2 - detect platform
 # ---------------------------------------------------------------------------
 blank
 step "2/7" "Detecting platform"
@@ -126,7 +127,7 @@ ok "Platform  ${DIM}${ARCH_NAME}-${OS_NAME}${RESET}"
 info "Asset    ${DIM}${ASSET_NAME}${RESET}"
 
 # ---------------------------------------------------------------------------
-# step 3 — download
+# step 3 - download
 # ---------------------------------------------------------------------------
 blank
 step "3/7" "Downloading release archive"
@@ -148,7 +149,7 @@ ARCHIVE_SIZE=$(du -sh "${TEMP_DIR}/${ASSET_NAME}" 2>/dev/null | cut -f1 || echo 
 ok "Downloaded ${ARCHIVE_SIZE}"
 
 # ---------------------------------------------------------------------------
-# step 4 — stop running instances
+# step 4 - stop running instances
 # ---------------------------------------------------------------------------
 blank
 step "4/7" "Stopping active processes"
@@ -166,14 +167,14 @@ fi
 sleep 0.4
 
 # ---------------------------------------------------------------------------
-# step 5 — extract and install
+# step 5 - extract and install
 # ---------------------------------------------------------------------------
 blank
 step "5/7" "Extracting and installing binaries"
 
 tar -xzf "${TEMP_DIR}/${ASSET_NAME}" -C "$TEMP_DIR"
 
-# Locate binaries — handles flat, nested, or searched layout
+# Locate binaries - handles flat, nested, or searched layout
 locate_bin() {
     local name="$1"
     # flat
@@ -230,7 +231,7 @@ if ! grep -qF "$PATH_LINE" "$SHELL_RC" 2>/dev/null; then
 fi
 
 # ---------------------------------------------------------------------------
-# step 6 — download embedding model
+# step 6 - download embedding model
 # ---------------------------------------------------------------------------
 blank
 step "6/7" "Embedding model  ${DIM}(jina-embeddings-v2-base-code, ~550 MB)${RESET}"
@@ -251,12 +252,12 @@ else
         MODEL_SIZE=$(du -sh "$MODEL_PATH" 2>/dev/null | cut -f1 || echo "?")
         ok "Model downloaded  ${DIM}${MODEL_SIZE}${RESET}"
     else
-        warn "Model not found — will auto-download on first  ${DIM}omnicontext index${RESET}"
+        warn "Model not found - will auto-download on first  ${DIM}omnicontext index${RESET}"
     fi
 fi
 
 # ---------------------------------------------------------------------------
-# step 7 — MCP auto-configure
+# step 7 - MCP auto-configure
 # ---------------------------------------------------------------------------
 blank
 step "7/7" "Auto-configuring MCP for AI clients"
@@ -336,7 +337,7 @@ for client in "${!MCP_TARGETS[@]}"; do
 done
 
 if [ -z "$MCP_CONFIGURED" ]; then
-    warn "No AI clients detected — install Claude/Cursor/etc and re-run to auto-configure"
+    warn "No AI clients detected - install Claude/Cursor/etc and re-run to auto-configure"
 else
     blank
     ok "$(echo "$MCP_CONFIGURED" | tr ',' '\n' | wc -l | tr -d ' ') client(s) configured"
@@ -352,7 +353,7 @@ if command -v omnicontext >/dev/null 2>&1; then
     INSTALLED_VER=$(omnicontext --version 2>/dev/null || echo "?")
     printf "${BOLD}${GREEN}  OmniContext ${CLEAN_VERSION} installed${RESET}  ${DIM}(${ELAPSED}s)${RESET}\n"
 else
-    printf "${BOLD}${GREEN}  OmniContext ${CLEAN_VERSION} installed${RESET}  ${DIM}(${ELAPSED}s — restart shell to apply PATH)${RESET}\n"
+    printf "${BOLD}${GREEN}  OmniContext ${CLEAN_VERSION} installed${RESET}  ${DIM}(${ELAPSED}s - restart shell to apply PATH)${RESET}\n"
 fi
 hr
 blank

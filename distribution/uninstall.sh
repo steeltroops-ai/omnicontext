@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# OmniContext Uninstaller — macOS / Linux
+# OmniContext Uninstaller - macOS / Linux
 # Usage: bash uninstall.sh [--keep-data] [--keep-config] [--silent]
 #        curl -fsSL https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/uninstall.sh | bash
 
@@ -58,7 +58,7 @@ cat <<'EOF'
 \____/_/ /_/ /_/_/ /_/_/ \____/\____/_/ /_/\__/\___/_/|_|\__/  
 EOF
 printf "${RESET}"
-printf "${DIM}  Universal Code Context Engine — Uninstaller${RESET}\n"
+printf "${DIM}  Universal Code Context Engine - Uninstaller${RESET}\n"
 hr
 blank
 
@@ -82,7 +82,7 @@ fi
 blank
 
 # ---------------------------------------------------------------------------
-# step 1 — stop processes
+# step 1 - stop processes
 # ---------------------------------------------------------------------------
 step "1/4" "Stopping active processes"
 
@@ -97,7 +97,7 @@ done
 sleep 0.3
 
 # ---------------------------------------------------------------------------
-# step 2 — remove binaries
+# step 2 - remove binaries
 # ---------------------------------------------------------------------------
 blank
 step "2/4" "Removing binaries"
@@ -134,7 +134,7 @@ for rc in "${HOME}/.bashrc" "${HOME}/.zshrc" "${HOME}/.profile"; do
 done
 
 # ---------------------------------------------------------------------------
-# step 3 — remove data
+# step 3 - remove data
 # ---------------------------------------------------------------------------
 blank
 step "3/4" "Removing data and models"
@@ -152,7 +152,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# step 4 — remove MCP entries from all known clients
+# step 4 - remove MCP entries from all known clients
 # ---------------------------------------------------------------------------
 blank
 step "4/4" "Unlinking MCP configurations"

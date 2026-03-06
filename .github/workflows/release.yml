@@ -271,6 +271,7 @@ jobs:
           Copy-Item "target/${{ matrix.target }}/release/omnicontext.exe" staging/
           Copy-Item "target/${{ matrix.target }}/release/omnicontext-mcp.exe" staging/
           Copy-Item "target/${{ matrix.target }}/release/omnicontext-daemon.exe" staging/
+          Copy-Item "target/${{ matrix.target }}/release/*.dll" staging/ -ErrorAction SilentlyContinue
           Copy-Item README.md, LICENSE, INSTALL.md staging/
 
           Compress-Archive -Path staging/* -DestinationPath $archive
@@ -290,6 +291,7 @@ jobs:
           cp "target/${{ matrix.target }}/release/omnicontext" staging/
           cp "target/${{ matrix.target }}/release/omnicontext-mcp" staging/
           cp "target/${{ matrix.target }}/release/omnicontext-daemon" staging/ || true
+          cp "target/${{ matrix.target }}/release/"libonnxruntime* staging/ 2>/dev/null || true
           cp README.md LICENSE INSTALL.md staging/
 
           tar -czf "$archive" -C staging .

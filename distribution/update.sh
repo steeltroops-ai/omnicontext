@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# OmniContext Updater — macOS / Linux
+# OmniContext Updater - macOS / Linux
 # Usage: curl -fsSL https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/update.sh | bash
 #        bash update.sh [--force]
 
@@ -55,12 +55,12 @@ cat <<'EOF'
 \____/_/ /_/ /_/_/ /_/_/ \____/\____/_/ /_/\__/\___/_/|_|\__/  
 EOF
 printf "${RESET}"
-printf "${DIM}  Universal Code Context Engine — Updater${RESET}\n"
+printf "${DIM}  Universal Code Context Engine - Updater${RESET}\n"
 hr
 blank
 
 # ---------------------------------------------------------------------------
-# step 1 — verify installation
+# step 1 - verify installation
 # ---------------------------------------------------------------------------
 step "1/4" "Checking installed version"
 
@@ -76,12 +76,12 @@ if echo "$CURRENT_RAW" | grep -qE '[0-9]+\.[0-9]+\.[0-9]+'; then
     CURRENT_VERSION=$(echo "$CURRENT_RAW" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)
     ok "Installed  ${DIM}${CURRENT_VERSION}${RESET}"
 else
-    warn "Could not parse installed version — proceeding anyway"
+    warn "Could not parse installed version - proceeding anyway"
     CURRENT_VERSION="unknown"
 fi
 
 # ---------------------------------------------------------------------------
-# step 2 — resolve latest version
+# step 2 - resolve latest version
 # ---------------------------------------------------------------------------
 blank
 step "2/4" "Checking latest release"
@@ -89,23 +89,10 @@ step "2/4" "Checking latest release"
 LATEST_VERSION=""
 LATEST_TAG=""
 
-# Primary: Cargo.toml
-CARGO_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/Cargo.toml"
-if CARGO=$(curl -sSLf "$CARGO_URL" 2>/dev/null); then
-    VER=$(echo "$CARGO" | grep -m1 '^version' | sed -E 's/.*"([^"]+)".*/\1/' 2>/dev/null || echo "")
-    if [ -n "$VER" ]; then
-        LATEST_VERSION="$VER"
-        LATEST_TAG="v${VER}"
-        ok "Latest from source  ${DIM}${LATEST_TAG}${RESET}"
-    fi
-fi
-
-# Fallback: GitHub Releases (skip empty-asset releases)
-if [ -z "$LATEST_VERSION" ]; then
-    warn "Cargo.toml fetch failed — querying GitHub Releases API"
-    RELEASES=$(curl -sSLf "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases" 2>/dev/null || echo "[]")
-    if command -v python3 >/dev/null 2>&1; then
-        LATEST_TAG=$(python3 -c "
+# Primary: GitHub Releases (ensures we get a published version with assets)
+RELEASES=$(curl -sSLf "https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases" 2>/dev/null || echo "[]")
+if command -v python3 >/dev/null 2>&1; then
+    LATEST_TAG=$(python3 -c "
 import json, sys
 releases = json.loads(sys.stdin.read())
 for r in releases:
@@ -113,12 +100,28 @@ for r in releases:
         print(r['tag_name'])
         break
 " <<< "$RELEASES" 2>/dev/null || echo "")
-    else
-        LATEST_TAG=$(echo "$RELEASES" | grep '"tag_name":' | head -n1 | sed -E 's/.*"([^"]+)".*/\1/' || echo "")
-    fi
-    [ -n "$LATEST_TAG" ] || die "Could not resolve latest version."
+else
+    LATEST_TAG=$(echo "$RELEASES" | grep '"tag_name":' | head -n1 | sed -E 's/.*"([^"]+)".*/\1/' || echo "")
+fi
+
+if [ -n "$LATEST_TAG" ]; then
     LATEST_VERSION="${LATEST_TAG#v}"
-    ok "Latest release  ${DIM}${LATEST_TAG}${RESET}"
+    ok "Latest release with assets  ${DIM}${LATEST_TAG}${RESET}"
+fi
+
+# Fallback: Cargo.toml
+if [ -z "$LATEST_VERSION" ]; then
+    warn "GitHub API limit reached or network error - falling back to source"
+    CARGO_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/Cargo.toml"
+    if CARGO=$(curl -sSLf "$CARGO_URL" 2>/dev/null); then
+        VER=$(echo "$CARGO" | grep -m1 '^version' | sed -E 's/.*"([^"]+)".*/\1/' 2>/dev/null || echo "")
+        if [ -n "$VER" ]; then
+            LATEST_VERSION="$VER"
+            LATEST_TAG="v${VER}"
+            ok "Latest from source  ${DIM}${LATEST_TAG}${RESET}"
+        fi
+    fi
+    [ -n "$LATEST_VERSION" ] || die "Could not resolve latest version."
 fi
 
 # Compare
@@ -137,7 +140,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# step 3 — backup MCP configs
+# step 3 - backup MCP configs
 # ---------------------------------------------------------------------------
 blank
 step "3/4" "Backing up MCP configurations"
@@ -180,7 +183,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# step 4 — run installer
+# step 4 - run installer
 # ---------------------------------------------------------------------------
 blank
 step "4/4" "Running installer"
@@ -215,7 +218,7 @@ hr
 if [ "$NEW_VERSION" = "$LATEST_VERSION" ]; then
     printf "${BOLD}${GREEN}  Updated  ${CURRENT_VERSION}  ->  ${NEW_VERSION}${RESET}  ${DIM}(${ELAPSED}s)${RESET}\n"
 else
-    printf "${BOLD}${YELLOW}  Installer ran — version ${NEW_VERSION} (expected ${LATEST_VERSION})${RESET}\n"
+    printf "${BOLD}${YELLOW}  Installer ran - version ${NEW_VERSION} (expected ${LATEST_VERSION})${RESET}\n"
 fi
 hr
 blank

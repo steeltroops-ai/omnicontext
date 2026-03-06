@@ -77,7 +77,7 @@ if ($currentRaw -match '(\d+\.\d+\.\d+)') {
     $currentVersion = $Matches[1]
     ok "Installed  $DIM$currentVersion$RESET"
 } else {
-    warn "Could not parse installed version — proceeding anyway"
+    warn "Could not parse installed version - proceeding anyway"
     $currentVersion = "unknown"
 }
 
@@ -90,28 +90,32 @@ step "2/4" "Checking latest release"
 $latestVersion = $null
 $latestTag     = $null
 
-# Prefer Cargo.toml for ground-truth version
+# Primary: GitHub Releases API, ensures binary assets exist
 try {
-    $cargoRaw = Invoke-RestMethod "https://raw.githubusercontent.com/$RepoOwner/$RepoName/main/Cargo.toml" -UseBasicParsing
-    if ($cargoRaw -match '(?m)^version\s*=\s*"([^"]+)"') {
-        $latestVersion = $Matches[1]
-        $latestTag     = "v$latestVersion"
-        ok "Latest from source  $DIM$latestTag$RESET"
-    }
-} catch { }
-
-# Fallback: latest release with assets
-if (-not $latestVersion) {
-    try {
-        $releases = Invoke-RestMethod "https://api.github.com/repos/$RepoOwner/$RepoName/releases" -UseBasicParsing
-        $r = $releases | Where-Object { $_.assets.Count -gt 0 } | Select-Object -First 1
-        if (-not $r) { Exit-Err "No releases with binary assets found." }
+    $releases = Invoke-RestMethod "https://api.github.com/repos/$RepoOwner/$RepoName/releases" -UseBasicParsing
+    $r = $releases | Where-Object { $_.assets.Count -gt 0 } | Select-Object -First 1
+    if ($r) {
         $latestTag     = $r.tag_name
         $latestVersion = $latestTag -replace "^v", ""
-        ok "Latest release  $DIM$latestTag$RESET"
-    } catch {
-        Exit-Err "Failed to resolve latest version: $_"
+        ok "Latest release with assets  $DIM$latestTag$RESET"
     }
+} catch {
+    warn "GitHub API limit reached or network error - falling back to source"
+}
+
+# Fallback: parse Cargo.toml from main branch if API failed
+if (-not $latestVersion) {
+    try {
+        $cargoRaw = Invoke-RestMethod "https://raw.githubusercontent.com/$RepoOwner/$RepoName/main/Cargo.toml" -UseBasicParsing
+        if ($cargoRaw -match '(?m)^version\s*=\s*"([^"]+)"') {
+            $latestVersion = $Matches[1]
+            $latestTag     = "v$latestVersion"
+            ok "Latest from source  $DIM$latestTag$RESET"
+        }
+    } catch {
+        Exit-Err "Failed to resolve latest version."
+    }
+    if (-not $latestVersion) { Exit-Err "No published releases with binary assets found." }
 }
 
 # version comparison
