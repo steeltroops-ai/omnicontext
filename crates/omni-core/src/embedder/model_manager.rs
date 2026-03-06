@@ -71,6 +71,33 @@ pub const FALLBACK_MODEL: ModelSpec = ModelSpec {
     approx_size_bytes: 130_000_000, // ~130MB
 };
 
+/// Cross-encoder reranker model: ms-marco-MiniLM-L-6-v2.
+///
+/// This is a CROSS-ENCODER (not a bi-encoder). It takes a (query, document)
+/// pair as input and outputs a single relevance score. This is fundamentally
+/// different from the embedding models above which produce vectors.
+///
+/// Why this model:
+/// - Specifically trained on MS MARCO passage ranking (query-document scoring)
+/// - 6-layer MiniLM architecture -- fast inference (~5ms per pair)
+/// - Output: single logit per pair, apply sigmoid for [0, 1] probability
+/// - ~90MB download -- lightweight for a cross-encoder
+/// - ONNX compatible
+///
+/// NOTE: `dimensions` is set to 1 because the output is a single score,
+/// not a vector embedding.
+pub const RERANKER_MODEL: ModelSpec = ModelSpec {
+    name: "ms-marco-MiniLM-L-6-v2",
+    hf_repo: "cross-encoder/ms-marco-MiniLM-L-6-v2",
+    model_url:
+        "https://huggingface.co/cross-encoder/ms-marco-MiniLM-L-6-v2/resolve/main/onnx/model.onnx",
+    tokenizer_url:
+        "https://huggingface.co/cross-encoder/ms-marco-MiniLM-L-6-v2/resolve/main/tokenizer.json",
+    dimensions: 1, // single relevance score output, not an embedding vector
+    max_seq_length: 512,
+    approx_size_bytes: 90_000_000, // ~90MB
+};
+
 /// Get the models directory: `~/.omnicontext/models/`
 fn models_base_dir() -> PathBuf {
     dirs::data_local_dir()
@@ -99,14 +126,48 @@ pub fn is_model_ready(spec: &ModelSpec) -> bool {
     let model = model_path(spec);
     let tokenizer = tokenizer_path(spec);
 
-    if !model.exists() || !tokenizer.exists() {
+    if !model.exists() {
+        tracing::debug!(
+            path = %model.display(),
+            "model file does not exist"
+        );
         return false;
     }
 
-    // Verify model file is not empty/corrupted (basic size check)
+    if !tokenizer.exists() {
+        tracing::debug!(
+            path = %tokenizer.display(),
+            "tokenizer file does not exist"
+        );
+        return false;
+    }
+
+    // Verify model file is not truncated or corrupted
     if let Ok(meta) = std::fs::metadata(&model) {
-        if meta.len() < 1_000_000 {
-            // Model file is suspiciously small (< 1MB), likely corrupted
+        let size = meta.len();
+        let expected = spec.approx_size_bytes;
+
+        // File must be at least 80% of expected size
+        if size < (expected * 80 / 100) {
+            tracing::error!(
+                path = %model.display(),
+                actual_bytes = size,
+                expected_bytes = expected,
+                "model file appears truncated or corrupt (< 80% of expected size), will re-download"
+            );
+            // Delete corrupt file to force re-download
+            let _ = std::fs::remove_file(&model);
+            return false;
+        }
+
+        // File must not be suspiciously small
+        if size < 1_000_000 {
+            tracing::error!(
+                path = %model.display(),
+                actual_bytes = size,
+                "model file is too small (< 1MB), likely corrupt"
+            );
+            let _ = std::fs::remove_file(&model);
             return false;
         }
     }

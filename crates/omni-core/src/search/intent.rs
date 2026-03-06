@@ -22,6 +22,12 @@ pub enum QueryIntent {
     Refactor,
     /// User wants to create new code following patterns.
     Generate,
+    /// User wants to trace data flow through the system.
+    DataFlow,
+    /// User wants to find dependencies or dependents of a symbol.
+    Dependency,
+    /// User wants to find tests that cover a given symbol or module.
+    TestCoverage,
     /// Intent unclear, use balanced strategy.
     Unknown,
 }
@@ -33,6 +39,44 @@ impl QueryIntent {
     /// More sophisticated approaches (ML-based) can be added later.
     pub fn classify(query: &str) -> Self {
         let query_lower = query.to_lowercase();
+
+        // DataFlow intent: tracing data through the system
+        if (query_lower.contains("data flow")
+            || query_lower.contains("dataflow")
+            || query_lower.contains("pipeline")
+            || query_lower.contains("pass through")
+            || query_lower.contains("passes through")
+            || query_lower.contains("transforms")
+            || query_lower.contains("propagat"))
+            && (query_lower.contains("from")
+                || query_lower.contains("to")
+                || query_lower.contains("through"))
+        {
+            return QueryIntent::DataFlow;
+        }
+
+        // Dependency intent: finding what depends on what
+        if query_lower.contains("depend")
+            || query_lower.contains("import")
+            || query_lower.contains("require")
+            || (query_lower.contains("uses") && query_lower.contains("what"))
+            || (query_lower.contains("used by"))
+            || query_lower.contains("downstream")
+            || query_lower.contains("upstream")
+        {
+            return QueryIntent::Dependency;
+        }
+
+        // TestCoverage intent: finding tests
+        if (query_lower.contains("test") || query_lower.contains("spec"))
+            && (query_lower.contains("cover")
+                || query_lower.contains("which")
+                || query_lower.contains("where")
+                || query_lower.contains("find")
+                || query_lower.contains("missing"))
+        {
+            return QueryIntent::TestCoverage;
+        }
 
         // Debug intent: errors, bugs, failures (check before "fix" triggers Edit)
         if query_lower.contains("bug")
@@ -155,6 +199,33 @@ impl QueryIntent {
                 include_recent_changes: false,
                 graph_depth: 1,
                 prioritize_high_level: true,
+            },
+            QueryIntent::DataFlow => ContextStrategy {
+                include_architecture: true,
+                include_implementation: true,
+                include_tests: false,
+                include_docs: false,
+                include_recent_changes: false,
+                graph_depth: 4, // deeper traversal for tracing data paths
+                prioritize_high_level: false,
+            },
+            QueryIntent::Dependency => ContextStrategy {
+                include_architecture: true,
+                include_implementation: false,
+                include_tests: false,
+                include_docs: true,
+                include_recent_changes: false,
+                graph_depth: 3, // callers + callees
+                prioritize_high_level: true,
+            },
+            QueryIntent::TestCoverage => ContextStrategy {
+                include_architecture: false,
+                include_implementation: false,
+                include_tests: true,
+                include_docs: false,
+                include_recent_changes: false,
+                graph_depth: 1,
+                prioritize_high_level: false,
             },
             QueryIntent::Unknown => ContextStrategy {
                 include_architecture: true,
@@ -289,6 +360,50 @@ mod tests {
     }
 
     #[test]
+    fn test_classify_data_flow() {
+        assert_eq!(
+            QueryIntent::classify("how does data flow from parser to index?"),
+            QueryIntent::DataFlow
+        );
+        assert_eq!(
+            QueryIntent::classify("trace the pipeline from input to output"),
+            QueryIntent::DataFlow
+        );
+    }
+
+    #[test]
+    fn test_classify_dependency() {
+        assert_eq!(
+            QueryIntent::classify("what depends on SearchEngine?"),
+            QueryIntent::Dependency
+        );
+        assert_eq!(
+            QueryIntent::classify("what does the chunker import?"),
+            QueryIntent::Dependency
+        );
+        assert_eq!(
+            QueryIntent::classify("show upstream dependencies"),
+            QueryIntent::Dependency
+        );
+    }
+
+    #[test]
+    fn test_classify_test_coverage() {
+        assert_eq!(
+            QueryIntent::classify("which tests cover the search module?"),
+            QueryIntent::TestCoverage
+        );
+        assert_eq!(
+            QueryIntent::classify("find tests for authentication"),
+            QueryIntent::TestCoverage
+        );
+        assert_eq!(
+            QueryIntent::classify("missing test coverage for parser"),
+            QueryIntent::TestCoverage
+        );
+    }
+
+    #[test]
     fn test_classify_unknown() {
         assert_eq!(
             QueryIntent::classify("authentication"),
@@ -325,5 +440,31 @@ mod tests {
         assert!(strategy.include_implementation);
         assert!(strategy.include_tests);
         assert_eq!(strategy.graph_depth, 3);
+    }
+
+    #[test]
+    fn test_context_strategy_data_flow() {
+        let strategy = QueryIntent::DataFlow.context_strategy();
+        assert!(strategy.include_architecture);
+        assert!(strategy.include_implementation);
+        assert_eq!(strategy.graph_depth, 4);
+    }
+
+    #[test]
+    fn test_context_strategy_dependency() {
+        let strategy = QueryIntent::Dependency.context_strategy();
+        assert!(strategy.include_architecture);
+        assert!(strategy.include_docs);
+        assert!(strategy.prioritize_high_level);
+        assert_eq!(strategy.graph_depth, 3);
+    }
+
+    #[test]
+    fn test_context_strategy_test_coverage() {
+        let strategy = QueryIntent::TestCoverage.context_strategy();
+        assert!(strategy.include_tests);
+        assert!(!strategy.include_architecture);
+        assert!(!strategy.include_implementation);
+        assert_eq!(strategy.graph_depth, 1);
     }
 }

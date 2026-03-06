@@ -31,7 +31,9 @@
 )]
 
 pub mod context_assembler;
+pub mod hyde;
 pub mod intent;
+pub mod synonyms;
 
 use crate::embedder::Embedder;
 use crate::error::OmniResult;
@@ -100,24 +102,45 @@ impl SearchEngine {
         let query_type = analyze_query(query);
         let limit = limit.min(self.retrieval_limit);
 
-        // ---- Query expansion for NL queries ----
-        // Extract meaningful tokens for better keyword matching
-        let expanded_query = if query_type == QueryType::NaturalLanguage {
-            expand_query(query)
-        } else {
-            query.to_string()
+        // Adaptive retrieval limits per signal source.
+        // Different query types benefit from different signal depths:
+        //   Symbol:  deep symbol + shallow semantic
+        //   NL:      deep semantic + shallow keyword (expanded)
+        //   Keyword: balanced
+        //   Mixed:   balanced with slight symbol boost
+        let base = self.retrieval_limit;
+        let (kw_limit, sem_limit, sym_limit) = match query_type {
+            QueryType::Symbol => (base / 2, base / 3, base),
+            QueryType::NaturalLanguage => (base * 2 / 3, base, base / 3),
+            QueryType::Keyword => (base, base * 2 / 3, base / 3),
+            QueryType::Mixed => (base, base, base * 2 / 3),
         };
 
+        // ---- Query expansion for NL queries ----
+        // Extract meaningful tokens for better keyword matching
+        let expanded_query =
+            if query_type == QueryType::NaturalLanguage || query_type == QueryType::Mixed {
+                let mut expanded = expand_query(query);
+                // Add code vocabulary synonyms
+                let syns = synonyms::expand_with_synonyms(query);
+                if !syns.is_empty() {
+                    tracing::debug!(synonyms = ?syns, "synonym expansion applied");
+                    expanded.push(' ');
+                    expanded.push_str(&syns.join(" "));
+                }
+                expanded
+            } else {
+                query.to_string()
+            };
+
         // ---- Signal 1: Keyword (FTS5) ----
-        let keyword_results = match index.keyword_search(&expanded_query, self.retrieval_limit) {
+        let keyword_results = match index.keyword_search(&expanded_query, kw_limit) {
             Ok(results) => results,
             Err(e) => {
                 tracing::warn!(error = %e, "keyword search failed");
                 // Fallback: try original query if expansion failed
                 if expanded_query != query {
-                    index
-                        .keyword_search(query, self.retrieval_limit)
-                        .unwrap_or_default()
+                    index.keyword_search(query, kw_limit).unwrap_or_default()
                 } else {
                     Vec::new()
                 }
@@ -126,8 +149,19 @@ impl SearchEngine {
 
         // ---- Signal 2: Semantic (Vector) ----
         let semantic_results = if embedder.is_available() && query_type != QueryType::Symbol {
+            // Determine the best text to embed for semantic search.
+            // For NL queries, HyDE generates a hypothetical code snippet whose
+            // embedding is closer in vector space to relevant code.
+            let intent = QueryIntent::classify(query);
+            let embed_text = if query_type == QueryType::NaturalLanguage {
+                hyde::generate_hypothetical_document(query, intent)
+                    .unwrap_or_else(|| query.to_string())
+            } else {
+                query.to_string()
+            };
+
             // Check cache first
-            let cache_key = query.to_string();
+            let cache_key = embed_text.clone();
             let cached_embedding = {
                 if let Ok(mut cache) = self.query_cache.lock() {
                     cache.get(&cache_key).cloned()
@@ -139,7 +173,7 @@ impl SearchEngine {
             let query_vec = if let Some(embedding) = cached_embedding {
                 embedding
             } else {
-                match embedder.embed_single(query) {
+                match embedder.embed_query(&embed_text) {
                     Ok(vec) => {
                         // Store in cache
                         if let Ok(mut cache) = self.query_cache.lock() {
@@ -155,7 +189,7 @@ impl SearchEngine {
             };
 
             if !query_vec.is_empty() {
-                match vector_index.search(&query_vec, self.retrieval_limit) {
+                match vector_index.search(&query_vec, sem_limit) {
                     Ok(results) => results,
                     Err(e) => {
                         tracing::warn!(error = %e, "vector search failed");
@@ -171,7 +205,7 @@ impl SearchEngine {
 
         // ---- Signal 3: Symbol lookup ----
         let symbol_results = if query_type == QueryType::Symbol || query_type == QueryType::Mixed {
-            match index.search_symbols_by_name(query, self.retrieval_limit) {
+            match index.search_symbols_by_name(query, sym_limit) {
                 Ok(symbols) => symbols
                     .into_iter()
                     .filter_map(|s| s.chunk_id)
@@ -185,8 +219,10 @@ impl SearchEngine {
             Vec::new()
         };
 
-        // ---- RRF Fusion ----
-        let mut fused = self.fuse_results(&keyword_results, &semantic_results, &symbol_results);
+        // ---- RRF Fusion with query-type-adaptive weights ----
+        let mut fused = self.fuse_results(
+            &keyword_results, &semantic_results, &symbol_results, query_type,
+        );
 
         if let Some(reranker) = reranker {
             if reranker.is_available() && !fused.is_empty() {
@@ -368,17 +404,31 @@ impl SearchEngine {
         Ok(deduped)
     }
 
-    /// Fuse multiple rank lists using Reciprocal Rank Fusion (RRF).
+    /// Fuse multiple rank lists using Reciprocal Rank Fusion (RRF)
+    /// with query-type-adaptive weights.
     ///
-    /// RRF score = sum( 1 / (k + rank_i) ) for each signal where the item appears.
-    /// This is a principled rank fusion method from Cormack et al. (2009).
+    /// RRF score = sum( weight_i / (k + rank_i) ) for each signal.
+    /// Weight multipliers per query type:
+    /// - Symbol:   keyword=0.8, semantic=0.5, symbol=1.5
+    /// - Keyword:  keyword=1.0, semantic=1.0, symbol=1.0
+    /// - NL:       keyword=0.6, semantic=1.3, symbol=0.8
+    /// - Mixed:    keyword=0.9, semantic=1.1, symbol=1.2
     fn fuse_results(
         &self,
         keyword_results: &[(i64, f64)],  // (chunk_id, bm25_score)
         semantic_results: &[(u64, f32)], // (vector_id, similarity)
         symbol_results: &[i64],          // chunk_ids from symbol match
+        query_type: QueryType,
     ) -> Vec<ScoredChunk> {
         use std::collections::HashMap;
+
+        // Adaptive weights per query type
+        let (kw_weight, sem_weight, sym_weight) = match query_type {
+            QueryType::Symbol => (0.8, 0.5, 1.5),
+            QueryType::Keyword => (1.0, 1.0, 1.0),
+            QueryType::NaturalLanguage => (0.6, 1.3, 0.8),
+            QueryType::Mixed => (0.9, 1.1, 1.2),
+        };
 
         let mut scores: HashMap<i64, ScoredChunk> = HashMap::new();
 
@@ -389,7 +439,7 @@ impl SearchEngine {
                 breakdown: ScoreBreakdown::default(),
                 final_score: 0.0,
             });
-            let rank_score = 1.0 / (f64::from(self.rrf_k) + (rank as f64) + 1.0);
+            let rank_score = kw_weight / (f64::from(self.rrf_k) + (rank as f64) + 1.0);
             entry.breakdown.keyword_rank = Some((rank + 1) as u32);
             entry.breakdown.rrf_score += rank_score;
         }
@@ -402,29 +452,26 @@ impl SearchEngine {
                 breakdown: ScoreBreakdown::default(),
                 final_score: 0.0,
             });
-            let rank_score = 1.0 / (f64::from(self.rrf_k) + (rank as f64) + 1.0);
+            let rank_score = sem_weight / (f64::from(self.rrf_k) + (rank as f64) + 1.0);
             entry.breakdown.semantic_rank = Some((rank + 1) as u32);
             entry.breakdown.rrf_score += rank_score;
         }
 
-        // Symbol signal (treated as a strong boost)
+        // Symbol signal
         for (rank, &chunk_id) in symbol_results.iter().enumerate() {
             let entry = scores.entry(chunk_id).or_insert_with(|| ScoredChunk {
                 chunk_id,
                 breakdown: ScoreBreakdown::default(),
                 final_score: 0.0,
             });
-            // Symbol matches get a higher weight than positional RRF
-            let rank_score = 1.5 / (f64::from(self.rrf_k) + (rank as f64) + 1.0);
+            let rank_score = sym_weight / (f64::from(self.rrf_k) + (rank as f64) + 1.0);
             entry.breakdown.rrf_score += rank_score;
         }
 
         // Compute final scores with structural weight boost
         let mut results: Vec<ScoredChunk> = scores.into_values().collect();
         for item in &mut results {
-            // Apply structural weight from chunk kind
-            // Chunks of more important structural types get boosted
-            item.breakdown.structural_weight = 1.0; // will be refined when chunk is fetched
+            item.breakdown.structural_weight = 1.0;
             item.final_score = item.breakdown.rrf_score;
         }
 
@@ -492,6 +539,7 @@ impl SearchEngine {
                     token_count: row.get(9)?,
                     weight: row.get(10)?,
                     vector_id: row.get::<_, Option<i64>>(11)?.map(|v| v as u64),
+                    is_summary: false,
                 })
             },
         )
@@ -981,7 +1029,7 @@ mod tests {
         let keyword = vec![(1, -0.5), (2, -0.3), (3, -0.1)]; // chunk_id, bm25
         let semantic = vec![(2, 0.9), (1, 0.8), (4, 0.7)]; // vector_id, similarity
 
-        let fused = engine.fuse_results(&keyword, &semantic, &[]);
+        let fused = engine.fuse_results(&keyword, &semantic, &[], QueryType::Keyword);
 
         assert!(!fused.is_empty());
 
@@ -1001,7 +1049,7 @@ mod tests {
     #[test]
     fn test_fuse_results_empty() {
         let engine = SearchEngine::new(60, 4000);
-        let fused = engine.fuse_results(&[], &[], &[]);
+        let fused = engine.fuse_results(&[], &[], &[], QueryType::Keyword);
         assert!(fused.is_empty());
     }
 
@@ -1012,7 +1060,7 @@ mod tests {
         let keyword = vec![(1, -0.5), (2, -0.3)];
         let symbol = vec![2_i64]; // chunk_id 2 is an exact symbol match
 
-        let fused = engine.fuse_results(&keyword, &[], &symbol);
+        let fused = engine.fuse_results(&keyword, &[], &symbol, QueryType::Symbol);
 
         let chunk2 = fused.iter().find(|s| s.chunk_id == 2);
         let chunk1 = fused.iter().find(|s| s.chunk_id == 1);

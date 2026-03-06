@@ -13,9 +13,13 @@
 //! 5. 10-15% token overlap at boundaries for context continuity
 //! 6. Each chunk preserves the parent signature as a header for context
 
+pub mod token_counter;
+
 use crate::config::Config;
 use crate::parser::StructuralElement;
 use crate::types::{Chunk, ChunkKind, FileInfo, ImportStatement};
+
+use self::token_counter::TokenCounter;
 
 /// Chunk structural elements into embedding-sized pieces.
 ///
@@ -26,6 +30,10 @@ use crate::types::{Chunk, ChunkKind, FileInfo, ImportStatement};
 /// - Backward overlap captures preceding context (configurable via `overlap_tokens`/`overlap_lines`)
 /// - Module-level declarations (imports, type defs) are injected even if far from the element
 /// - Intra-element splits use configurable `overlap_fraction` for context continuity
+///
+/// The `counter` parameter controls how tokens are counted:
+/// - `ActualTokenCounter` for production (uses the same tokenizer as the embedder)
+/// - `EstimateTokenCounter` for tests and environments without a loaded model
 pub fn chunk_elements(
     elements: &[StructuralElement],
     file_info: &FileInfo,
@@ -33,6 +41,7 @@ pub fn chunk_elements(
     file_id: i64,
     config: &Config,
     source_code: &str,
+    counter: &dyn TokenCounter,
 ) -> Vec<Chunk> {
     let max_tokens = config.indexing.max_chunk_tokens;
     let overlap_fraction = config.indexing.overlap_fraction;
@@ -57,9 +66,10 @@ pub fn chunk_elements(
             start_line_idx,
             target_overlap_tokens,
             fallback_overlap_lines,
+            counter,
         );
 
-        let estimated_tokens = estimate_tokens(&elem.content) + estimate_tokens(&backward_context);
+        let estimated_tokens = counter.count(&elem.content) + counter.count(&backward_context);
         let mut context_header =
             build_context_header(elem, file_info, imports, &module_declarations);
 
@@ -68,15 +78,16 @@ pub fn chunk_elements(
             context_header.push_str(&backward_context);
         }
 
-        let total_tokens = estimated_tokens + estimate_tokens(&context_header);
+        let total_tokens = estimated_tokens + counter.count(&context_header);
 
         if total_tokens <= max_tokens {
             chunks.push(element_to_chunk(
                 elem, file_id, total_tokens, &context_header,
             ));
         } else {
-            let split_chunks =
-                split_element(elem, file_id, max_tokens, overlap_fraction, &context_header);
+            let split_chunks = split_element(
+                elem, file_id, max_tokens, overlap_fraction, &context_header, counter,
+            );
             chunks.extend(split_chunks);
         }
     }
@@ -93,6 +104,7 @@ fn compute_backward_context(
     start_line_idx: usize,
     target_tokens: u32,
     max_lines: usize,
+    counter: &dyn TokenCounter,
 ) -> String {
     if start_line_idx == 0 {
         return String::new();
@@ -103,7 +115,7 @@ fn compute_backward_context(
     let mut accumulated_tokens: u32 = 0;
 
     for idx in (earliest..start_line_idx).rev() {
-        let line_tokens = estimate_tokens(source_lines[idx]);
+        let line_tokens = counter.count(source_lines[idx]);
         if accumulated_tokens + line_tokens > target_tokens {
             break;
         }
@@ -125,23 +137,54 @@ fn compute_backward_context(
 /// understanding any chunk in the file.
 fn extract_module_declarations(source_lines: &[&str]) -> String {
     let mut declarations = Vec::new();
+    let mut in_multiline = false;
+    let mut multiline_buf = String::new();
 
     for line in source_lines {
         let trimmed = line.trim();
-        if trimmed.is_empty() {
+
+        // Skip empty lines and comments between declarations
+        if trimmed.is_empty()
+            || trimmed.starts_with("//")
+            || trimmed.starts_with('#') && trimmed.starts_with("#!")
+        {
+            if !in_multiline {
+                continue;
+            }
+        }
+
+        // Handle multi-line imports: `use std::{`  or  `from x import (`
+        if in_multiline {
+            multiline_buf.push('\n');
+            multiline_buf.push_str(line);
+            // Check for closing delimiter
+            if trimmed.ends_with(';')
+                || trimmed.ends_with('}')
+                || trimmed == "}"
+                || trimmed == "};"
+                || trimmed.ends_with(')')
+            {
+                declarations.push(multiline_buf.clone());
+                multiline_buf.clear();
+                in_multiline = false;
+            }
             continue;
         }
 
         let is_declaration = trimmed.starts_with("import ")
             || trimmed.starts_with("from ")
             || trimmed.starts_with("use ")
+            || trimmed.starts_with("pub use ")
+            || trimmed.starts_with("pub(crate) use ")
             || trimmed.starts_with("extern crate ")
             || trimmed.starts_with("mod ")
             || trimmed.starts_with("pub mod ")
+            || trimmed.starts_with("pub(crate) mod ")
             || trimmed.starts_with("package ")
             || trimmed.starts_with("require ")
             || trimmed.starts_with("const ")
             || trimmed.starts_with("pub const ")
+            || trimmed.starts_with("pub(crate) const ")
             || trimmed.starts_with("static ")
             || trimmed.starts_with("pub static ")
             || trimmed.starts_with("type ")
@@ -154,26 +197,41 @@ fn extract_module_declarations(source_lines: &[&str]) -> String {
             || (trimmed.starts_with("export ") && (trimmed.contains("type ") || trimmed.contains("interface ") || trimmed.contains("const ")));
 
         if is_declaration {
-            declarations.push(*line);
+            // Check if this is a multi-line declaration (ends with `{` but no `;`)
+            if (trimmed.contains('{') && !trimmed.contains('}') && !trimmed.ends_with(';'))
+                || (trimmed.contains('(') && !trimmed.contains(')') && !trimmed.ends_with(';'))
+            {
+                in_multiline = true;
+                multiline_buf = line.to_string();
+                continue;
+            }
+            declarations.push(line.to_string());
         }
 
         // Stop scanning after we hit the first non-declaration code body
-        // (function, class, struct, impl, etc.) to avoid capturing code
         let is_code_body = trimmed.starts_with("def ")
             || trimmed.starts_with("class ")
             || trimmed.starts_with("fn ")
             || trimmed.starts_with("pub fn ")
+            || trimmed.starts_with("pub(crate) fn ")
             || trimmed.starts_with("pub struct ")
             || trimmed.starts_with("struct ")
+            || trimmed.starts_with("pub(crate) struct ")
             || trimmed.starts_with("impl ")
             || trimmed.starts_with("pub enum ")
             || trimmed.starts_with("enum ")
+            || trimmed.starts_with("pub(crate) enum ")
             || trimmed.starts_with("func ")
             || trimmed.starts_with("function ");
 
         if is_code_body {
             break;
         }
+    }
+
+    // If we were in a multi-line import that never closed, include what we have
+    if in_multiline && !multiline_buf.is_empty() {
+        declarations.push(multiline_buf);
     }
 
     if declarations.is_empty() {
@@ -253,6 +311,49 @@ fn build_context_header(
     header
 }
 
+/// Enrich chunk content with dependency-graph context (callers/callees).
+///
+/// Implements Anthropic Contextual Retrieval (2024): prepend a context
+/// sentence describing where this chunk fits in the codebase. The context
+/// is derived from the dependency graph, not an LLM, so it has zero cost.
+///
+/// Call this after the dependency graph is built (post-indexing).
+#[allow(clippy::similar_names)]
+pub fn enrich_chunk_with_graph_context(
+    chunk_content: &str,
+    callers: &[String],
+    callees: &[String],
+) -> String {
+    let mut context = String::new();
+
+    if !callers.is_empty() {
+        let caller_list: Vec<&str> = callers.iter().take(5).map(|s| s.as_str()).collect();
+        context.push_str(&format!("Called by: {}\n", caller_list.join(", ")));
+    }
+
+    if !callees.is_empty() {
+        let callee_list: Vec<&str> = callees.iter().take(5).map(|s| s.as_str()).collect();
+        context.push_str(&format!("Calls: {}\n", callee_list.join(", ")));
+    }
+
+    if context.is_empty() {
+        return chunk_content.to_string();
+    }
+
+    // Prepend graph context before the chunk body, after any existing header
+    if let Some(sep_pos) = chunk_content.find("---\n") {
+        let after_sep = sep_pos + 4;
+        format!(
+            "{}{}{}",
+            &chunk_content[..after_sep],
+            context,
+            &chunk_content[after_sep..],
+        )
+    } else {
+        format!("{context}{chunk_content}")
+    }
+}
+
 /// Convert an element that fits within the token budget to a Chunk.
 fn element_to_chunk(
     elem: &StructuralElement,
@@ -274,6 +375,7 @@ fn element_to_chunk(
         token_count,
         weight: compute_weight(elem),
         vector_id: None,
+        is_summary: false,
     }
 }
 
@@ -297,6 +399,7 @@ fn split_element(
     max_tokens: u32,
     overlap_fraction: f64,
     context_header: &str,
+    counter: &dyn TokenCounter,
 ) -> Vec<Chunk> {
     let lines: Vec<&str> = elem.content.lines().collect();
 
@@ -315,7 +418,8 @@ fn split_element(
     };
 
     create_chunks_from_splits(
-        elem, file_id, &lines, &split_points, &header, max_tokens, overlap_fraction, context_header,
+        elem, file_id, &lines, &split_points, &header, max_tokens, overlap_fraction,
+        context_header, counter,
     )
 }
 
@@ -482,6 +586,7 @@ fn create_chunks_from_splits(
     max_tokens: u32,
     overlap_fraction: f64,
     context_header: &str,
+    counter: &dyn TokenCounter,
 ) -> Vec<Chunk> {
     let mut chunks = Vec::new();
 
@@ -503,10 +608,10 @@ fn create_chunks_from_splits(
     // If we only got one segment, just truncate
     if boundaries.len() <= 1 {
         let mut content = format!("{}{}", context_header, elem.content);
-        if estimate_tokens(&content) > max_tokens {
+        if counter.count(&content) > max_tokens {
             content = truncate_to_tokens(&content, max_tokens);
         }
-        let tokens = estimate_tokens(&content);
+        let tokens = counter.count(&content);
         chunks.push(Chunk {
             id: 0,
             file_id,
@@ -520,12 +625,13 @@ fn create_chunks_from_splits(
             token_count: tokens,
             weight: compute_weight(elem),
             vector_id: None,
+            is_summary: false,
         });
         return chunks;
     }
 
     // Merge boundaries that are too small into the previous chunk
-    let merged = merge_small_boundaries(&boundaries, max_tokens, lines);
+    let merged = merge_small_boundaries(&boundaries, max_tokens, lines, counter);
 
     for (i, &(start, end)) in merged.iter().enumerate() {
         // Apply overlap: include some lines from the previous chunk
@@ -559,7 +665,7 @@ fn create_chunks_from_splits(
         }
 
         let content = content_parts.join("\n");
-        let tokens = estimate_tokens(&content);
+        let tokens = counter.count(&content);
 
         // Calculate line numbers
         let chunk_line_start = elem.line_start + effective_start as u32;
@@ -588,6 +694,7 @@ fn create_chunks_from_splits(
             token_count: tokens,
             weight: compute_weight(elem),
             vector_id: None,
+            is_summary: false,
         });
     }
 
@@ -599,6 +706,7 @@ fn merge_small_boundaries(
     boundaries: &[(usize, usize)],
     max_tokens: u32,
     lines: &[&str],
+    counter: &dyn TokenCounter,
 ) -> Vec<(usize, usize)> {
     if boundaries.is_empty() {
         return Vec::new();
@@ -611,7 +719,7 @@ fn merge_small_boundaries(
 
     for &(start, end) in boundaries.iter().skip(1) {
         let current_content: String = lines[current_start..current_end].join("\n");
-        let current_tokens = estimate_tokens(&current_content);
+        let current_tokens = counter.count(&current_content);
 
         if current_tokens < min_tokens {
             // Too small -- extend to include the next boundary
@@ -655,12 +763,184 @@ pub fn truncate_to_tokens(content: &str, max_tokens: u32) -> String {
     }
 }
 
+/// Minimum number of leaf chunks in a file before a summary chunk is generated.
+const SUMMARY_MIN_CHUNKS: usize = 3;
+
+/// Maximum tokens for a summary chunk content.
+const SUMMARY_MAX_TOKENS: u32 = 512;
+
+/// Generate RAPTOR-style hierarchical summary chunks for a set of leaf chunks.
+///
+/// For each file that has > `SUMMARY_MIN_CHUNKS` leaf chunks, this produces a
+/// single `ChunkKind::Summary` chunk that concatenates:
+/// 1. File-level header (module path, language)
+/// 2. Exported symbol signatures (pub functions, structs, traits)
+/// 3. First-line doc comments for each exported symbol
+/// 4. Structural import summary
+///
+/// Summary chunks are embedded alongside leaf chunks, giving the vector index
+/// a high-level representation that answers architectural queries without
+/// requiring aggregation across dozens of function-level chunks.
+pub fn generate_summary_chunks(
+    leaf_chunks: &[Chunk],
+    file_info: &FileInfo,
+    counter: &dyn TokenCounter,
+) -> Vec<Chunk> {
+    if leaf_chunks.len() < SUMMARY_MIN_CHUNKS {
+        return Vec::new();
+    }
+
+    let mut summaries = Vec::new();
+
+    // Build the summary content from leaf chunk signatures
+    let mut content = String::with_capacity(2048);
+
+    // File header
+    content.push_str(&format!(
+        "// File summary: {}\n// Language: {}\n// Symbols: {}\n\n",
+        file_info.path.display(),
+        file_info.language.as_str(),
+        leaf_chunks.len()
+    ));
+
+    // Add exported symbols first (most important for architectural queries)
+    let mut exported_count = 0;
+    for chunk in leaf_chunks {
+        if chunk.is_summary {
+            continue; // skip existing summaries
+        }
+
+        let is_exported = matches!(
+            chunk.visibility,
+            crate::types::Visibility::Public | crate::types::Visibility::Crate
+        );
+        if !is_exported && !matches!(chunk.kind, ChunkKind::Trait | ChunkKind::Class) {
+            continue;
+        }
+
+        // Extract signature (first non-empty line of content)
+        let signature = extract_signature_from_content(&chunk.content);
+        if signature.is_empty() {
+            continue;
+        }
+
+        // Add doc summary if available
+        if let Some(ref doc) = chunk.doc_comment {
+            let first_line = doc.lines().next().unwrap_or("");
+            if !first_line.is_empty() {
+                content.push_str(&format!("/// {first_line}\n"));
+            }
+        }
+
+        content.push_str(&format!("{}\n", signature));
+        exported_count += 1;
+
+        // Budget check: don't exceed summary token limit
+        if counter.count(&content) >= SUMMARY_MAX_TOKENS {
+            break;
+        }
+    }
+
+    // If we have room, add private symbols as brief declarations
+    if counter.count(&content) < SUMMARY_MAX_TOKENS {
+        for chunk in leaf_chunks {
+            if chunk.is_summary {
+                continue;
+            }
+            let is_private = matches!(
+                chunk.visibility,
+                crate::types::Visibility::Private | crate::types::Visibility::Protected
+            );
+            if !is_private {
+                continue;
+            }
+
+            let signature = extract_signature_from_content(&chunk.content);
+            if signature.is_empty() {
+                continue;
+            }
+
+            content.push_str(&format!("{}\n", signature));
+
+            if counter.count(&content) >= SUMMARY_MAX_TOKENS {
+                break;
+            }
+        }
+    }
+
+    // Only generate if we actually captured meaningful content
+    if exported_count == 0 && leaf_chunks.len() < 5 {
+        return Vec::new();
+    }
+
+    let line_start = leaf_chunks.iter().map(|c| c.line_start).min().unwrap_or(1);
+    let line_end = leaf_chunks.iter().map(|c| c.line_end).max().unwrap_or(1);
+    let file_id = leaf_chunks[0].file_id;
+
+    // Construct the module-level symbol path
+    let module_path = file_info
+        .path
+        .to_string_lossy()
+        .replace(['/', '\\'], "::")
+        .replace(".rs", "")
+        .replace(".py", "")
+        .replace(".ts", "")
+        .replace(".js", "");
+
+    let token_count = counter.count(&content);
+
+    summaries.push(Chunk {
+        id: 0,
+        file_id,
+        symbol_path: format!("{module_path}::__summary__"),
+        kind: ChunkKind::Summary,
+        visibility: crate::types::Visibility::Public,
+        line_start,
+        line_end,
+        content,
+        doc_comment: Some(format!(
+            "File-level summary of {}",
+            file_info.path.display()
+        )),
+        token_count,
+        weight: ChunkKind::Summary.default_weight(),
+        vector_id: None,
+        is_summary: true,
+    });
+
+    summaries
+}
+
+/// Extract the signature line from chunk content.
+///
+/// Skips decorators (@...), doc comments (///), and blank lines
+/// to find the actual declaration line.
+fn extract_signature_from_content(content: &str) -> String {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty()
+            || trimmed.starts_with('@')
+            || trimmed.starts_with('#')
+            || trimmed.starts_with("///")
+            || trimmed.starts_with("//!")
+            || trimmed.starts_with("/**")
+            || trimmed.starts_with("* ")
+            || trimmed.starts_with("*/")
+        {
+            continue;
+        }
+        return trimmed.to_string();
+    }
+    String::new()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::parser::StructuralElement;
     use crate::types::{ChunkKind, Visibility};
     use std::path::Path;
+    use token_counter::EstimateTokenCounter;
 
     fn make_element(content: &str, kind: ChunkKind) -> StructuralElement {
         StructuralElement {
@@ -721,7 +1001,15 @@ mod tests {
         let config = default_config();
         let file_info = dummy_file_info();
 
-        let chunks = chunk_elements(&[elem], &file_info, &[], 1, &config, source);
+        let chunks = chunk_elements(
+            &[elem],
+            &file_info,
+            &[],
+            1,
+            &config,
+            source,
+            &EstimateTokenCounter,
+        );
         assert_eq!(chunks.len(), 1);
         assert!(chunks[0].content.contains(content)); // includes context header now
         assert!(chunks[0].doc_comment.is_some());
@@ -760,7 +1048,15 @@ mod tests {
         config.indexing.max_chunk_tokens = 50; // force splitting
         let file_info = dummy_file_info();
 
-        let chunks = chunk_elements(&[elem], &file_info, &[], 1, &config, &source);
+        let chunks = chunk_elements(
+            &[elem],
+            &file_info,
+            &[],
+            1,
+            &config,
+            &source,
+            &EstimateTokenCounter,
+        );
         assert!(
             chunks.len() > 1,
             "large element should be split into multiple chunks, got {}",
@@ -793,7 +1089,15 @@ mod tests {
         config.indexing.max_chunk_tokens = 40;
         let file_info = dummy_file_info();
 
-        let chunks = chunk_elements(&[elem], &file_info, &[], 1, &config, &source);
+        let chunks = chunk_elements(
+            &[elem],
+            &file_info,
+            &[],
+            1,
+            &config,
+            &source,
+            &EstimateTokenCounter,
+        );
         // All chunks should have content
         for chunk in &chunks {
             assert!(!chunk.content.is_empty(), "no chunk should be empty");
@@ -840,7 +1144,7 @@ mod tests {
     fn test_empty_elements() {
         let config = default_config();
         let file_info = dummy_file_info();
-        let chunks = chunk_elements(&[], &file_info, &[], 1, &config, "");
+        let chunks = chunk_elements(&[], &file_info, &[], 1, &config, "", &EstimateTokenCounter);
         assert!(chunks.is_empty());
     }
 
@@ -855,7 +1159,15 @@ mod tests {
             make_element("class C:\n    pass\n", ChunkKind::Class),
         ];
 
-        let chunks = chunk_elements(&elements, &file_info, &[], 1, &config, source);
+        let chunks = chunk_elements(
+            &elements,
+            &file_info,
+            &[],
+            1,
+            &config,
+            source,
+            &EstimateTokenCounter,
+        );
         assert_eq!(chunks.len(), 3);
         assert_eq!(chunks[0].kind, ChunkKind::Function);
         assert_eq!(chunks[2].kind, ChunkKind::Class);
@@ -875,5 +1187,53 @@ mod tests {
             compute_weight(&public_func) > compute_weight(&test_func),
             "public function should outweigh test function"
         );
+    }
+
+    #[test]
+    fn test_enrich_no_context() {
+        let content = "fn foo() {}";
+        let result = enrich_chunk_with_graph_context(content, &[], &[]);
+        assert_eq!(result, content);
+    }
+
+    #[test]
+    fn test_enrich_with_callers() {
+        let content = "fn foo() {}";
+        let callers = vec!["bar".to_string(), "baz".to_string()];
+        let result = enrich_chunk_with_graph_context(content, &callers, &[]);
+        assert!(result.contains("Called by: bar, baz"));
+        assert!(result.contains("fn foo() {}"));
+    }
+
+    #[test]
+    fn test_enrich_with_callees() {
+        let content = "fn foo() {}";
+        let callees = vec!["init".to_string()];
+        let result = enrich_chunk_with_graph_context(content, &[], &callees);
+        assert!(result.contains("Calls: init"));
+    }
+
+    #[test]
+    fn test_enrich_with_header_separator() {
+        let content = "[rust] module::foo\n---\nfn foo() {}";
+        let callers = vec!["main".to_string()];
+        let result = enrich_chunk_with_graph_context(content, &callers, &[]);
+        // Context should be inserted AFTER the --- separator
+        let sep_pos = result.find("---\n").unwrap();
+        let caller_pos = result.find("Called by:").unwrap();
+        assert!(
+            caller_pos > sep_pos,
+            "caller context should be after header separator"
+        );
+    }
+
+    #[test]
+    fn test_enrich_caps_at_five() {
+        let callers: Vec<String> = (0..10).map(|i| format!("fn_{i}")).collect();
+        let result = enrich_chunk_with_graph_context("body", &callers, &[]);
+        // Should only include first 5
+        assert!(result.contains("fn_0"));
+        assert!(result.contains("fn_4"));
+        assert!(!result.contains("fn_5"));
     }
 }

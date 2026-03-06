@@ -220,6 +220,11 @@ impl Engine {
             tracing::warn!(error = %e, "failed to persist vector index");
         }
 
+        // Calculate embedding coverage
+        let total_chunks = self.index.chunk_count().unwrap_or(0);
+        let embedded_chunks = self.index.embedded_chunk_count().unwrap_or(0);
+        let coverage_pct = self.index.embedding_coverage().unwrap_or(0.0);
+
         tracing::info!(
             files = result.files_processed,
             chunks = result.chunks_created,
@@ -228,6 +233,23 @@ impl Engine {
             failed = result.files_failed,
             "indexing complete"
         );
+
+        tracing::info!(
+            total_chunks = total_chunks,
+            embedded_chunks = embedded_chunks,
+            coverage_pct = format!("{:.1}%", coverage_pct),
+            "embedding coverage"
+        );
+
+        if coverage_pct < 90.0 {
+            tracing::warn!(
+                coverage_pct = format!("{:.1}%", coverage_pct),
+                "WARNING: Embedding coverage is below 90%. \
+                 Semantic search quality will be degraded. \
+                 Check that the embedding model loaded correctly. \
+                 Run `omnicontext embed --retry-failed` to retry failed embeddings."
+            );
+        }
 
         Ok(result)
     }
@@ -285,14 +307,27 @@ impl Engine {
         let imports = parser::parse_imports(path, content.as_bytes(), language).unwrap_or_default();
 
         // Chunk the elements (returns Vec<Chunk>)
-        let chunks = chunker::chunk_elements(
-            &elements, &file_info, &imports, file_id, &self.config, &content,
+        // TODO(Task 1.1 Phase 2): Upgrade to ActualTokenCounter loaded from model dir
+        let token_counter = chunker::token_counter::EstimateTokenCounter;
+        let mut chunks = chunker::chunk_elements(
+            &elements, &file_info, &imports, file_id, &self.config, &content, &token_counter,
         );
 
-        // Build Symbol records from the chunks
+        // Generate RAPTOR-style summary chunks for files with enough leaf chunks
+        let summary_chunks = chunker::generate_summary_chunks(&chunks, &file_info, &token_counter);
+        if !summary_chunks.is_empty() {
+            tracing::debug!(
+                path = %rel_path.display(),
+                summary_count = summary_chunks.len(),
+                "generated hierarchical summary chunks"
+            );
+            chunks.extend(summary_chunks);
+        }
+
+        // Build Symbol records from the chunks (skip summary chunks for symbol table)
         let symbols: Vec<Symbol> = chunks
             .iter()
-            .filter(|c| !c.symbol_path.is_empty())
+            .filter(|c| !c.symbol_path.is_empty() && !c.is_summary)
             .map(|c| Symbol {
                 id: 0,
                 name: c
@@ -577,6 +612,121 @@ impl Engine {
         &self.index
     }
 
+    /// Retry embedding chunks that failed during initial indexing.
+    ///
+    /// This is useful when the embedding model was unavailable during indexing
+    /// or when embeddings failed for specific chunks.
+    pub fn retry_failed_embeddings(&mut self) -> OmniResult<RetryEmbeddingResult> {
+        if !self.embedder.is_available() {
+            return Err(OmniError::Internal(
+                "Embedding model is not available. Cannot retry embeddings.".into(),
+            ));
+        }
+
+        let failed_chunks = self.index.get_chunks_without_vectors()?;
+        let total_failed = failed_chunks.len();
+
+        if total_failed == 0 {
+            tracing::info!("No chunks without embeddings found");
+            return Ok(RetryEmbeddingResult {
+                total_attempted: 0,
+                successful: 0,
+                failed: 0,
+            });
+        }
+
+        tracing::info!(
+            count = total_failed,
+            "found chunks without embeddings, retrying..."
+        );
+
+        let mut successful = 0;
+        let mut failed = 0;
+
+        // Process in batches for efficiency
+        const BATCH_SIZE: usize = 32;
+        for batch in failed_chunks.chunks(BATCH_SIZE) {
+            // Get file info for each chunk to determine language
+            let mut texts = Vec::new();
+            let mut chunk_ids = Vec::new();
+
+            for chunk in batch {
+                if let Ok(Some(file)) = self.index.get_file_by_path(&std::path::PathBuf::from("")) {
+                    let formatted = crate::embedder::format_chunk_for_embedding(
+                        file.language.as_str(),
+                        &chunk.symbol_path,
+                        &format!("{:?}", chunk.kind),
+                        &chunk.content,
+                    );
+                    texts.push(formatted);
+                    chunk_ids.push(chunk.id);
+                } else {
+                    // Fallback: use generic formatting
+                    let formatted = crate::embedder::format_chunk_for_embedding(
+                        "unknown",
+                        &chunk.symbol_path,
+                        &format!("{:?}", chunk.kind),
+                        &chunk.content,
+                    );
+                    texts.push(formatted);
+                    chunk_ids.push(chunk.id);
+                }
+            }
+
+            let text_refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+            let embeddings = self.embedder.embed_batch(&text_refs);
+
+            for (i, maybe_embedding) in embeddings.into_iter().enumerate() {
+                if let Some(embedding) = maybe_embedding {
+                    if i < chunk_ids.len() {
+                        if let Ok(vector_id) = u64::try_from(chunk_ids[i]) {
+                            if let Err(e) = self.vector_index.add(vector_id, &embedding) {
+                                tracing::warn!(
+                                    chunk_id = chunk_ids[i],
+                                    error = %e,
+                                    "failed to add vector"
+                                );
+                                failed += 1;
+                                continue;
+                            }
+                            if let Err(e) = self.index.set_chunk_vector_id(chunk_ids[i], vector_id)
+                            {
+                                tracing::warn!(
+                                    chunk_id = chunk_ids[i],
+                                    error = %e,
+                                    "failed to set vector_id"
+                                );
+                                failed += 1;
+                                continue;
+                            }
+                            successful += 1;
+                        }
+                    }
+                } else {
+                    failed += 1;
+                }
+            }
+        }
+
+        // Persist vector index
+        if let Err(e) = self.vector_index.save() {
+            tracing::warn!(error = %e, "failed to persist vector index");
+        }
+
+        tracing::info!(
+            total = total_failed,
+            successful = successful,
+            failed = failed,
+            "embedding retry complete"
+        );
+
+        Ok(RetryEmbeddingResult {
+            total_attempted: total_failed,
+            successful,
+            failed,
+        })
+    }
+
     /// Get the repository root path.
     pub fn repo_path(&self) -> &Path {
         &self.config.repo_path
@@ -626,6 +776,17 @@ pub struct IndexResult {
     pub symbols_extracted: usize,
     /// Total embeddings generated.
     pub embeddings_generated: usize,
+}
+
+/// Result of retrying failed embeddings.
+#[derive(Debug, Clone, Default)]
+pub struct RetryEmbeddingResult {
+    /// Total number of chunks attempted.
+    pub total_attempted: usize,
+    /// Number of chunks successfully embedded.
+    pub successful: usize,
+    /// Number of chunks that failed again.
+    pub failed: usize,
 }
 
 /// Status information about the engine.

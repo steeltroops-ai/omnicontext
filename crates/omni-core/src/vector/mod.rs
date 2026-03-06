@@ -22,22 +22,61 @@ use std::path::Path;
 
 use crate::error::{OmniError, OmniResult};
 
+/// Distance metric used for nearest neighbor search.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum DistanceMetric {
+    /// Cosine similarity (dot product of L2-normalized vectors).
+    /// Range: [-1, 1], higher is more similar.
+    /// Default for most embedding models.
+    Cosine,
+    /// Euclidean distance (L2 norm of difference vector).
+    /// Range: [0, inf), lower is more similar.
+    /// Note: search returns negative distance so that sorting by descending
+    /// value still gives the most similar results first.
+    Euclidean,
+    /// Raw dot product (no normalization assumed).
+    /// Range: (-inf, inf), higher is more similar.
+    DotProduct,
+}
+
+impl Default for DistanceMetric {
+    fn default() -> Self {
+        Self::Cosine
+    }
+}
+
 /// Vector index for nearest neighbor search.
 ///
 /// Stores vectors in memory with optional disk persistence.
+/// Optionally maintains an IVF (Inverted File) index for sub-linear search.
 pub struct VectorIndex {
     dimensions: usize,
+    metric: DistanceMetric,
     vectors: HashMap<u64, Vec<f32>>,
     index_path: Option<std::path::PathBuf>,
+    /// Optional IVF index for large vector sets (>10k).
+    /// Built explicitly via `build_ivf()`. Not persisted.
+    ivf: Option<IvfIndex>,
 }
 
 impl VectorIndex {
     /// Create or open a vector index at the given path.
     pub fn open(index_path: &Path, dimensions: usize) -> OmniResult<Self> {
+        Self::open_with_metric(index_path, dimensions, DistanceMetric::default())
+    }
+
+    /// Create or open a vector index with a specific distance metric.
+    pub fn open_with_metric(
+        index_path: &Path,
+        dimensions: usize,
+        metric: DistanceMetric,
+    ) -> OmniResult<Self> {
         let mut index = Self {
             dimensions,
+            metric,
             vectors: HashMap::new(),
             index_path: Some(index_path.to_path_buf()),
+            ivf: None,
         };
 
         // Try loading existing index from disk
@@ -47,6 +86,7 @@ impl VectorIndex {
                     tracing::info!(
                         vectors = index.vectors.len(),
                         dimensions,
+                        metric = ?metric,
                         "loaded vector index from disk"
                     );
                 }
@@ -64,8 +104,21 @@ impl VectorIndex {
     pub fn in_memory(dimensions: usize) -> Self {
         Self {
             dimensions,
+            metric: DistanceMetric::default(),
             vectors: HashMap::new(),
             index_path: None,
+            ivf: None,
+        }
+    }
+
+    /// Create an in-memory vector index with a specific distance metric.
+    pub fn in_memory_with_metric(dimensions: usize, metric: DistanceMetric) -> Self {
+        Self {
+            dimensions,
+            metric,
+            vectors: HashMap::new(),
+            index_path: None,
+            ivf: None,
         }
     }
 
@@ -96,8 +149,9 @@ impl VectorIndex {
 
     /// Search for the K nearest neighbors to the query vector.
     ///
-    /// Returns `Vec<(id, similarity_score)>` sorted by descending similarity.
-    /// Similarity is cosine similarity (dot product of normalized vectors).
+    /// Returns `Vec<(id, score)>` sorted by descending score.
+    /// For Cosine/DotProduct: higher = more similar.
+    /// For Euclidean: score is negative distance (higher = closer).
     pub fn search(&self, query: &[f32], k: usize) -> OmniResult<Vec<(u64, f32)>> {
         if query.len() != self.dimensions {
             return Err(OmniError::Internal(format!(
@@ -111,14 +165,23 @@ impl VectorIndex {
             return Ok(Vec::new());
         }
 
-        // Compute cosine similarity against all vectors
+        // Compute similarity/distance against all vectors using configured metric
         let mut scores: Vec<(u64, f32)> = self
             .vectors
             .iter()
-            .map(|(&id, vec)| (id, dot_product(query, vec)))
+            .map(|(&id, vec)| {
+                let score = match self.metric {
+                    DistanceMetric::Cosine | DistanceMetric::DotProduct => dot_product(query, vec),
+                    DistanceMetric::Euclidean => {
+                        // Negate so that smaller distance = higher score
+                        -euclidean_distance_sq(query, vec)
+                    }
+                };
+                (id, score)
+            })
             .collect();
 
-        // Sort by similarity (descending)
+        // Sort by score descending (highest = most similar/closest)
         scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         // Take top-k
@@ -239,6 +302,21 @@ struct VectorData {
 fn dot_product(a: &[f32], b: &[f32]) -> f32 {
     // Simple scalar implementation. LLVM auto-vectorizes this to SIMD.
     a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
+}
+
+/// Compute squared Euclidean distance between two vectors.
+///
+/// Uses squared distance to avoid the sqrt which is monotonic and thus
+/// doesn't affect relative ordering of results.
+#[inline]
+fn euclidean_distance_sq(a: &[f32], b: &[f32]) -> f32 {
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| {
+            let diff = x - y;
+            diff * diff
+        })
+        .sum()
 }
 
 /// L2-normalize a vector in place.
@@ -438,4 +516,228 @@ mod tests {
         assert_eq!(removed, 2);
         assert_eq!(index.len(), 1);
     }
+
+    #[test]
+    fn test_ivf_build_empty() {
+        let mut index = VectorIndex::in_memory(3);
+        let result = index.build_ivf(4, 2);
+        assert!(result.is_ok());
+        assert!(
+            index.ivf.is_none(),
+            "IVF should not be built for empty index"
+        );
+    }
+
+    #[test]
+    fn test_ivf_build_and_search() {
+        let mut index = VectorIndex::in_memory(3);
+        // Add enough vectors for clustering
+        for i in 0..50 {
+            let v = vec![(i as f32).cos(), (i as f32).sin(), (i as f32) * 0.1];
+            index.add(i, &v).expect("add");
+        }
+        index.build_ivf(5, 2).expect("build IVF");
+        assert!(index.ivf.is_some(), "IVF should be built");
+
+        let query = vec![1.0_f32.cos(), 1.0_f32.sin(), 0.1];
+        let results = index.search_ivf(&query, 5).expect("search IVF");
+        assert!(!results.is_empty(), "IVF search should return results");
+        assert!(results.len() <= 5);
+
+        // Result with ID=1 should be the closest (same vector)
+        assert_eq!(results[0].0, 1, "closest vector should match query ID");
+    }
+
+    #[test]
+    fn test_ivf_fallback_to_flat() {
+        let mut index = VectorIndex::in_memory(3);
+        index.add(1, &[1.0, 0.0, 0.0]).expect("add");
+
+        // No IVF built, should fall back to flat
+        let results = index.search_ivf(&[1.0, 0.0, 0.0], 1).expect("search");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, 1);
+    }
+}
+
+/// Inverted File Index for sub-linear ANN search.
+///
+/// Partitions vectors into clusters using k-means centroids.
+/// At query time, only `n_probe` nearest clusters are searched.
+///
+/// Complexity: O(n_clusters + n_probe * n/n_clusters) per query
+/// vs O(n) for flat scan.
+#[derive(Debug, Clone)]
+pub struct IvfIndex {
+    /// Centroid vectors for each cluster.
+    centroids: Vec<Vec<f32>>,
+    /// Mapping from cluster_id -> vec of (vector_id, vector) in that cluster.
+    buckets: Vec<Vec<(u64, Vec<f32>)>>,
+    /// Number of clusters to probe at query time.
+    n_probe: usize,
+}
+
+impl VectorIndex {
+    /// Build an IVF index over the current vectors.
+    ///
+    /// Uses k-means clustering with `n_clusters` centroids.
+    /// At query time, `n_probe` nearest clusters are searched.
+    ///
+    /// Recommended: `n_clusters = sqrt(N)`, `n_probe = max(3, sqrt(n_clusters))`.
+    ///
+    /// Call this after all vectors are added (e.g., after indexing completes).
+    /// The flat search (`search()`) remains available as a fallback.
+    pub fn build_ivf(&mut self, n_clusters: usize, n_probe: usize) -> OmniResult<()> {
+        let n = self.vectors.len();
+        if n < n_clusters || n < 2 {
+            self.ivf = None;
+            return Ok(());
+        }
+
+        let dims = self.dimensions;
+        let all_vecs: Vec<(&u64, &Vec<f32>)> = self.vectors.iter().collect();
+
+        // Simple k-means++ initialization
+        let mut centroids = Vec::with_capacity(n_clusters);
+        // First centroid: pick the first vector
+        centroids.push(all_vecs[0].1.clone());
+
+        // Remaining centroids: pick vectors that are far from existing centroids
+        for _ in 1..n_clusters {
+            let mut best_dist = f32::NEG_INFINITY;
+            let mut best_idx = 0;
+            for (idx, (_, vec)) in all_vecs.iter().enumerate() {
+                let min_d = centroids
+                    .iter()
+                    .map(|c| cosine_sim(vec, c))
+                    .fold(f32::INFINITY, f32::min);
+                let neg_sim = -min_d; // want to maximize distance = minimize similarity
+                if neg_sim > best_dist {
+                    best_dist = neg_sim;
+                    best_idx = idx;
+                }
+            }
+            centroids.push(all_vecs[best_idx].1.clone());
+        }
+
+        // Run k-means iterations (10 iterations is sufficient for code embeddings)
+        for _ in 0..10 {
+            // Assign each vector to nearest centroid
+            let mut assignments: Vec<Vec<usize>> = vec![Vec::new(); n_clusters];
+            for (idx, (_, vec)) in all_vecs.iter().enumerate() {
+                let mut best_c = 0;
+                let mut best_sim = f32::NEG_INFINITY;
+                for (c, centroid) in centroids.iter().enumerate() {
+                    let sim = cosine_sim(vec, centroid);
+                    if sim > best_sim {
+                        best_sim = sim;
+                        best_c = c;
+                    }
+                }
+                assignments[best_c].push(idx);
+            }
+
+            // Recompute centroids as mean of assigned vectors
+            for (c, assigned) in assignments.iter().enumerate() {
+                if assigned.is_empty() {
+                    continue;
+                }
+                let mut new_centroid = vec![0.0f32; dims];
+                for &idx in assigned {
+                    for (d, val) in all_vecs[idx].1.iter().enumerate() {
+                        if d < dims {
+                            new_centroid[d] += val;
+                        }
+                    }
+                }
+                let n_assigned = assigned.len() as f32;
+                for val in &mut new_centroid {
+                    *val /= n_assigned;
+                }
+                // L2 normalize the centroid
+                let norm = new_centroid.iter().map(|x| x * x).sum::<f32>().sqrt();
+                if norm > 1e-10 {
+                    for val in &mut new_centroid {
+                        *val /= norm;
+                    }
+                }
+                centroids[c] = new_centroid;
+            }
+        }
+
+        // Build final buckets
+        let mut buckets: Vec<Vec<(u64, Vec<f32>)>> = vec![Vec::new(); n_clusters];
+        for (&id, vec) in &self.vectors {
+            let mut best_c = 0;
+            let mut best_sim = f32::NEG_INFINITY;
+            for (c, centroid) in centroids.iter().enumerate() {
+                let sim = cosine_sim(vec, centroid);
+                if sim > best_sim {
+                    best_sim = sim;
+                    best_c = c;
+                }
+            }
+            buckets[best_c].push((id, vec.clone()));
+        }
+
+        tracing::info!(n_clusters, n_probe, total_vectors = n, "IVF index built");
+
+        self.ivf = Some(IvfIndex {
+            centroids,
+            buckets,
+            n_probe,
+        });
+
+        Ok(())
+    }
+
+    /// Search using the IVF index. Falls back to flat search if IVF not built.
+    pub fn search_ivf(&self, query: &[f32], k: usize) -> OmniResult<Vec<(u64, f32)>> {
+        let ivf = match &self.ivf {
+            Some(ivf) => ivf,
+            None => return self.search(query, k),
+        };
+
+        // Find the n_probe nearest centroids
+        let mut centroid_sims: Vec<(usize, f32)> = ivf
+            .centroids
+            .iter()
+            .enumerate()
+            .map(|(i, c)| (i, cosine_sim(query, c)))
+            .collect();
+        centroid_sims.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        centroid_sims.truncate(ivf.n_probe);
+
+        // Search only the selected buckets
+        let mut norm_query = query.to_vec();
+        l2_normalize(&mut norm_query);
+        let mut scores: Vec<(u64, f32)> = Vec::new();
+
+        for (cluster_id, _) in &centroid_sims {
+            for (id, vec) in &ivf.buckets[*cluster_id] {
+                let score = match self.metric {
+                    DistanceMetric::Cosine => {
+                        let mut nv = vec.clone();
+                        l2_normalize(&mut nv);
+                        dot_product(&norm_query, &nv)
+                    }
+                    DistanceMetric::DotProduct => dot_product(query, vec),
+                    DistanceMetric::Euclidean => -euclidean_distance_sq(query, vec),
+                };
+                scores.push((*id, score));
+            }
+        }
+
+        scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scores.truncate(k);
+        Ok(scores)
+    }
+}
+
+fn cosine_sim(a: &[f32], b: &[f32]) -> f32 {
+    let mut na = a.to_vec();
+    let mut nb = b.to_vec();
+    l2_normalize(&mut na);
+    l2_normalize(&mut nb);
+    dot_product(&na, &nb)
 }

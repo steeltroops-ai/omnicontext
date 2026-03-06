@@ -94,4 +94,4 @@ pub mod server;
 pub use config::Config;
 pub use error::OmniError;
 /// Re-export the primary engine interface.
-pub use pipeline::Engine;
+pub use pipeline::{Engine, RetryEmbeddingResult};

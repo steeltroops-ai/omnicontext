@@ -327,6 +327,7 @@ impl MetadataIndex {
                 token_count: row.get(9)?,
                 weight: row.get(10)?,
                 vector_id: row.get::<_, Option<i64>>(11)?.map(|v| v as u64),
+                is_summary: false,
             })
         })?;
 
@@ -352,6 +353,61 @@ impl MetadataIndex {
             .conn
             .query_row("SELECT COUNT(*) FROM chunks", [], |row| row.get(0))?;
         Ok(count as usize)
+    }
+
+    /// Count chunks that have embeddings (vector_id is not NULL).
+    pub fn embedded_chunk_count(&self) -> OmniResult<usize> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM chunks WHERE vector_id IS NOT NULL",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(count as usize)
+    }
+
+    /// Get embedding coverage percentage (0.0 to 100.0).
+    pub fn embedding_coverage(&self) -> OmniResult<f64> {
+        let total = self.chunk_count()? as f64;
+        if total == 0.0 {
+            return Ok(0.0);
+        }
+        let embedded = self.embedded_chunk_count()? as f64;
+        Ok((embedded / total) * 100.0)
+    }
+
+    /// Get all chunks that don't have embeddings (vector_id IS NULL).
+    ///
+    /// This is useful for retrying failed embeddings.
+    pub fn get_chunks_without_vectors(&self) -> OmniResult<Vec<Chunk>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, file_id, symbol_path, kind, visibility, line_start,
+             line_end, content, doc_comment, token_count, weight, vector_id
+             FROM chunks WHERE vector_id IS NULL ORDER BY file_id, line_start",
+        )?;
+
+        let chunks = stmt.query_map([], |row| {
+            Ok(Chunk {
+                id: row.get(0)?,
+                file_id: row.get(1)?,
+                symbol_path: row.get(2)?,
+                kind: parse_chunk_kind(&row.get::<_, String>(3)?),
+                visibility: parse_visibility(&row.get::<_, String>(4)?),
+                line_start: row.get(5)?,
+                line_end: row.get(6)?,
+                content: row.get(7)?,
+                doc_comment: row.get(8)?,
+                token_count: row.get(9)?,
+                weight: row.get(10)?,
+                vector_id: row.get::<_, Option<i64>>(11)?.map(|v| v as u64),
+                is_summary: false,
+            })
+        })?;
+
+        let mut result = Vec::new();
+        for chunk in chunks {
+            result.push(chunk?);
+        }
+        Ok(result)
     }
 
     // -----------------------------------------------------------------------
@@ -907,6 +963,7 @@ mod tests {
             token_count: 10,
             weight: 0.85,
             vector_id: None,
+            is_summary: false,
         }
     }
 

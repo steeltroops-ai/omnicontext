@@ -25,6 +25,13 @@ impl ContextAssembler {
     ///
     /// Applies intent-based context strategy, assigns priorities,
     /// and packs chunks within token budget.
+    ///
+    /// The effective token budget is scaled by the query intent:
+    /// - Debug/Edit: 60% (fewer, high-precision results)
+    /// - Refactor/Dependency: 80% (moderate context depth)
+    /// - Explain/DataFlow/Generate: 100% (full budget for broad context)
+    /// - TestCoverage: 70% (focused on test code)
+    /// - Unknown: 100% (no restriction)
     pub fn assemble(
         &self,
         query: &str,
@@ -34,6 +41,10 @@ impl ContextAssembler {
         // Classify intent and get strategy
         let intent = QueryIntent::classify(query);
         let strategy = intent.context_strategy();
+
+        // Scale token budget by intent
+        let budget_fraction = Self::intent_budget_fraction(&intent);
+        let effective_budget = (self.token_budget as f32 * budget_fraction) as u32;
 
         // Convert search results to prioritized entries
         let mut entries = self.prioritize_entries(search_results, active_file, &strategy);
@@ -50,13 +61,29 @@ impl ContextAssembler {
             })
         });
 
-        // Pack within token budget
-        let packed = self.pack_with_budget(entries, &strategy);
+        // Pack within the intent-scaled token budget
+        let packed = self.pack_with_budget_limit(entries, &strategy, effective_budget);
 
         ContextWindow {
             entries: packed.entries,
             total_tokens: packed.total_tokens,
             token_budget: self.token_budget,
+        }
+    }
+
+    /// Compute the budget fraction for a given query intent.
+    ///
+    /// Focused intents (Debug, Edit) should produce fewer but more precise
+    /// results, so they use a smaller fraction of the total budget.
+    /// Broad intents (Explain, DataFlow) need full context.
+    fn intent_budget_fraction(intent: &QueryIntent) -> f32 {
+        match intent {
+            QueryIntent::Debug => 0.60,
+            QueryIntent::Edit => 0.60,
+            QueryIntent::TestCoverage => 0.70,
+            QueryIntent::Refactor | QueryIntent::Dependency => 0.80,
+            QueryIntent::Explain | QueryIntent::DataFlow | QueryIntent::Generate => 1.0,
+            QueryIntent::Unknown => 1.0,
         }
     }
 
@@ -102,11 +129,25 @@ impl ContextAssembler {
         entries
     }
 
-    /// Pack entries within token budget, applying compression as needed.
+    /// Pack entries within the default token budget, applying compression as needed.
+    #[allow(dead_code)]
     fn pack_with_budget(
         &self,
         entries: Vec<ContextEntry>,
         strategy: &ContextStrategy,
+    ) -> ContextWindow {
+        self.pack_with_budget_limit(entries, strategy, self.token_budget)
+    }
+
+    /// Pack entries within an explicit token budget, applying compression as needed.
+    ///
+    /// The budget may be less than `self.token_budget` when the query intent
+    /// requests a tighter context window (e.g., Debug queries use 60%).
+    fn pack_with_budget_limit(
+        &self,
+        entries: Vec<ContextEntry>,
+        strategy: &ContextStrategy,
+        budget: u32,
     ) -> ContextWindow {
         let mut packed_entries = Vec::new();
         let mut total_tokens: u32 = 0;
@@ -116,7 +157,7 @@ impl ContextAssembler {
             let mut chunk_tokens = entry.chunk.token_count;
 
             // Try to fit without compression first
-            if total_tokens + chunk_tokens <= self.token_budget {
+            if total_tokens + chunk_tokens <= budget {
                 total_tokens += chunk_tokens;
                 packed_entries.push(entry);
                 continue;
@@ -127,7 +168,7 @@ impl ContextAssembler {
                 let compressed = self.compress_chunk(&entry.chunk, priority);
                 chunk_tokens = compressed.token_count;
 
-                if total_tokens + chunk_tokens <= self.token_budget {
+                if total_tokens + chunk_tokens <= budget {
                     entry.chunk = compressed;
                     total_tokens += chunk_tokens;
                     packed_entries.push(entry);
@@ -141,7 +182,7 @@ impl ContextAssembler {
                 let compressed = self.compress_chunk(&entry.chunk, priority);
                 chunk_tokens = compressed.token_count;
 
-                if total_tokens + chunk_tokens <= self.token_budget {
+                if total_tokens + chunk_tokens <= budget {
                     entry.chunk = compressed;
                     total_tokens += chunk_tokens;
                     packed_entries.push(entry);
@@ -234,6 +275,7 @@ impl ContextAssembler {
             token_count: new_token_count,
             weight: chunk.weight,
             vector_id: chunk.vector_id,
+            is_summary: chunk.is_summary,
         }
     }
 }
@@ -257,6 +299,7 @@ mod tests {
             token_count,
             weight: 0.85,
             vector_id: Some(1),
+            is_summary: false,
         }
     }
 
@@ -402,5 +445,54 @@ mod tests {
         // High priority should come first
         assert_eq!(context.entries[0].chunk.symbol_path, "test::function");
         assert!(context.entries[0].score > 0.8);
+    }
+
+    #[test]
+    fn test_intent_budget_debug_is_reduced() {
+        let fraction = ContextAssembler::intent_budget_fraction(&QueryIntent::Debug);
+        assert!(
+            (fraction - 0.60).abs() < 1e-6,
+            "debug should use 60% budget"
+        );
+    }
+
+    #[test]
+    fn test_intent_budget_explain_is_full() {
+        let fraction = ContextAssembler::intent_budget_fraction(&QueryIntent::Explain);
+        assert!(
+            (fraction - 1.0).abs() < 1e-6,
+            "explain should use 100% budget"
+        );
+    }
+
+    #[test]
+    fn test_intent_budget_refactor_is_moderate() {
+        let fraction = ContextAssembler::intent_budget_fraction(&QueryIntent::Refactor);
+        assert!(
+            (fraction - 0.80).abs() < 1e-6,
+            "refactor should use 80% budget"
+        );
+    }
+
+    #[test]
+    fn test_debug_query_gets_fewer_tokens() {
+        let assembler = ContextAssembler::new(1000);
+
+        // Create enough results to exceed budget (high scores -> High/Critical priority)
+        let results: Vec<SearchResult> = (0..20)
+            .map(|i| make_test_result(make_test_chunk(&format!("fn f_{i}() {{ }}",), 80), 0.9))
+            .collect();
+
+        // Debug query -> 60% budget = 600 tokens
+        let debug_ctx = assembler.assemble("why is this function failing?", results.clone(), None);
+        // "Unknown" intent -> 100% budget = 1000 tokens, no high_level filter
+        let full_ctx = assembler.assemble("f_0 f_1 f_2", results, None);
+
+        assert!(
+            debug_ctx.total_tokens <= full_ctx.total_tokens,
+            "debug ({}) should use <= tokens than full ({})",
+            debug_ctx.total_tokens,
+            full_ctx.total_tokens
+        );
     }
 }

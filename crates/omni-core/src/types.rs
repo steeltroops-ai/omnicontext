@@ -194,6 +194,13 @@ pub enum ChunkKind {
     Test,
     /// Top-level statements that don't fit other categories.
     TopLevel,
+    /// RAPTOR-style hierarchical summary of child chunks.
+    ///
+    /// Summary chunks aggregate signatures and context from multiple leaf
+    /// chunks (method-group or file-level). They enable architectural
+    /// queries like "how does module X work?" to be answered without
+    /// requiring aggregation across dozens of function-level chunks.
+    Summary,
 }
 
 impl ChunkKind {
@@ -209,6 +216,7 @@ impl ChunkKind {
             Self::Module => 0.60,
             Self::Test => 0.60,
             Self::TopLevel => 0.50,
+            Self::Summary => 0.85,
         }
     }
 
@@ -224,6 +232,7 @@ impl ChunkKind {
             Self::Module => "module",
             Self::Test => "test",
             Self::TopLevel => "top_level",
+            Self::Summary => "summary",
         }
     }
 
@@ -238,6 +247,7 @@ impl ChunkKind {
             "typedef" => Self::TypeDef,
             "module" => Self::Module,
             "test" => Self::Test,
+            "summary" => Self::Summary,
             _ => Self::TopLevel,
         }
     }
@@ -317,6 +327,9 @@ pub struct Chunk {
     pub weight: f64,
     /// ID of the corresponding vector in usearch (None if not yet embedded).
     pub vector_id: Option<u64>,
+    /// Whether this is a RAPTOR-style summary chunk (aggregated from leaf chunks).
+    #[serde(default)]
+    pub is_summary: bool,
 }
 
 // ---------------------------------------------------------------------------

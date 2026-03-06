@@ -155,6 +155,7 @@ fn bench_index_operations() -> Result<(), Box<dyn std::error::Error>> {
             token_count: 20,
             weight: 1.0,
             vector_id: None,
+            is_summary: false,
         });
     }
     let symbols: Vec<Symbol> = chunks

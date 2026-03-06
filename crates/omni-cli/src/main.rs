@@ -60,6 +60,17 @@ enum Commands {
         kind: Option<String>,
     },
 
+    /// Retry embedding chunks that failed during indexing.
+    Embed {
+        /// Path to the repository root.
+        #[arg(default_value = ".")]
+        path: String,
+
+        /// Only retry chunks without embeddings.
+        #[arg(long)]
+        retry_failed: bool,
+    },
+
     /// Show engine status and index statistics.
     Status {
         /// Path to the repository root.
@@ -119,6 +130,9 @@ async fn main() -> Result<()> {
                 kind.as_deref(),
                 cli.json,
             )?;
+        }
+        Commands::Embed { path, retry_failed } => {
+            cmd_embed(&path, retry_failed, cli.json)?;
         }
         Commands::Status { path } => {
             cmd_status(&path, cli.json)?;
@@ -255,6 +269,68 @@ fn cmd_search(
             println!("{preview}");
         }
         println!();
+    }
+
+    Ok(())
+}
+
+/// Retry embedding chunks that failed during indexing.
+fn cmd_embed(path: &str, retry_failed: bool, json: bool) -> Result<()> {
+    let repo_path = std::path::PathBuf::from(path)
+        .canonicalize()
+        .unwrap_or_else(|_| std::path::PathBuf::from(path));
+
+    if !json {
+        println!("OmniContext - Retrying Failed Embeddings");
+        println!("  Repository: {}", repo_path.display());
+        println!("---");
+    }
+
+    let mut engine = omni_core::Engine::new(&repo_path)?;
+
+    if retry_failed {
+        let start = Instant::now();
+        let result = engine.retry_failed_embeddings()?;
+        let elapsed = start.elapsed();
+
+        if json {
+            let output = serde_json::json!({
+                "status": "ok",
+                "elapsed_ms": elapsed.as_millis(),
+                "total_attempted": result.total_attempted,
+                "successful": result.successful,
+                "failed": result.failed,
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        } else {
+            println!();
+            println!("  Retry complete in {:.2}s", elapsed.as_secs_f64());
+            println!("  Chunks attempted:  {}", result.total_attempted);
+            println!("  Successful:        {}", result.successful);
+            println!("  Failed:            {}", result.failed);
+
+            if result.total_attempted == 0 {
+                println!();
+                println!("  ✓ All chunks already have embeddings!");
+            } else if result.failed > 0 {
+                println!();
+                println!("  ⚠ Some chunks still failed to embed.");
+                println!("    Check logs for details.");
+            } else {
+                println!();
+                println!("  ✓ All failed chunks successfully embedded!");
+            }
+        }
+
+        // Persist on shutdown
+        engine.shutdown()?;
+    } else {
+        if !json {
+            println!();
+            println!("Usage: omnicontext embed --retry-failed");
+            println!();
+            println!("This command retries embedding chunks that failed during indexing.");
+        }
     }
 
     Ok(())

@@ -46,6 +46,7 @@
 )]
 
 pub mod model_manager;
+pub mod session_pool;
 
 use ort::session::Session;
 
@@ -59,9 +60,17 @@ pub struct Embedder {
     config: EmbeddingConfig,
     /// The ONNX runtime session. None if model couldn't be loaded.
     /// Stored in a Mutex because Session::run requires &mut self.
+    /// Used for single-session mode (pool_size=1 or pool unavailable).
     session: Option<std::sync::Mutex<Session>>,
     /// Tokenizer for the embedding model. None if tokenizer couldn't be loaded.
     tokenizer: Option<tokenizers::Tokenizer>,
+    /// Model fingerprint for staleness detection.
+    /// Format: "{model_name}:{dimensions}:{max_seq_length}".
+    /// Used to detect when vectors were produced by a different model.
+    model_fingerprint: String,
+    /// Optional session pool for parallel inference (pool_size > 1).
+    /// When available, `embed_batch_parallel` uses this instead of the single session.
+    pool: Option<session_pool::SessionPool>,
 }
 
 impl Embedder {
@@ -79,6 +88,8 @@ impl Embedder {
                 config: config.clone(),
                 session: None,
                 tokenizer: None,
+                model_fingerprint: format!("skip:{}:{}", config.dimensions, config.max_seq_length,),
+                pool: None,
             });
         }
 
@@ -92,32 +103,39 @@ impl Embedder {
                     Ok(session) => {
                         tracing::info!(
                             model = %model_path.display(),
-                            "loaded ONNX embedding model"
+                            "loaded ONNX embedding model successfully"
                         );
                         Some(std::sync::Mutex::new(session))
                     }
                     Err(e) => {
-                        tracing::warn!(
+                        tracing::error!(
                             model = %model_path.display(),
                             error = %e,
-                            "failed to load embedding model, operating in keyword-only mode"
+                            "CRITICAL: Failed to load embedding model. \
+                             Model file may be corrupt. \
+                             Delete {} and re-run to re-download. \
+                             Semantic search is DISABLED. Operating in keyword-only mode.",
+                            model_path.display()
                         );
                         None
                     }
                 },
                 Err(e) => {
-                    tracing::warn!(
+                    tracing::error!(
                         error = %e,
-                        "failed to create ONNX session builder, operating in keyword-only mode.\n\
-                         Hint: ONNX Runtime may not be installed. The engine will use keyword-only search."
+                        "CRITICAL: Failed to create ONNX session builder. \
+                         ONNX Runtime may not be installed correctly. \
+                         Semantic search is DISABLED. Operating in keyword-only mode."
                     );
                     None
                 }
             }
         } else {
-            tracing::warn!(
+            tracing::error!(
                 model = %model_path.display(),
-                "embedding model not found after download attempt, operating in keyword-only mode"
+                "CRITICAL: Embedding model not found after download attempt. \
+                 Check internet connection and disk space. \
+                 Semantic search is DISABLED. Operating in keyword-only mode."
             );
             None
         };
@@ -139,10 +157,39 @@ impl Embedder {
             None
         };
 
+        // Try to create a session pool for parallel inference
+        let pool = if session.is_some() {
+            let pool_size = session_pool::optimal_pool_size(4);
+            if pool_size > 1 {
+                match session_pool::SessionPool::new(&model_path, pool_size - 1) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "session pool creation failed, using single session");
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         Ok(Self {
             config: config.clone(),
             session,
             tokenizer,
+            model_fingerprint: format!(
+                "{}:{}:{}",
+                config
+                    .model_path
+                    .file_name()
+                    .map(|f| f.to_string_lossy())
+                    .unwrap_or_default(),
+                config.dimensions,
+                config.max_seq_length,
+            ),
+            pool,
         })
     }
 
@@ -221,12 +268,128 @@ impl Embedder {
             config: config.clone(),
             session: None,
             tokenizer: None,
+            model_fingerprint: format!("degraded:{}:{}", config.dimensions, config.max_seq_length,),
+            pool: None,
         }
     }
 
     /// Whether the embedding model is loaded and operational.
     pub fn is_available(&self) -> bool {
         self.session.is_some()
+    }
+
+    /// Number of ONNX sessions available (1 primary + pool).
+    pub fn pool_size(&self) -> usize {
+        let base = if self.session.is_some() { 1 } else { 0 };
+        base + self.pool.as_ref().map(|p| p.pool_size()).unwrap_or(0)
+    }
+
+    /// Embed a batch using the session pool for parallel inference.
+    ///
+    /// Splits the input into sub-batches and processes them concurrently
+    /// using `std::thread::scope`. Each worker checks out a session from
+    /// the pool, runs inference, and returns it.
+    ///
+    /// Falls back to single-session `embed_batch` if no pool is available.
+    pub fn embed_batch_parallel(&self, chunks: &[&str]) -> Vec<Option<Vec<f32>>> {
+        let pool = match &self.pool {
+            Some(p) if p.pool_size() > 0 => p,
+            _ => return self.embed_batch(chunks),
+        };
+
+        if chunks.len() <= self.config.batch_size {
+            // Small batch -- not worth parallel overhead
+            return self.embed_batch(chunks);
+        }
+
+        let n_workers = (pool.pool_size() + 1).min(chunks.len() / self.config.batch_size + 1);
+        let sub_batch_size = (chunks.len() + n_workers - 1) / n_workers;
+
+        // Use scoped threads for safe borrow of &self
+        let results: Vec<Vec<Option<Vec<f32>>>> = std::thread::scope(|scope| {
+            let mut handles = Vec::with_capacity(n_workers);
+
+            for (worker_idx, sub_batch) in chunks.chunks(sub_batch_size).enumerate() {
+                let handle = scope.spawn(move || {
+                    if worker_idx == 0 {
+                        // First worker uses the primary session
+                        self.embed_batch(sub_batch)
+                    } else {
+                        // Other workers use pool sessions
+                        match pool.try_checkout() {
+                            Some(mut guard) => {
+                                self.embed_batch_with_session(guard.session_mut(), sub_batch)
+                            }
+                            None => {
+                                // Pool exhausted, fall back to primary session
+                                self.embed_batch(sub_batch)
+                            }
+                        }
+                    }
+                });
+                handles.push(handle);
+            }
+
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap_or_default())
+                .collect()
+        });
+
+        // Flatten sub-batch results
+        let mut all_results = Vec::with_capacity(chunks.len());
+        for batch_result in results {
+            all_results.extend(batch_result);
+        }
+        all_results
+    }
+
+    /// Embed a batch using a specific session (for pool workers).
+    fn embed_batch_with_session(
+        &self,
+        session: &mut Session,
+        chunks: &[&str],
+    ) -> Vec<Option<Vec<f32>>> {
+        let sanitized: Vec<String> = chunks.iter().map(|c| sanitize_for_embedding(c)).collect();
+        let sanitized_refs: Vec<&str> = sanitized.iter().map(String::as_str).collect();
+
+        let mut all_embeddings = Vec::with_capacity(chunks.len());
+
+        for batch in sanitized_refs.chunks(self.config.batch_size) {
+            match self.run_inference(session, batch) {
+                Ok(batch_embeddings) => {
+                    for emb in batch_embeddings {
+                        all_embeddings.push(Some(emb));
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!(error = %e, "pool session batch inference failed");
+                    for text in batch {
+                        let embedding = self.embed_single_with_retry(text, session);
+                        all_embeddings.push(embedding);
+                    }
+                }
+            }
+        }
+
+        all_embeddings
+    }
+
+    /// Returns the model fingerprint for staleness detection.
+    ///
+    /// Store this alongside vectors in the database. When the model changes
+    /// (upgrade, config change), vectors with a different fingerprint are stale
+    /// and should be re-embedded.
+    pub fn model_fingerprint(&self) -> &str {
+        &self.model_fingerprint
+    }
+
+    /// Check if vectors produced with the given fingerprint are stale.
+    ///
+    /// Returns `true` if the stored fingerprint differs from the current model,
+    /// meaning those vectors should be re-embedded.
+    pub fn is_stale(&self, stored_fingerprint: &str) -> bool {
+        stored_fingerprint != self.model_fingerprint
     }
 
     /// Embed a batch of text chunks.
@@ -240,6 +403,7 @@ impl Embedder {
     /// - Automatic retry with truncation for oversized chunks
     /// - Individual fallback when batch processing fails
     /// - Detailed logging for debugging coverage issues
+    /// - Aggressive skipping of problematic chunks to prevent hangs
     pub fn embed_batch(&self, chunks: &[&str]) -> Vec<Option<Vec<f32>>> {
         let session_mutex = match self.session.as_ref() {
             Some(s) => s,
@@ -257,8 +421,20 @@ impl Embedder {
         let sanitized: Vec<String> = chunks.iter().map(|c| sanitize_for_embedding(c)).collect();
         let sanitized_refs: Vec<&str> = sanitized.iter().map(String::as_str).collect();
 
-        // Process in batches
+        // Process in batches with progress logging
+        let total_batches =
+            (sanitized_refs.len() + self.config.batch_size - 1) / self.config.batch_size;
         for (batch_idx, batch) in sanitized_refs.chunks(self.config.batch_size).enumerate() {
+            // Log progress every 10 batches
+            if batch_idx % 10 == 0 {
+                tracing::info!(
+                    batch = batch_idx + 1,
+                    total = total_batches,
+                    progress_pct = ((batch_idx + 1) as f64 / total_batches as f64 * 100.0) as u32,
+                    "embedding progress"
+                );
+            }
+
             match self.run_inference(&mut session, batch) {
                 Ok(batch_embeddings) => {
                     for emb in batch_embeddings {
@@ -274,6 +450,18 @@ impl Embedder {
                     );
                     // Fall back to processing chunks one by one with retry logic
                     for (chunk_idx, text) in batch.iter().enumerate() {
+                        // Skip extremely large chunks that might cause hangs
+                        if text.len() > 100_000 {
+                            tracing::warn!(
+                                batch_idx = batch_idx,
+                                chunk_idx = chunk_idx,
+                                text_len = text.len(),
+                                "skipping extremely large chunk (>100KB)"
+                            );
+                            all_embeddings.push(None);
+                            continue;
+                        }
+
                         let embedding = self.embed_single_with_retry(text, &mut session);
                         if embedding.is_none() {
                             tracing::debug!(
@@ -292,8 +480,69 @@ impl Embedder {
         all_embeddings
     }
 
+    /// Process a large set of chunks through the embedding pipeline with progress reporting.
+    ///
+    /// This is the production-grade batch API for indexing. It:
+    /// 1. Splits the input into macro-batches (4x the ONNX batch size)
+    /// 2. Processes each macro-batch through `embed_batch`
+    /// 3. Calls `on_progress(completed, total)` after each macro-batch
+    /// 4. Returns early if `on_progress` returns `false` (cancellation)
+    ///
+    /// The macro-batch size controls memory backpressure: at most
+    /// `batch_size * 4` chunks are in-flight simultaneously.
+    pub fn embed_pipeline<F>(&self, chunks: &[&str], mut on_progress: F) -> Vec<Option<Vec<f32>>>
+    where
+        F: FnMut(usize, usize) -> bool, // (completed, total) -> should_continue
+    {
+        let total = chunks.len();
+        if total == 0 || !self.is_available() {
+            return vec![None; total];
+        }
+
+        // Macro-batch size: 4x the ONNX batch size for amortized overhead
+        let macro_batch_size = self.config.batch_size.saturating_mul(4).max(32);
+        let mut all_results = Vec::with_capacity(total);
+        let mut completed = 0;
+
+        for macro_batch in chunks.chunks(macro_batch_size) {
+            let batch_results = self.embed_batch(macro_batch);
+            completed += macro_batch.len();
+            all_results.extend(batch_results);
+
+            // Report progress and check for cancellation
+            if !on_progress(completed, total) {
+                tracing::info!(completed, total, "embedding pipeline cancelled by caller");
+                // Fill remaining with None
+                let remaining = total - completed;
+                all_results.extend(std::iter::repeat_with(|| None).take(remaining));
+                break;
+            }
+        }
+
+        all_results
+    }
+
     /// Embed a single chunk with automatic retry and truncation.
     fn embed_single_with_retry(&self, text: &str, session: &mut Session) -> Option<Vec<f32>> {
+        // Skip empty or extremely large chunks
+        if text.trim().is_empty() {
+            tracing::trace!("skipping empty chunk");
+            return None;
+        }
+
+        if text.len() > 50_000 {
+            tracing::debug!(text_len = text.len(), "chunk too large, truncating to 50KB");
+            // Truncate to 50KB immediately for very large chunks
+            let truncated = &text[..50_000.min(text.len())];
+            match self.run_inference(session, &[truncated]) {
+                Ok(mut embs) => return Some(embs.remove(0)),
+                Err(e) => {
+                    tracing::trace!(error = %e, "truncated large chunk failed");
+                    return None;
+                }
+            }
+        }
+
         // Try with full text first
         match self.run_inference(session, &[text]) {
             Ok(mut embs) => return Some(embs.remove(0)),
@@ -334,7 +583,7 @@ impl Embedder {
         None
     }
 
-    /// Embed a single text string.
+    /// Embed a single text string (passage/chunk mode -- no prefix).
     pub fn embed_single(&self, text: &str) -> OmniResult<Vec<f32>> {
         if !self.is_available() {
             return Err(OmniError::ModelUnavailable {
@@ -349,6 +598,19 @@ impl Embedder {
                 "embed_batch failed or returned None".into(),
             ))
         }
+    }
+
+    /// Embed a query string with asymmetric instruction prefix.
+    ///
+    /// For bi-encoder retrieval models, prepending a task-specific instruction
+    /// to queries improves retrieval quality by 8-15% (Jina AI docs).
+    /// Passages are embedded without prefix (via `embed_single`).
+    ///
+    /// Prefix: "Represent this sentence for searching relevant passages: "
+    pub fn embed_query(&self, query: &str) -> OmniResult<Vec<f32>> {
+        const QUERY_PREFIX: &str = "Represent this sentence for searching relevant passages: ";
+        let prefixed = format!("{QUERY_PREFIX}{query}");
+        self.embed_single(&prefixed)
     }
 
     /// Returns the embedding dimensions.
@@ -659,5 +921,69 @@ mod tests {
             "getUser() {}",
         );
         assert_eq!(ts, "getUser() {}");
+    }
+
+    #[test]
+    fn test_model_fingerprint_degraded() {
+        let config = EmbeddingConfig {
+            model_path: "/nonexistent/model.onnx".into(),
+            dimensions: 768,
+            batch_size: 16,
+            max_seq_length: 8192,
+        };
+        let embedder = Embedder::degraded(&config);
+        assert!(
+            embedder.model_fingerprint().starts_with("degraded:"),
+            "degraded fingerprint should start with 'degraded:', got: {}",
+            embedder.model_fingerprint()
+        );
+        assert!(embedder.model_fingerprint().contains("768"));
+    }
+
+    #[test]
+    fn test_is_stale_same_fingerprint() {
+        let config = EmbeddingConfig {
+            model_path: "/nonexistent/model.onnx".into(),
+            dimensions: 768,
+            batch_size: 16,
+            max_seq_length: 8192,
+        };
+        let embedder = Embedder::degraded(&config);
+        let fp = embedder.model_fingerprint().to_string();
+        assert!(
+            !embedder.is_stale(&fp),
+            "same fingerprint should not be stale"
+        );
+    }
+
+    #[test]
+    fn test_is_stale_different_fingerprint() {
+        let config = EmbeddingConfig {
+            model_path: "/nonexistent/model.onnx".into(),
+            dimensions: 768,
+            batch_size: 16,
+            max_seq_length: 8192,
+        };
+        let embedder = Embedder::degraded(&config);
+        assert!(
+            embedder.is_stale("old-model:384:512"),
+            "different fingerprint should be stale"
+        );
+    }
+
+    #[test]
+    fn test_embed_query_degraded_returns_error() {
+        let config = EmbeddingConfig {
+            model_path: "/nonexistent/model.onnx".into(),
+            dimensions: 384,
+            batch_size: 32,
+            max_seq_length: 256,
+        };
+        let embedder = Embedder::degraded(&config);
+        let result = embedder.embed_query("how does caching work?");
+        assert!(
+            result.is_err(),
+            "embed_query on degraded should return error"
+        );
     }
 }
