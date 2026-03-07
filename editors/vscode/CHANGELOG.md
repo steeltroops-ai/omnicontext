@@ -1,6 +1,4 @@
-# OmniContext — Changelog
-
-## [Unreleased]
+# Changelog
 
 ## [0.9.2] - 2026-03-07
 
@@ -122,3 +120,13 @@
 - IPC client with named-pipe/Unix-socket transport and exponential backoff reconnection
 - Status bar item showing daemon state
 - Basic sidebar with connection status and cache hit counter
+
+[0.9.2]: https://github.com/steeltroops-ai/omnicontext/compare/v0.7.2...v0.9.2
+[0.7.2]: https://github.com/steeltroops-ai/omnicontext/compare/v0.7.1...v0.7.2
+[0.7.1]: https://github.com/steeltroops-ai/omnicontext/compare/v0.7.0...v0.7.1
+[0.7.0]: https://github.com/steeltroops-ai/omnicontext/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/steeltroops-ai/omnicontext/compare/v0.4.0...v0.6.0
+[0.4.0]: https://github.com/steeltroops-ai/omnicontext/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/steeltroops-ai/omnicontext/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/steeltroops-ai/omnicontext/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/steeltroops-ai/omnicontext/releases/tag/v0.1.0
