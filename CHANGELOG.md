@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.0] - 2026-03-07
+
+## What's Changed
+
+### Maintenance
+
+- fix release workflow regex to allow commas in scopes (e086fef)
+
 ## [0.11.0] - 2026-03-07
 
 ## What's Changed

@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.12.0] - 2026-03-07
+
+## What's Changed
+
+*No direct changes in this directory.*
+
 ## [0.11.0] - 2026-03-07
 
 ## What's Changed
