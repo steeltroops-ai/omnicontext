@@ -21,7 +21,6 @@ ignore = [
 
 [licenses]
 version = 2
-default = "deny"
 allow = [
     "Apache-2.0",
     "Apache-2.0 WITH LLVM-exception",
