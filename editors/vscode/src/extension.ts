@@ -20,6 +20,11 @@ import {
   buildMcpServerEntry,
   mergeMcpConfig,
 } from "./extensionUtils";
+import {
+  bootstrap,
+  resolveBinaries,
+  BootstrapResult,
+} from "./bootstrapService";
 
 let statusBarItem: vscode.StatusBarItem;
 let outputChannel: vscode.OutputChannel;
@@ -45,10 +50,28 @@ let cacheStatsManager: CacheStatsManager | null = null;
 let sidebarRefreshInterval: NodeJS.Timeout | null = null;
 
 // ---------------------------------------------------------------------------
+// Circuit breaker: prevents sidebar and event tracker from hammering a
+// non-existent daemon with IPC requests (the root cause of sidebar freezes).
+// ---------------------------------------------------------------------------
+let isDaemonConnected = false;
+
+/** Export for use in sidebar and event tracker as a lightweight check. */
+export function getDaemonConnected(): boolean {
+  return isDaemonConnected;
+}
+
+// Bootstrap: resolved binary paths after zero-friction setup
+let bootstrapResult: BootstrapResult | null = null;
+
+// VS Code extension context (stored for binary resolution after bootstrap)
+let extensionContext: vscode.ExtensionContext | null = null;
+
+// ---------------------------------------------------------------------------
 // Extension lifecycle
 // ---------------------------------------------------------------------------
 
 export function activate(context: vscode.ExtensionContext) {
+  extensionContext = context;
   outputChannel = vscode.window.createOutputChannel("OmniContext");
 
   // Status bar
@@ -56,16 +79,19 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.StatusBarAlignment.Left,
     100,
   );
-  statusBarItem.text = "$(search) OmniContext";
-  statusBarItem.tooltip = "OmniContext: Click to search";
+  statusBarItem.text = "$(sync~spin) OmniContext: Starting...";
+  statusBarItem.tooltip = "OmniContext: Initializing engine";
   statusBarItem.command = "omnicontext.search";
   statusBarItem.show();
   context.subscriptions.push(statusBarItem);
 
-  // Initialize event tracking and cache stats
+  // Initialize event tracking and cache stats.
+  // Event tracker checks isDaemonConnected before enqueuing any events.
   symbolExtractor = new SymbolExtractor();
   cacheStatsManager = new CacheStatsManager(sendIpcRequest);
   eventTracker = new EventTracker(sendIpcRequest, symbolExtractor);
+  eventTracker.setConnectionGate(getDaemonConnected);
+
   eventTracker.registerListeners(context);
 
   // Sidebar Provider
@@ -74,6 +100,7 @@ export function activate(context: vscode.ExtensionContext) {
     cacheStatsManager,
     eventTracker,
     sendIpcRequest,
+    getDaemonConnected,
   );
   context.subscriptions.push(
     vscode.window.registerWebviewViewProvider(
@@ -118,15 +145,66 @@ export function activate(context: vscode.ExtensionContext) {
   // Register configuration change listener
   registerConfigurationWatcher(context);
 
-  // Auto-start daemon and index on workspace open
-  const config = vscode.workspace.getConfiguration("omnicontext");
-  if (config.get<boolean>("autoStartDaemon", true)) {
-    startDaemon(true).then(() => sidebarProvider.refresh());
-  } else if (config.get<boolean>("autoIndex", true)) {
-    runIndex(true).then(() => sidebarProvider.refresh());
-  }
+  // ---------------------------------------------------------------------------
+  // Bootstrap: resolve or auto-download binaries, then start daemon.
+  // This runs async so activation returns immediately (VS Code requirement).
+  // The sidebar shows bootstrap progress via the status callback.
+  // ---------------------------------------------------------------------------
+  vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: "OmniContext",
+      cancellable: false,
+    },
+    async (progress) => {
+      try {
+        bootstrapResult = await bootstrap(context, (status) => {
+          outputChannel.appendLine(
+            `[bootstrap] ${status.phase}: ${status.message}`,
+          );
+          sidebarProvider.sendBootstrapStatus(status);
 
-  // Poll for status updates for sidebar
+          if (status.progressPercent !== undefined) {
+            progress.report({
+              message: status.message,
+              increment: status.progressPercent,
+            });
+          } else {
+            progress.report({ message: status.message });
+          }
+
+          if (status.phase === "failed") {
+            statusBarItem.text = "$(error) OmniContext: Setup Failed";
+            statusBarItem.tooltip = status.message;
+          }
+        });
+
+        outputChannel.appendLine(
+          `[bootstrap] engine ready at: ${bootstrapResult.cliBinary}`,
+        );
+        statusBarItem.text = "$(search) OmniContext";
+        statusBarItem.tooltip = "OmniContext: Click to search";
+
+        // Now that binaries are confirmed present, start the daemon
+        const config = vscode.workspace.getConfiguration("omnicontext");
+        if (config.get<boolean>("autoStartDaemon", true)) {
+          await startDaemon(true);
+        } else if (config.get<boolean>("autoIndex", true)) {
+          await runIndex(true);
+        }
+
+        sidebarProvider.refresh();
+      } catch (err: any) {
+        outputChannel.appendLine(`[bootstrap] fatal: ${err.message}`);
+        statusBarItem.text = "$(error) OmniContext";
+        statusBarItem.tooltip =
+          "OmniContext setup failed. Check OmniContext output for details.";
+        sidebarProvider.refresh();
+      }
+    },
+  );
+
+  // Poll for status updates for sidebar (non-blocking; sidebar guards internally)
   sidebarRefreshInterval = setInterval(() => {
     sidebarProvider.refresh();
   }, 10000);
@@ -341,28 +419,51 @@ async function handlePrefetchConfigChange(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 function getBinaryPath(): string {
+  // 1. User-configured explicit path always wins
   const config = vscode.workspace.getConfiguration("omnicontext");
   const configured = config.get<string>("binaryPath", "");
-  if (configured) {
+  if (configured && fs.existsSync(configured)) {
     return configured;
   }
 
+  // 2. Bootstrap result (auto-downloaded or bundled) - highest confidence
+  if (bootstrapResult && fs.existsSync(bootstrapResult.cliBinary)) {
+    return bootstrapResult.cliBinary;
+  }
+
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  const ext = process.platform === "win32" ? ".exe" : "";
+  const binName = `omnicontext${ext}`;
+
+  // 3. Ordered candidate list — checked with fs.existsSync (non-blocking)
   const candidates = [
-    "omnicontext",
-    path.join(process.env.HOME || "", ".cargo", "bin", "omnicontext"),
+    // Standalone install.ps1 / install.sh location
+    path.join(home, ".omnicontext", "bin", binName),
+    // Linux ~/.local/bin
+    path.join(home, ".local", "bin", binName),
+    // Developer cargo install
+    path.join(home, ".cargo", "bin", binName),
   ];
 
   for (const candidate of candidates) {
-    try {
-      cp.execSync(`"${candidate}" --version`, { stdio: "ignore" });
+    if (fs.existsSync(candidate)) {
       return candidate;
-    } catch {
-      // Not found, try next
     }
   }
 
-  vscode.window.showErrorMessage(
-    "OmniContext binary not found. Install with: cargo install omni-cli",
+  // 4. Last resort: system PATH probe (synchronous but fast on PATH hits)
+  try {
+    cp.execSync(`omnicontext --version`, {
+      stdio: "ignore",
+      timeout: 2000,
+    });
+    return "omnicontext";
+  } catch {
+    // Not in PATH
+  }
+
+  outputChannel.appendLine(
+    "[binary] omnicontext not found. Bootstrap should have resolved this.",
   );
   return "";
 }
@@ -475,6 +576,7 @@ function stopDaemon() {
   }
   reconnectAttempts = 0;
   currentRepoRoot = null;
+  isDaemonConnected = false;
 
   if (ipcClient) {
     try {
@@ -513,6 +615,7 @@ async function connectIpc(repoRoot: string): Promise<void> {
     client.on("connect", () => {
       outputChannel.appendLine("[ipc] connected");
       ipcClient = client;
+      isDaemonConnected = true;
 
       // Reset reconnection attempts on successful connection
       reconnectAttempts = 0;
@@ -551,6 +654,7 @@ async function connectIpc(repoRoot: string): Promise<void> {
     client.on("error", (err) => {
       outputChannel.appendLine(`[ipc] error: ${err.message}`);
       ipcClient = null;
+      isDaemonConnected = false;
 
       // Trigger reconnection on error
       scheduleReconnect();
@@ -561,6 +665,7 @@ async function connectIpc(repoRoot: string): Promise<void> {
     client.on("close", () => {
       outputChannel.appendLine("[ipc] disconnected");
       ipcClient = null;
+      isDaemonConnected = false;
 
       // Trigger reconnection on close
       scheduleReconnect();
@@ -661,13 +766,15 @@ function sendIpcRequest(method: string, params: any): Promise<any> {
       reject(new Error("IPC write buffer full"));
     }
 
-    // Timeout after 30s
+    // Short timeout for status/metrics requests (3s); longer for user-initiated preflight (15s).
+    // This prevents stacked timed-out promises from freezing the sidebar.
+    const timeoutMs = method === "preflight" ? 15000 : 3000;
     setTimeout(() => {
       if (pendingRequests.has(id)) {
         pendingRequests.delete(id);
-        reject(new Error(`IPC request timeout: ${method}`));
+        reject(new Error(`IPC request timeout: ${method} (${timeoutMs}ms)`));
       }
-    }, 30000);
+    }, timeoutMs);
   });
 }
 

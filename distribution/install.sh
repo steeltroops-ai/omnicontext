@@ -209,6 +209,84 @@ info "omnicontext-mcp      ${DIM}${BIN_MCP_SIZE}${RESET}"
     info "omnicontext-daemon   ${DIM}$(du -sh "${BIN_DIR}/omnicontext-daemon" | cut -f1)${RESET}"
 
 # ---------------------------------------------------------------------------
+# ONNX Runtime shared library -- required for the embedding model.
+# The engine links ort dynamically; the library must be co-located with the binary.
+# ---------------------------------------------------------------------------
+ONNX_VERSION="1.23.0"   # Must match the 'ort' crate version in Cargo.toml
+
+install_onnx_runtime() {
+    local dest_dir="$1"
+    local version="$2"
+    local onnx_tmp
+    onnx_tmp="$(mktemp -d)"
+    trap 'rm -rf "$onnx_tmp"' RETURN
+
+    if [ "$(uname -s)" = "Darwin" ]; then
+        if [ "$(uname -m)" = "arm64" ]; then
+            local onnx_url="https://github.com/microsoft/onnxruntime/releases/download/v${version}/onnxruntime-osx-arm64-${version}.tgz"
+            local lib_name="libonnxruntime.${version}.dylib"
+            local lib_link="libonnxruntime.dylib"
+        else
+            local onnx_url="https://github.com/microsoft/onnxruntime/releases/download/v${version}/onnxruntime-osx-x86_64-${version}.tgz"
+            local lib_name="libonnxruntime.${version}.dylib"
+            local lib_link="libonnxruntime.dylib"
+        fi
+    else
+        local onnx_url="https://github.com/microsoft/onnxruntime/releases/download/v${version}/onnxruntime-linux-x64-${version}.tgz"
+        local lib_name="libonnxruntime.so.${version}"
+        local lib_link="libonnxruntime.so"
+    fi
+
+    info "Fetching ONNX Runtime ${version} from github.com/microsoft..."
+    info "URL  ${DIM}${onnx_url}${RESET}"
+
+    if ! curl -#Lf "$onnx_url" -o "${onnx_tmp}/onnxruntime.tgz" 2>&1; then
+        warn "ONNX Runtime download failed. Context injection may not work."
+        return 1
+    fi
+
+    tar -xzf "${onnx_tmp}/onnxruntime.tgz" -C "$onnx_tmp"
+
+    # Find the shared library recursively (handles nested dirs)
+    local lib_src
+    lib_src=$(find "$onnx_tmp" -name "$lib_name" -type f | head -n1)
+    if [ -z "$lib_src" ]; then
+        # Fallback: find any .so or .dylib
+        lib_src=$(find "$onnx_tmp" -name "libonnxruntime*" -type f | head -n1)
+    fi
+
+    if [ -z "$lib_src" ]; then
+        warn "ONNX Runtime library not found inside archive."
+        return 1
+    fi
+
+    cp "$lib_src" "${dest_dir}/$(basename "$lib_src")"
+    # Create an unversioned symlink so the engine can load it by simple name
+    ln -sf "$(basename "$lib_src")" "${dest_dir}/${lib_link}" 2>/dev/null || true
+    return 0
+}
+
+# Determine the expected library name for the current platform
+if [ "$(uname -s)" = "Darwin" ]; then
+    ONNX_LIB="${BIN_DIR}/libonnxruntime.dylib"
+else
+    ONNX_LIB="${BIN_DIR}/libonnxruntime.so"
+fi
+
+if [ -f "$ONNX_LIB" ] || ls "${BIN_DIR}"/libonnxruntime* 2>/dev/null | grep -q .; then
+    ok "ONNX Runtime already present  ${DIM}${BIN_DIR}${RESET}"
+else
+    info "ONNX Runtime library missing -- fetching from Microsoft..."
+    if install_onnx_runtime "$BIN_DIR" "$ONNX_VERSION"; then
+        ok "ONNX Runtime installed"
+    else
+        warn "ONNX Runtime auto-install failed."
+        warn "Re-run this script when the network is available."
+        warn "Or run 'OmniContext: Repair Environment' from the VS Code sidebar."
+    fi
+fi
+
+# ---------------------------------------------------------------------------
 # PATH bootstrap (non-login shells)
 # ---------------------------------------------------------------------------
 export PATH="${BIN_DIR}:${PATH}"

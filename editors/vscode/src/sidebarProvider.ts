@@ -3,536 +3,622 @@
  * Provides comprehensive system status, metrics, and controls.
  */
 
-import * as vscode from 'vscode';
-import { CacheStatsManager } from './cacheStats';
-import { EventTracker } from './eventTracker';
+import * as vscode from "vscode";
+import { CacheStatsManager } from "./cacheStats";
+import { EventTracker } from "./eventTracker";
+import { BootstrapStatus } from "./bootstrapService";
 
 interface SystemStatus {
-    initialization_status: 'initializing' | 'ready' | 'error';
-    connection_health: 'connected' | 'disconnected' | 'reconnecting';
-    last_index_time?: number;
-    daemon_uptime_seconds: number;
-    files_indexed: number;
-    chunks_indexed: number;
+  initialization_status: "initializing" | "ready" | "error";
+  connection_health: "connected" | "disconnected" | "reconnecting";
+  last_index_time?: number;
+  daemon_uptime_seconds: number;
+  files_indexed: number;
+  chunks_indexed: number;
 }
 
 interface PerformanceMetrics {
-    search_latency_p50_ms: number;
-    search_latency_p95_ms: number;
-    search_latency_p99_ms: number;
-    embedding_coverage_percent: number;
-    memory_usage_bytes: number;
-    peak_memory_usage_bytes: number;
-    total_searches: number;
+  search_latency_p50_ms: number;
+  search_latency_p95_ms: number;
+  search_latency_p99_ms: number;
+  embedding_coverage_percent: number;
+  memory_usage_bytes: number;
+  peak_memory_usage_bytes: number;
+  total_searches: number;
 }
 
 interface ActivityLogEntry {
-    type: string;
-    status: 'success' | 'error' | 'warning' | 'info';
-    time: string;
-    details: string;
-    timestamp: number;
+  type: string;
+  status: "success" | "error" | "warning" | "info";
+  time: string;
+  details: string;
+  timestamp: number;
 }
 
 export class OmniSidebarProvider implements vscode.WebviewViewProvider {
-    private _view?: vscode.WebviewView;
-    private activityLog: ActivityLogEntry[] = [];
-    private readonly maxActivityEntries = 10;
+  private _view?: vscode.WebviewView;
+  private activityLog: ActivityLogEntry[] = [];
+  private readonly maxActivityEntries = 10;
 
-    constructor(
-        private readonly extensionUri: vscode.Uri,
-        private readonly cacheStatsManager: CacheStatsManager,
-        private readonly eventTracker: EventTracker,
-        private readonly sendIpcRequest: (method: string, params: any) => Promise<any>
-    ) { }
+  constructor(
+    private readonly extensionUri: vscode.Uri,
+    private readonly cacheStatsManager: CacheStatsManager,
+    private readonly eventTracker: EventTracker,
+    private readonly sendIpcRequest: (
+      method: string,
+      params: any,
+    ) => Promise<any>,
+    private readonly isDaemonConnected: () => boolean = () => false,
+  ) {}
 
-    /**
-     * Resolve the webview view.
-     */
-    public async resolveWebviewView(
-        webviewView: vscode.WebviewView,
-        context: vscode.WebviewViewResolveContext,
-        token: vscode.CancellationToken
-    ): Promise<void> {
-        this._view = webviewView;
+  /**
+   * Send a bootstrap status update directly to the sidebar webview.
+   * Called by extension.ts during the bootstrap phase before daemon starts.
+   */
+  public sendBootstrapStatus(status: BootstrapStatus): void {
+    if (!this._view) {
+      return;
+    }
+    this._view.webview.postMessage({
+      type: "bootstrapStatus",
+      phase: status.phase,
+      message: status.message,
+      progressPercent: status.progressPercent,
+    });
+  }
 
-        webviewView.webview.options = {
-            enableScripts: true,
-            localResourceRoots: [this.extensionUri],
-        };
+  /**
+   * Resolve the webview view.
+   */
+  public async resolveWebviewView(
+    webviewView: vscode.WebviewView,
+    context: vscode.WebviewViewResolveContext,
+    token: vscode.CancellationToken,
+  ): Promise<void> {
+    this._view = webviewView;
 
-        webviewView.webview.html = this.getHtmlForWebview(webviewView.webview);
+    webviewView.webview.options = {
+      enableScripts: true,
+      localResourceRoots: [this.extensionUri],
+    };
 
-        // Handle messages from webview
-        webviewView.webview.onDidReceiveMessage(async (message) => {
-            await this.handleWebviewMessage(message);
-        });
+    webviewView.webview.html = this.getHtmlForWebview(webviewView.webview);
 
-        // Initial refresh
+    // Handle messages from webview
+    webviewView.webview.onDidReceiveMessage(async (message) => {
+      await this.handleWebviewMessage(message);
+    });
+
+    // Initial refresh
+    await this.refresh();
+  }
+
+  /**
+   * Refresh the sidebar with latest data.
+   */
+  public async refresh(): Promise<void> {
+    if (!this._view) {
+      return;
+    }
+
+    // Circuit breaker: skip all IPC calls when daemon is not connected.
+    // This is the primary fix for the "sidebar freeze" bug where awaiting
+    // IPC calls on a non-existent daemon stacked up hundreds of timed-out promises.
+    if (!this.isDaemonConnected()) {
+      this._view.webview.postMessage({ type: "daemonOffline" });
+      return;
+    }
+
+    // Retrieve cache statistics
+    const cacheStats = await this.cacheStatsManager.getStats();
+
+    // Retrieve system status
+    const systemStatus = await this.getSystemStatus();
+
+    // Retrieve performance metrics
+    const performanceMetrics = await this.getPerformanceMetrics();
+
+    // Get prefetch enabled state from configuration
+    const config = vscode.workspace.getConfiguration("omnicontext.prefetch");
+    const prefetchEnabled = config.get<boolean>("enabled", true);
+
+    // Determine cache status
+    let cacheStatus: "active" | "disabled" | "offline";
+    let cacheStatusText: string;
+
+    if (!cacheStats) {
+      cacheStatus = "offline";
+      cacheStatusText = "Offline";
+    } else if (!prefetchEnabled) {
+      cacheStatus = "disabled";
+      cacheStatusText = "Disabled";
+    } else {
+      cacheStatus = "active";
+      cacheStatusText = "Active";
+    }
+
+    // Format cache statistics
+    const hitRate = cacheStats
+      ? `${(cacheStats.hit_rate * 100).toFixed(1)}%`
+      : "0%";
+    const hits = cacheStats ? cacheStats.hits.toString() : "0";
+    const misses = cacheStats ? cacheStats.misses.toString() : "0";
+    const cacheSize = cacheStats
+      ? `${cacheStats.size}/${cacheStats.capacity}`
+      : "0/100";
+
+    this._view.webview.postMessage({
+      type: "updateCacheStats",
+      data: {
+        status: cacheStatus,
+        statusText: cacheStatusText,
+        hitRate,
+        hits,
+        misses,
+        cacheSize,
+        prefetchEnabled,
+      },
+    });
+
+    // Send system status update
+    if (systemStatus) {
+      this._view.webview.postMessage({
+        type: "updateSystemStatus",
+        status: systemStatus,
+      });
+    }
+
+    // Send performance metrics update
+    if (performanceMetrics) {
+      this._view.webview.postMessage({
+        type: "updatePerformanceMetrics",
+        metrics: performanceMetrics,
+      });
+    }
+
+    // Send repository info
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (workspaceFolders && workspaceFolders.length > 0) {
+      const repoPath = workspaceFolders[0].uri.fsPath;
+      this._view.webview.postMessage({
+        type: "updateRepositoryInfo",
+        repoPath,
+      });
+    }
+
+    // Send automation settings
+    const omniConfig = vscode.workspace.getConfiguration("omnicontext");
+    const automationConfig = vscode.workspace.getConfiguration(
+      "omnicontext.automation",
+    );
+    this._view.webview.postMessage({
+      type: "updateAutomationSettings",
+      settings: {
+        autoIndex: omniConfig.get<boolean>("autoIndex", true),
+        autoStartDaemon: omniConfig.get<boolean>("autoStartDaemon", true),
+        autoSyncMcp: automationConfig.get<boolean>("autoSyncMcp", false),
+      },
+    });
+
+    // Send activity log
+    this._view.webview.postMessage({
+      type: "updateActivityLog",
+      activities: this.activityLog.slice(-this.maxActivityEntries),
+    });
+
+    // Send system info
+    this._view.webview.postMessage({
+      type: "updateSystemInfo",
+      info: {
+        version:
+          vscode.extensions.getExtension("steeltroops-ai.omnicontext")
+            ?.packageJSON.version || "0.2.0",
+        platform: `${process.platform} ${process.arch}`,
+      },
+    });
+  }
+
+  /**
+   * Get system status from daemon.
+   */
+  private async getSystemStatus(): Promise<SystemStatus | null> {
+    try {
+      const result = await this.sendIpcRequest("system_status", {});
+      return result as SystemStatus;
+    } catch (err) {
+      return null;
+    }
+  }
+
+  /**
+   * Get performance metrics from daemon.
+   */
+  private async getPerformanceMetrics(): Promise<PerformanceMetrics | null> {
+    try {
+      const result = await this.sendIpcRequest("performance_metrics", {});
+      return result as PerformanceMetrics;
+    } catch (err) {
+      return null;
+    }
+  }
+
+  /**
+   * Handle messages from the webview.
+   */
+  private async handleWebviewMessage(message: any): Promise<void> {
+    switch (message.command) {
+      case "refreshStatus":
         await this.refresh();
+        break;
+
+      case "clearCache":
+        await this.handleClearCache();
+        break;
+
+      case "togglePrefetch":
+        await this.handleTogglePrefetch(message.enabled);
+        break;
+
+      case "reindexRepository":
+        await this.handleReindexRepository();
+        break;
+
+      case "clearIndex":
+        await this.handleClearIndex();
+        break;
+
+      case "toggleAutoIndex":
+        await this.handleToggleAutoIndex(message.enabled);
+        break;
+
+      case "toggleAutoDaemon":
+        await this.handleToggleAutoDaemon(message.enabled);
+        break;
+
+      case "toggleAutoSync":
+        await this.handleToggleAutoSync(message.enabled);
+        break;
+
+      case "quickSearch":
+        await this.handleQuickSearch();
+        break;
+
+      case "syncToClaudeMcp":
+        await this.handleSyncToClaudeMcp();
+        break;
+
+      case "syncToKiroMcp":
+        await this.handleSyncToKiroMcp();
+        break;
+
+      case "clearActivityLog":
+        await this.handleClearActivityLog();
+        break;
+
+      case "copyDiagnostics":
+        await this.handleCopyDiagnostics();
+        break;
+
+      case "openLogs":
+        await this.handleOpenLogs();
+        break;
+
+      case "viewActivityDetails":
+        await this.handleViewActivityDetails(message.index);
+        break;
+
+      default:
+        console.warn("Unknown webview message:", message);
+    }
+  }
+
+  /**
+   * Handle clear cache request.
+   */
+  private async handleClearCache(): Promise<void> {
+    try {
+      await this.cacheStatsManager.clearCache();
+      vscode.window.showInformationMessage("Cache cleared successfully");
+      this.logActivity("Clear Cache", "success", "Pre-fetch cache cleared");
+      await this.refresh();
+    } catch (err) {
+      vscode.window.showErrorMessage(`Failed to clear cache: ${err}`);
+      this.logActivity("Clear Cache", "error", `Failed: ${err}`);
+    }
+  }
+
+  /**
+   * Handle toggle prefetch request.
+   */
+  private async handleTogglePrefetch(enabled: boolean): Promise<void> {
+    const config = vscode.workspace.getConfiguration("omnicontext.prefetch");
+    await config.update(
+      "enabled",
+      enabled,
+      vscode.ConfigurationTarget.Workspace,
+    );
+    this.eventTracker.setEnabled(enabled);
+    await this.refresh();
+  }
+
+  /**
+   * Handle re-index repository request.
+   */
+  private async handleReindexRepository(): Promise<void> {
+    try {
+      this.logActivity("Re-index", "info", "Starting repository re-index...");
+
+      // Show progress notification
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: "Re-indexing repository...",
+          cancellable: false,
+        },
+        async (progress) => {
+          progress.report({ increment: 0, message: "Starting indexing..." });
+
+          // Trigger re-index via IPC
+          const result = await this.sendIpcRequest("index", {});
+
+          progress.report({ increment: 100, message: "Complete!" });
+
+          const message = `Re-indexed ${result.files_processed} files, ${result.chunks_created} chunks in ${result.elapsed_ms}ms`;
+          vscode.window.showInformationMessage(message);
+          this.logActivity("Re-index", "success", message);
+        },
+      );
+
+      await this.refresh();
+    } catch (err: any) {
+      vscode.window.showErrorMessage(`Failed to re-index: ${err.message}`);
+      this.logActivity("Re-index", "error", `Failed: ${err.message}`);
+    }
+  }
+
+  /**
+   * Handle clear index request.
+   */
+  private async handleClearIndex(): Promise<void> {
+    try {
+      // Clear the index by sending a clear_index IPC request
+      await this.sendIpcRequest("clear_index", {});
+      vscode.window.showInformationMessage(
+        "Index cleared successfully. Re-indexing recommended.",
+      );
+      this.logActivity(
+        "Clear Index",
+        "warning",
+        "Index cleared - re-indexing recommended",
+      );
+      await this.refresh();
+    } catch (err: any) {
+      vscode.window.showErrorMessage(`Failed to clear index: ${err.message}`);
+      this.logActivity("Clear Index", "error", `Failed: ${err.message}`);
+    }
+  }
+
+  /**
+   * Handle toggle auto-index request.
+   */
+  private async handleToggleAutoIndex(enabled: boolean): Promise<void> {
+    const config = vscode.workspace.getConfiguration("omnicontext");
+    await config.update(
+      "autoIndex",
+      enabled,
+      vscode.ConfigurationTarget.Global,
+    );
+    vscode.window.showInformationMessage(
+      `Auto-index ${enabled ? "enabled" : "disabled"}`,
+    );
+  }
+
+  /**
+   * Handle toggle auto-daemon request.
+   */
+  private async handleToggleAutoDaemon(enabled: boolean): Promise<void> {
+    const config = vscode.workspace.getConfiguration("omnicontext");
+    await config.update(
+      "autoStartDaemon",
+      enabled,
+      vscode.ConfigurationTarget.Global,
+    );
+    vscode.window.showInformationMessage(
+      `Auto-start daemon ${enabled ? "enabled" : "disabled"}`,
+    );
+  }
+
+  /**
+   * Handle toggle auto-sync request.
+   */
+  private async handleToggleAutoSync(enabled: boolean): Promise<void> {
+    const config = vscode.workspace.getConfiguration("omnicontext.automation");
+    await config.update(
+      "autoSyncMcp",
+      enabled,
+      vscode.ConfigurationTarget.Global,
+    );
+    vscode.window.showInformationMessage(
+      `Auto-sync MCP ${enabled ? "enabled" : "disabled"}`,
+    );
+  }
+
+  /**
+   * Handle quick search request.
+   */
+  private async handleQuickSearch(): Promise<void> {
+    // Trigger the search command
+    vscode.commands.executeCommand("omnicontext.search");
+  }
+
+  /**
+   * Handle sync to Claude MCP request.
+   */
+  private async handleSyncToClaudeMcp(): Promise<void> {
+    // Trigger the sync command
+    vscode.commands.executeCommand("omnicontext.syncMcp");
+  }
+
+  /**
+   * Handle sync to Kiro MCP request.
+   */
+  private async handleSyncToKiroMcp(): Promise<void> {
+    // Trigger the sync command (same as Claude for now)
+    vscode.commands.executeCommand("omnicontext.syncMcp");
+  }
+
+  /**
+   * Log an activity to the activity log.
+   */
+  public logActivity(
+    type: string,
+    status: "success" | "error" | "warning" | "info",
+    details: string,
+  ): void {
+    const now = Date.now();
+    const timeAgo = this.formatTimeAgo(now);
+
+    this.activityLog.push({
+      type,
+      status,
+      time: timeAgo,
+      details,
+      timestamp: now,
+    });
+
+    // Keep only last 100 entries
+    if (this.activityLog.length > 100) {
+      this.activityLog = this.activityLog.slice(-100);
     }
 
-    /**
-     * Refresh the sidebar with latest data.
-     */
-    public async refresh(): Promise<void> {
-        if (!this._view) {
-            return;
-        }
+    // Update webview if visible
+    if (this._view) {
+      this._view.webview.postMessage({
+        type: "updateActivityLog",
+        activities: this.activityLog.slice(-this.maxActivityEntries),
+      });
+    }
+  }
 
-        // Retrieve cache statistics
-        const cacheStats = await this.cacheStatsManager.getStats();
+  /**
+   * Format timestamp as relative time.
+   */
+  private formatTimeAgo(timestamp: number): string {
+    const seconds = Math.floor((Date.now() - timestamp) / 1000);
 
-        // Retrieve system status
-        const systemStatus = await this.getSystemStatus();
+    if (seconds < 60) return `${seconds}s ago`;
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+    return `${Math.floor(seconds / 86400)}d ago`;
+  }
 
-        // Retrieve performance metrics
-        const performanceMetrics = await this.getPerformanceMetrics();
+  /**
+   * Handle clear activity log request.
+   */
+  private async handleClearActivityLog(): Promise<void> {
+    this.activityLog = [];
+    await this.refresh();
+  }
 
-        // Get prefetch enabled state from configuration
-        const config = vscode.workspace.getConfiguration('omnicontext.prefetch');
-        const prefetchEnabled = config.get<boolean>('enabled', true);
+  /**
+   * Handle copy diagnostics request.
+   */
+  private async handleCopyDiagnostics(): Promise<void> {
+    const diagnostics = await this.collectDiagnostics();
+    await vscode.env.clipboard.writeText(diagnostics);
+    vscode.window.showInformationMessage("Diagnostics copied to clipboard");
+    this.logActivity(
+      "Copy Diagnostics",
+      "success",
+      "System diagnostics copied to clipboard",
+    );
+  }
 
-        // Determine cache status
-        let cacheStatus: 'active' | 'disabled' | 'offline';
-        let cacheStatusText: string;
+  /**
+   * Collect system diagnostics.
+   */
+  private async collectDiagnostics(): Promise<string> {
+    const extension = vscode.extensions.getExtension(
+      "steeltroops-ai.omnicontext",
+    );
+    const workspaceFolders = vscode.workspace.workspaceFolders;
 
-        if (!cacheStats) {
-            cacheStatus = 'offline';
-            cacheStatusText = 'Offline';
-        } else if (!prefetchEnabled) {
-            cacheStatus = 'disabled';
-            cacheStatusText = 'Disabled';
-        } else {
-            cacheStatus = 'active';
-            cacheStatusText = 'Active';
-        }
+    let diagnostics = "# OmniContext Diagnostics\n\n";
+    diagnostics += `Extension Version: ${extension?.packageJSON.version || "unknown"}\n`;
+    diagnostics += `VS Code Version: ${vscode.version}\n`;
+    diagnostics += `Platform: ${process.platform} ${process.arch}\n`;
+    diagnostics += `Node Version: ${process.version}\n\n`;
 
-        // Format cache statistics
-        const hitRate = cacheStats ? `${(cacheStats.hit_rate * 100).toFixed(1)}%` : '0%';
-        const hits = cacheStats ? cacheStats.hits.toString() : '0';
-        const misses = cacheStats ? cacheStats.misses.toString() : '0';
-        const cacheSize = cacheStats ? `${cacheStats.size}/${cacheStats.capacity}` : '0/100';
-
-        this._view.webview.postMessage({
-            type: 'updateCacheStats',
-            data: {
-                status: cacheStatus,
-                statusText: cacheStatusText,
-                hitRate,
-                hits,
-                misses,
-                cacheSize,
-                prefetchEnabled,
-            },
-        });
-
-        // Send system status update
-        if (systemStatus) {
-            this._view.webview.postMessage({
-                type: 'updateSystemStatus',
-                status: systemStatus,
-            });
-        }
-
-        // Send performance metrics update
-        if (performanceMetrics) {
-            this._view.webview.postMessage({
-                type: 'updatePerformanceMetrics',
-                metrics: performanceMetrics,
-            });
-        }
-
-        // Send repository info
-        const workspaceFolders = vscode.workspace.workspaceFolders;
-        if (workspaceFolders && workspaceFolders.length > 0) {
-            const repoPath = workspaceFolders[0].uri.fsPath;
-            this._view.webview.postMessage({
-                type: 'updateRepositoryInfo',
-                repoPath,
-            });
-        }
-
-        // Send automation settings
-        const omniConfig = vscode.workspace.getConfiguration('omnicontext');
-        const automationConfig = vscode.workspace.getConfiguration('omnicontext.automation');
-        this._view.webview.postMessage({
-            type: 'updateAutomationSettings',
-            settings: {
-                autoIndex: omniConfig.get<boolean>('autoIndex', true),
-                autoStartDaemon: omniConfig.get<boolean>('autoStartDaemon', true),
-                autoSyncMcp: automationConfig.get<boolean>('autoSyncMcp', false),
-            },
-        });
-
-        // Send activity log
-        this._view.webview.postMessage({
-            type: 'updateActivityLog',
-            activities: this.activityLog.slice(-this.maxActivityEntries),
-        });
-
-        // Send system info
-        this._view.webview.postMessage({
-            type: 'updateSystemInfo',
-            info: {
-                version: vscode.extensions.getExtension('steeltroops-ai.omnicontext')?.packageJSON.version || '0.2.0',
-                platform: `${process.platform} ${process.arch}`,
-            },
-        });
+    if (workspaceFolders && workspaceFolders.length > 0) {
+      diagnostics += `Workspace: ${workspaceFolders[0].uri.fsPath}\n`;
     }
 
-    /**
-     * Get system status from daemon.
-     */
-    private async getSystemStatus(): Promise<SystemStatus | null> {
-        try {
-            const result = await this.sendIpcRequest('system_status', {});
-            return result as SystemStatus;
-        } catch (err) {
-            return null;
-        }
+    // Get system status if available
+    try {
+      const status = await this.getSystemStatus();
+      if (status) {
+        diagnostics += `\n## System Status\n`;
+        diagnostics += `Initialization: ${status.initialization_status}\n`;
+        diagnostics += `Connection: ${status.connection_health}\n`;
+        diagnostics += `Files Indexed: ${status.files_indexed}\n`;
+        diagnostics += `Chunks Indexed: ${status.chunks_indexed}\n`;
+        diagnostics += `Daemon Uptime: ${status.daemon_uptime_seconds}s\n`;
+      }
+    } catch (err) {
+      diagnostics += `\nDaemon Status: Not connected\n`;
     }
 
-    /**
-     * Get performance metrics from daemon.
-     */
-    private async getPerformanceMetrics(): Promise<PerformanceMetrics | null> {
-        try {
-            const result = await this.sendIpcRequest('performance_metrics', {});
-            return result as PerformanceMetrics;
-        } catch (err) {
-            return null;
-        }
-    }
+    return diagnostics;
+  }
 
-    /**
-     * Handle messages from the webview.
-     */
-    private async handleWebviewMessage(message: any): Promise<void> {
-        switch (message.command) {
-            case 'refreshStatus':
-                await this.refresh();
-                break;
+  /**
+   * Handle open logs request.
+   */
+  private async handleOpenLogs(): Promise<void> {
+    vscode.commands.executeCommand("workbench.action.output.show");
+    this.logActivity("Open Logs", "info", "Output channel opened");
+  }
 
-            case 'clearCache':
-                await this.handleClearCache();
-                break;
-
-            case 'togglePrefetch':
-                await this.handleTogglePrefetch(message.enabled);
-                break;
-
-            case 'reindexRepository':
-                await this.handleReindexRepository();
-                break;
-
-            case 'clearIndex':
-                await this.handleClearIndex();
-                break;
-
-            case 'toggleAutoIndex':
-                await this.handleToggleAutoIndex(message.enabled);
-                break;
-
-            case 'toggleAutoDaemon':
-                await this.handleToggleAutoDaemon(message.enabled);
-                break;
-
-            case 'toggleAutoSync':
-                await this.handleToggleAutoSync(message.enabled);
-                break;
-
-            case 'quickSearch':
-                await this.handleQuickSearch();
-                break;
-
-            case 'syncToClaudeMcp':
-                await this.handleSyncToClaudeMcp();
-                break;
-
-            case 'syncToKiroMcp':
-                await this.handleSyncToKiroMcp();
-                break;
-
-            case 'clearActivityLog':
-                await this.handleClearActivityLog();
-                break;
-
-            case 'copyDiagnostics':
-                await this.handleCopyDiagnostics();
-                break;
-
-            case 'openLogs':
-                await this.handleOpenLogs();
-                break;
-
-            case 'viewActivityDetails':
-                await this.handleViewActivityDetails(message.index);
-                break;
-
-            default:
-                console.warn('Unknown webview message:', message);
-        }
-    }
-
-    /**
-     * Handle clear cache request.
-     */
-    private async handleClearCache(): Promise<void> {
-        try {
-            await this.cacheStatsManager.clearCache();
-            vscode.window.showInformationMessage('Cache cleared successfully');
-            this.logActivity('Clear Cache', 'success', 'Pre-fetch cache cleared');
-            await this.refresh();
-        } catch (err) {
-            vscode.window.showErrorMessage(`Failed to clear cache: ${err}`);
-            this.logActivity('Clear Cache', 'error', `Failed: ${err}`);
-        }
-    }
-
-    /**
-     * Handle toggle prefetch request.
-     */
-    private async handleTogglePrefetch(enabled: boolean): Promise<void> {
-        const config = vscode.workspace.getConfiguration('omnicontext.prefetch');
-        await config.update('enabled', enabled, vscode.ConfigurationTarget.Workspace);
-        this.eventTracker.setEnabled(enabled);
-        await this.refresh();
-    }
-
-    /**
-     * Handle re-index repository request.
-     */
-    private async handleReindexRepository(): Promise<void> {
-        try {
-            this.logActivity('Re-index', 'info', 'Starting repository re-index...');
-
-            // Show progress notification
-            await vscode.window.withProgress(
-                {
-                    location: vscode.ProgressLocation.Notification,
-                    title: 'Re-indexing repository...',
-                    cancellable: false,
-                },
-                async (progress) => {
-                    progress.report({ increment: 0, message: 'Starting indexing...' });
-
-                    // Trigger re-index via IPC
-                    const result = await this.sendIpcRequest('index', {});
-
-                    progress.report({ increment: 100, message: 'Complete!' });
-
-                    const message = `Re-indexed ${result.files_processed} files, ${result.chunks_created} chunks in ${result.elapsed_ms}ms`;
-                    vscode.window.showInformationMessage(message);
-                    this.logActivity('Re-index', 'success', message);
-                }
-            );
-
-            await this.refresh();
-        } catch (err: any) {
-            vscode.window.showErrorMessage(`Failed to re-index: ${err.message}`);
-            this.logActivity('Re-index', 'error', `Failed: ${err.message}`);
-        }
-    }
-
-    /**
-     * Handle clear index request.
-     */
-    private async handleClearIndex(): Promise<void> {
-        try {
-            // Clear the index by sending a clear_index IPC request
-            await this.sendIpcRequest('clear_index', {});
-            vscode.window.showInformationMessage('Index cleared successfully. Re-indexing recommended.');
-            this.logActivity('Clear Index', 'warning', 'Index cleared - re-indexing recommended');
-            await this.refresh();
-        } catch (err: any) {
-            vscode.window.showErrorMessage(`Failed to clear index: ${err.message}`);
-            this.logActivity('Clear Index', 'error', `Failed: ${err.message}`);
-        }
-    }
-
-    /**
-     * Handle toggle auto-index request.
-     */
-    private async handleToggleAutoIndex(enabled: boolean): Promise<void> {
-        const config = vscode.workspace.getConfiguration('omnicontext');
-        await config.update('autoIndex', enabled, vscode.ConfigurationTarget.Global);
-        vscode.window.showInformationMessage(`Auto-index ${enabled ? 'enabled' : 'disabled'}`);
-    }
-
-    /**
-     * Handle toggle auto-daemon request.
-     */
-    private async handleToggleAutoDaemon(enabled: boolean): Promise<void> {
-        const config = vscode.workspace.getConfiguration('omnicontext');
-        await config.update('autoStartDaemon', enabled, vscode.ConfigurationTarget.Global);
-        vscode.window.showInformationMessage(`Auto-start daemon ${enabled ? 'enabled' : 'disabled'}`);
-    }
-
-    /**
-     * Handle toggle auto-sync request.
-     */
-    private async handleToggleAutoSync(enabled: boolean): Promise<void> {
-        const config = vscode.workspace.getConfiguration('omnicontext.automation');
-        await config.update('autoSyncMcp', enabled, vscode.ConfigurationTarget.Global);
-        vscode.window.showInformationMessage(`Auto-sync MCP ${enabled ? 'enabled' : 'disabled'}`);
-    }
-
-    /**
-     * Handle quick search request.
-     */
-    private async handleQuickSearch(): Promise<void> {
-        // Trigger the search command
-        vscode.commands.executeCommand('omnicontext.search');
-    }
-
-    /**
-     * Handle sync to Claude MCP request.
-     */
-    private async handleSyncToClaudeMcp(): Promise<void> {
-        // Trigger the sync command
-        vscode.commands.executeCommand('omnicontext.syncMcp');
-    }
-
-    /**
-     * Handle sync to Kiro MCP request.
-     */
-    private async handleSyncToKiroMcp(): Promise<void> {
-        // Trigger the sync command (same as Claude for now)
-        vscode.commands.executeCommand('omnicontext.syncMcp');
-    }
-
-    /**
-     * Log an activity to the activity log.
-     */
-    public logActivity(type: string, status: 'success' | 'error' | 'warning' | 'info', details: string): void {
-        const now = Date.now();
-        const timeAgo = this.formatTimeAgo(now);
-
-        this.activityLog.push({
-            type,
-            status,
-            time: timeAgo,
-            details,
-            timestamp: now,
-        });
-
-        // Keep only last 100 entries
-        if (this.activityLog.length > 100) {
-            this.activityLog = this.activityLog.slice(-100);
-        }
-
-        // Update webview if visible
-        if (this._view) {
-            this._view.webview.postMessage({
-                type: 'updateActivityLog',
-                activities: this.activityLog.slice(-this.maxActivityEntries),
-            });
-        }
-    }
-
-    /**
-     * Format timestamp as relative time.
-     */
-    private formatTimeAgo(timestamp: number): string {
-        const seconds = Math.floor((Date.now() - timestamp) / 1000);
-
-        if (seconds < 60) return `${seconds}s ago`;
-        if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
-        if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
-        return `${Math.floor(seconds / 86400)}d ago`;
-    }
-
-    /**
-     * Handle clear activity log request.
-     */
-    private async handleClearActivityLog(): Promise<void> {
-        this.activityLog = [];
-        await this.refresh();
-    }
-
-    /**
-     * Handle copy diagnostics request.
-     */
-    private async handleCopyDiagnostics(): Promise<void> {
-        const diagnostics = await this.collectDiagnostics();
-        await vscode.env.clipboard.writeText(diagnostics);
-        vscode.window.showInformationMessage('Diagnostics copied to clipboard');
-        this.logActivity('Copy Diagnostics', 'success', 'System diagnostics copied to clipboard');
-    }
-
-    /**
-     * Collect system diagnostics.
-     */
-    private async collectDiagnostics(): Promise<string> {
-        const extension = vscode.extensions.getExtension('steeltroops-ai.omnicontext');
-        const workspaceFolders = vscode.workspace.workspaceFolders;
-
-        let diagnostics = '# OmniContext Diagnostics\n\n';
-        diagnostics += `Extension Version: ${extension?.packageJSON.version || 'unknown'}\n`;
-        diagnostics += `VS Code Version: ${vscode.version}\n`;
-        diagnostics += `Platform: ${process.platform} ${process.arch}\n`;
-        diagnostics += `Node Version: ${process.version}\n\n`;
-
-        if (workspaceFolders && workspaceFolders.length > 0) {
-            diagnostics += `Workspace: ${workspaceFolders[0].uri.fsPath}\n`;
-        }
-
-        // Get system status if available
-        try {
-            const status = await this.getSystemStatus();
-            if (status) {
-                diagnostics += `\n## System Status\n`;
-                diagnostics += `Initialization: ${status.initialization_status}\n`;
-                diagnostics += `Connection: ${status.connection_health}\n`;
-                diagnostics += `Files Indexed: ${status.files_indexed}\n`;
-                diagnostics += `Chunks Indexed: ${status.chunks_indexed}\n`;
-                diagnostics += `Daemon Uptime: ${status.daemon_uptime_seconds}s\n`;
+  /**
+   * Handle view activity details request.
+   */
+  private async handleViewActivityDetails(index: number): Promise<void> {
+    if (index >= 0 && index < this.activityLog.length) {
+      const activity =
+        this.activityLog[
+          this.activityLog.length - this.maxActivityEntries + index
+        ];
+      if (activity) {
+        vscode.window
+          .showInformationMessage(
+            `${activity.type}: ${activity.details}`,
+            "View Logs",
+          )
+          .then((selection) => {
+            if (selection === "View Logs") {
+              vscode.commands.executeCommand("workbench.action.output.show");
             }
-        } catch (err) {
-            diagnostics += `\nDaemon Status: Not connected\n`;
-        }
-
-        return diagnostics;
+          });
+      }
     }
+  }
 
-    /**
-     * Handle open logs request.
-     */
-    private async handleOpenLogs(): Promise<void> {
-        vscode.commands.executeCommand('workbench.action.output.show');
-        this.logActivity('Open Logs', 'info', 'Output channel opened');
-    }
+  /**
+   * Generate HTML for the webview.
+   */
+  private getHtmlForWebview(webview: vscode.Webview): string {
+    // Get codicon URI
+    const codiconUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(
+        this.extensionUri,
+        "node_modules",
+        "@vscode/codicons",
+        "dist",
+        "codicon.css",
+      ),
+    );
 
-    /**
-     * Handle view activity details request.
-     */
-    private async handleViewActivityDetails(index: number): Promise<void> {
-        if (index >= 0 && index < this.activityLog.length) {
-            const activity = this.activityLog[this.activityLog.length - this.maxActivityEntries + index];
-            if (activity) {
-                vscode.window.showInformationMessage(
-                    `${activity.type}: ${activity.details}`,
-                    'View Logs'
-                ).then(selection => {
-                    if (selection === 'View Logs') {
-                        vscode.commands.executeCommand('workbench.action.output.show');
-                    }
-                });
-            }
-        }
-    }
-
-    /**
-     * Generate HTML for the webview.
-     */
-    private getHtmlForWebview(webview: vscode.Webview): string {
-        // Get codicon URI
-        const codiconUri = webview.asWebviewUri(
-            vscode.Uri.joinPath(this.extensionUri, 'node_modules', '@vscode/codicons', 'dist', 'codicon.css')
-        );
-
-        return `<!DOCTYPE html>
+    return `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -1289,5 +1375,5 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
     </script>
 </body>
 </html>`;
-    }
+  }
 }

@@ -1,214 +1,193 @@
 # Changelog
 
-## [0.8.0] - 2026-03-07
+All notable changes to OmniContext are documented here.  
+Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).  
+Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## What's Changed
-
-### 🔧 Other Changes
-
--  ()
-
-## [0.7.1] - 2026-03-06
-
-## What's Changed
-
-### 🔧 Other Changes
-
--  ()
-
-## [0.7.0] - 2026-03-06
-
-## What's Changed
-
-### 🔧 Other Changes
-
--  ()
-
-## [0.6.1] - 2026-03-06
-
-## What's Changed
-
-### 🔧 Other Changes
-
--  ()
-
-## [0.6.0] - 2026-03-06
-
-## What's Changed
-
-### 🔧 Other Changes
-
--  ()
-
-## [0.5.3] - 2026-03-02
-
-## What's Changed
-
-### 🔧 Other Changes
-
--  ()
-
-## [0.5.2] - 2026-03-02
-
-## What's Changed
-
-### 🔧 Other Changes
-
--  ()
-
-## [0.5.1] - 2026-03-02
-
-## What's Changed
-
-### 🔧 Other Changes
-
--  ()
-
-## [0.5.0] - 2026-03-02
-
-## What's Changed
-
-### 🔧 Other Changes
-
--  ()
-
-## [0.4.0] - 2026-03-02
-
-## What's Changed
-
-### 🔧 Other Changes
-
--  ()
-
-## [0.3.0] - 2026-03-01
-
-## What's Changed
-
-### 🔧 Other Changes
-
--  ()
-
-## [0.2.0] - 2026-03-01
-
-## What's Changed
-
-### 🔧 Other Changes
-
--  ()
-
-All notable changes to this project will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+---
 
 ## [Unreleased]
 
 ### Added
 
-- Initial project scaffold with Cargo workspace
-- omni-core: module architecture (parser, chunker, embedder, index, vector, graph, search, watcher, pipeline)
-- omni-mcp: MCP server binary with stdio/SSE transport args
-- omni-cli: CLI with index, search, status, mcp, config subcommands
-- Tree-sitter grammar registrations for Python, TypeScript, JavaScript, Rust, Go
-- SQLite schema with FTS5 full-text search and sync triggers
-- Configuration system with precedence chain (CLI > env > project > user > defaults)
-- Core domain types: Language, Chunk, Symbol, DependencyEdge, SearchResult
-- Hierarchical error taxonomy (OmniError) with recoverable/degraded/fatal classification
-- Dependency graph with RwLock-protected petgraph DiGraph
-- RRF fusion scoring math for hybrid search
+- Bootstrap service: zero-friction binary auto-download when extension installs — no Rust required
+- ONNX Runtime auto-download for Windows (`.dll`), Linux (`.so`), macOS (`.dylib`) — no manual setup
+- Circuit breaker in sidebar: IPC calls are now skipped when daemon is offline, eliminating sidebar freeze
+- IPC timeout reduced from 30s to 3s for status requests (15s for user-initiated preflight)
+- Event tracker gated on daemon connection — no CPU wasted on keystroke events when engine is offline
+- `sendBootstrapStatus()` on sidebar provider — shows download progress in sidebar during first install
+- `onnxruntime_providers_shared.dll` co-location detection and install on Windows
 
-## [0.3.0] - 2026-03-15
+### Fixed
 
-### Added - VS Code Extension Pre-Fetch Features
+- Sidebar freeze caused by stacked timed-out IPC promises when daemon is not running
+- `getBinaryPath()` was using blocking `execSync` on activation — now uses `fs.existsSync`
+- Extension ignored `~/.omnicontext/bin` (standalone installer path) — now checked as candidate
+- Cache stats `capacity` was hardcoded to 100 — now reads `omnicontext.prefetch.cacheSize` from config
+- `install.ps1` gave passive warning on missing ONNX DLL — now auto-downloads from Microsoft
+- `update.ps1` terminated processes too late (binary was locked) — kill now runs before download
 
-#### Core Functionality
-- **Pre-Fetch Context Caching**: Intelligent caching system that tracks IDE events and pre-fetches relevant code context
-  - Monitors file opens, cursor movements, and text edits
-  - Extracts symbols at cursor position using VS Code language features
-  - Caches search results with configurable TTL (time-to-live)
-  - Automatic cache eviction with LRU (Least Recently Used) policy
+---
 
-#### Event Tracking
-- **EventTracker Module**: Debounced event tracking for optimal performance
-  - File open events (immediate, no debounce)
-  - Cursor movement events (200ms debounce, configurable)
-  - Text edit events (200ms debounce, configurable)
-  - Event queue with 100 entry limit and FIFO overflow handling
-  - Enable/disable toggle for pre-fetch functionality
+## [0.8.0] - 2026-03-07
 
-#### Symbol Extraction
-- **SymbolExtractor Module**: Intelligent symbol extraction at cursor position
-  - Primary: VS Code document symbol provider (language-aware)
-  - Fallback: Word extraction using VS Code word range detection
-  - Recursive nested symbol resolution
-  - Symbol length limiting (100 characters max)
-  - Graceful error handling
+### Added
 
-#### IPC Integration
-- **Daemon Communication**: Robust IPC with reconnection logic
-  - IDE event transmission to daemon via named pipe/socket
-  - Exponential backoff reconnection (max 10 attempts)
-  - Cache-aware preflight handler with `from_cache` flag
-  - New IPC methods: `clear_cache`, `prefetch_stats`, `update_config`
-  - Automatic reconnection on connection loss
-
-#### Sidebar UI
-- **Cache Statistics Display**: Real-time monitoring in VS Code sidebar
-  - Hit rate percentage (cache hits / total requests)
-  - Cache hits and misses counters
-  - Current cache size vs. maximum capacity
-  - Cache status indicator (Active/Disabled/Offline)
-  - Enable/disable toggle switch
-  - Clear cache button with confirmation
-
-#### Configuration
-- **Dynamic Configuration**: Live updates without restart
-  - `omnicontext.prefetch.enabled` - Enable/disable pre-fetch (default: true)
-  - `omnicontext.prefetch.cacheSize` - Max entries (default: 100, range: 10-1000)
-  - `omnicontext.prefetch.cacheTtlSeconds` - TTL in seconds (default: 300, range: 60-3600)
-  - `omnicontext.prefetch.debounceMs` - Event debounce delay (default: 200ms, range: 50-1000)
-  - Configuration change handler with validation
-  - Settings sync to daemon via IPC
-
-#### Context Injection
-- **Cache-Aware Injection**: Visual indicators for cache performance
-  - ⚡ Cache hit indicator (instant response from cache)
-  - 🔍 Fresh search indicator (first time or cache expired)
-  - Timing information for cache hits vs. misses
-  - Automatic context injection into AI chat requests
-  - Invisible to user workflow (seamless integration)
-
-#### Daemon Enhancements
-- **PrefetchCache Module**: High-performance caching in daemon
-  - LRU cache with configurable capacity
-  - TTL-based expiration
-  - Hit/miss statistics tracking
-  - Cache clearing and statistics retrieval
-  - Dynamic configuration updates
+- Zero-Config MCP sync: extension auto-writes to Claude Desktop, Cursor, Continue.dev, Kiro, Windsurf, Cline, RooCode, Trae, Antigravity, Claude Code CLI configs on daemon start
+- `Repair Environment` command: one-click re-download of ONNX Runtime and re-index
+- Distribution scripts (`install.ps1`, `install.sh`) now auto-detect and configure all installed AI clients
+- `omnicontext setup model-download` CLI command to trigger model download without full indexing
+- `omnicontext setup model-status --json` for machine-readable model readiness check
 
 ### Changed
 
-- **Extension Activation**: Now auto-starts daemon and begins event tracking on workspace open
-- **Preflight Handler**: Modified to check cache first, store results on miss
-- **IPC Protocol**: Extended with new methods for cache management and statistics
+- Distribution scripts now show `[v]` / `[!]` / `[x]` status indicators with color support
+- Install step count increased from 6 to 7 to include dedicated MCP auto-configure step
+- Model setup uses new `setup` subcommand when available; falls back to legacy `index .` trigger
 
-### Performance Improvements
+---
 
-- **Reduced Latency**: Cache hits provide instant context (<10ms vs. 50-200ms for fresh search)
-- **Lower Load**: Debouncing reduces unnecessary pre-fetch requests by 60-80%
-- **Memory Efficient**: Configurable cache size with automatic eviction
-- **Network Efficient**: Fewer IPC round-trips due to caching
+## [0.7.1] - 2026-03-06
 
-### Documentation
+### Fixed
 
-- Added comprehensive VS Code extension README (`editors/vscode/README.md`)
-- Configuration guide with recommendations for different project sizes
-- Troubleshooting section for common issues (daemon connection, cache, performance)
-- Cache hit rate expectations and optimization tips
-- Architecture diagrams and component descriptions
+- Version resolution now queries GitHub Releases API first, falling back to `Cargo.toml` source parse
+- Removed unicode em-dash characters that caused PowerShell rendering issues on older terminals
 
-### Expected Impact
+---
 
-- **Cache Hit Rate**: 60-80% for focused work, 30-60% for exploration
-- **Response Time**: 5-10x faster for cache hits (⚡ indicator)
-- **User Experience**: Seamless, invisible context injection with visual feedback
+## [0.7.0] - 2026-03-06
+
+### Added
+
+- Managed `setup` subcommand: `model-download`, `model-status --json` for headless automation
+- Distribution scripts overhauled with cross-platform IDE auto-configuration
+- Kiro IDE support via `powers.mcpServers` namespace (non-standard MCP location)
+
+### Changed
+
+- All distribution scripts share unified color helpers and status output format
+
+---
+
+## [0.6.1] - 2026-03-06
+
+### Fixed
+
+- GitHub Actions release job missing `write` permission for release asset upload
+- Release workflow skips redundant build jobs when no release tag is detected
+
+---
+
+## [0.6.0] - 2026-03-06
+
+### Added
+
+- Zero-Config MCP architecture: manifest published to `~/.omnicontext/mcp-manifest.json`
+- MCP manifest auto-discovery — clients can read location without hardcoded paths
+- `syncMcp` VS Code command writes manifest path into all supported AI client configs
+
+### Changed
+
+- Engine status exposes `language_distribution` field (per-language file counts)
+
+---
+
+## [0.5.3] - 2026-03-02
+
+### Fixed
+
+- MCP install/test scripts updated for new binary layout
+- Daemon database lock conflicts in concurrent test runs resolved
+
+---
+
+## [0.5.0] - 2026-03-02
+
+### Added
+
+- Graph-boosted hybrid search: dependency proximity used to re-rank results
+- In-degree and graph distance integrated into RRF scoring
+- Dynamic version detection in distribution scripts from `Cargo.toml` and GitHub API
+
+### Fixed
+
+- ONNX partial batch failures no longer drop entire file — unembedded chunks fall back to FTS-only
+- `get_file_summary` MCP tool path normalization for Windows UNC paths
+
+---
+
+## [0.4.0] - 2026-03-02
+
+### Added
+
+- **Phase 7 complete**: Enhanced VS Code sidebar with professional codicons, real-time performance metrics, activity log, and cache statistics panel
+- Language distribution visualization in sidebar
+- One-click environment repair from sidebar
+
+---
+
+## [0.3.0] - 2026-03-01
+
+### Added
+
+- **Phase 6 complete**: VS Code extension pre-fetch context caching system
+- `EventTracker` module: debounced file-open, cursor-move, and text-edit tracking
+- `SymbolExtractor` module: cursor-position symbol detection using VS Code language providers
+- `CacheStatsManager`: hit rate, size, and TTL statistics surfaced in sidebar
+- Pre-fetch daemon cache with LRU eviction and configurable TTL
+- IPC methods: `clear_cache`, `prefetch_stats`, `update_config`
+- Configuration: `omnicontext.prefetch.enabled`, `cacheSize`, `cacheTtlSeconds`, `debounceMs`
+- Cache hit indicator (instant, `<10ms`) and fresh search indicator in context injection output
+
+### Changed
+
+- Extension auto-starts daemon and begins event tracking on workspace open
+- Preflight handler checks cache first; stores result on miss
+- IPC timeout and reconnection improved with exponential backoff
+
+---
+
+## [0.2.0] - 2026-03-01
+
+### Added
+
+- **Phase 5 + 6**: CI/CD release pipeline, MCP graph statistics, automated benchmarks
+- **Phase 7 + 8**: Distribution system, VSIX packaging, one-click install scripts
+- Java, C, C++, C#, CSS language analyzers
+- Markdown, TOML, YAML, JSON, HTML, Shell document indexing (`DocumentAnalyzer`)
+- 8 MCP AI-facing tools: `search_code`, `get_context`, `get_file_summary`, `get_dependencies`, `get_dependents`, `get_stats`, `get_module_map`, `search_by_kind`
+- Dependency graph with import extraction for TS, JS, Go (was empty before)
+- Query expansion for natural-language queries (stop-word stripping, OR-join)
+- Module-qualified FQNs across all 16 supported languages
+- One-click install scripts for binary + model auto-download
+
+---
+
+## [0.1.0-alpha] - 2026-02-28
+
+### Added
+
+- **Phase 0**: Cargo workspace (`omni-core`, `omni-mcp`, `omni-cli`) with 10 decoupled subsystem modules
+- **Phase 1**: Language analyzers for Python, Rust, TypeScript, JavaScript, Go (81 tests, 0 failures)
+- **Phase 2**: Hybrid search engine with BM25 + semantic vector search and RRF fusion scoring
+- **Phase 3**: Dependency graph with petgraph, RwLock, and cycle detection
+- SQLite schema with FTS5 full-text search, sync triggers, performance indexes
+- Configuration system with 5-level precedence chain (CLI > env > project > user > defaults)
+- Hierarchical error taxonomy (`OmniError`): Recoverable / Degraded / Fatal
+- Core domain types: `Language`, `Chunk`, `Symbol`, `DependencyEdge`, `SearchResult`
+- Tree-sitter grammar registrations for all supported languages
+- IPC daemon with named-pipe/Unix-socket transport and JSON-RPC 2.0 protocol
+
+[Unreleased]: https://github.com/steeltroops-ai/omnicontext/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/steeltroops-ai/omnicontext/compare/v0.7.1...v0.8.0
+[0.7.1]: https://github.com/steeltroops-ai/omnicontext/compare/v0.7.0...v0.7.1
+[0.7.0]: https://github.com/steeltroops-ai/omnicontext/compare/v0.6.1...v0.7.0
+[0.6.1]: https://github.com/steeltroops-ai/omnicontext/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/steeltroops-ai/omnicontext/compare/v0.5.3...v0.6.0
+[0.5.3]: https://github.com/steeltroops-ai/omnicontext/compare/v0.5.0...v0.5.3
+[0.5.0]: https://github.com/steeltroops-ai/omnicontext/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/steeltroops-ai/omnicontext/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/steeltroops-ai/omnicontext/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/steeltroops-ai/omnicontext/compare/v0.1.0-alpha...v0.2.0
+[0.1.0-alpha]: https://github.com/steeltroops-ai/omnicontext/releases/tag/v0.1.0-alpha

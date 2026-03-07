@@ -182,16 +182,77 @@ try {
 if (-not (Test-Path $OutExe))    { Exit-Err "omnicontext.exe not found after extraction." }
 if (-not (Test-Path $OutMcpExe)) { Exit-Err "omnicontext-mcp.exe not found after extraction." }
 
-ok "Binaries installed  $DIM$OutDir$RESET"
-info "omnicontext.exe        $DIM$([math]::Round((Get-Item $OutExe).Length/1KB)) KB$RESET"
-info "omnicontext-mcp.exe    $DIM$([math]::Round((Get-Item $OutMcpExe).Length/1KB)) KB$RESET"
-if (Test-Path $OutDaemonExe) {
-    info "omnicontext-daemon.exe $DIM$([math]::Round((Get-Item $OutDaemonExe).Length/1KB)) KB$RESET"
+# ---------------------------------------------------------------------------
+# ONNX Runtime DLL -- required on Windows for the embedding model.
+# The engine binary links ort dynamically so the DLL must be co-located.
+# We download it automatically from Microsoft's official GitHub releases.
+# ---------------------------------------------------------------------------
+$OnnxVersion = "1.23.0"   # Must match the 'ort' crate version in Cargo.toml
+$dllPath     = Join-Path $OutDir "onnxruntime.dll"
+
+function Install-OnnxRuntime {
+    param([string]$DestDir, [string]$Version)
+
+    $onnxUrl  = "https://github.com/microsoft/onnxruntime/releases/download/v$Version/onnxruntime-win-x64-$Version.zip"
+    $onnxZip  = Join-Path $env:TEMP "onnxruntime-$Version.zip"
+    $onnxStag = Join-Path $env:TEMP "onnxruntime-$Version-staging"
+
+    info "Fetching ONNX Runtime $Version from github.com/microsoft..."
+    info "URL  $DIM$onnxUrl$RESET"
+
+    try {
+        Invoke-WebRequest -Uri $onnxUrl -OutFile $onnxZip -UseBasicParsing
+    } catch {
+        return $false, "Download failed: $_"
+    }
+
+    if (Test-Path $onnxStag) { Remove-Item $onnxStag -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $onnxStag | Out-Null
+
+    try {
+        $null = Expand-Archive -Path $onnxZip -DestinationPath $onnxStag -Force
+        Remove-Item $onnxZip -Force -EA SilentlyContinue
+    } catch {
+        return $false, "Extraction failed: $_"
+    }
+
+    # Archive layout: onnxruntime-win-x64-1.23.0/lib/onnxruntime.dll
+    $dllSource = Get-ChildItem -Path $onnxStag -Recurse -Filter "onnxruntime.dll" `
+                 | Select-Object -First 1
+    if (-not $dllSource) {
+        return $false, "onnxruntime.dll not found inside downloaded archive"
+    }
+
+    Copy-Item $dllSource.FullName -Destination (Join-Path $DestDir "onnxruntime.dll") -Force
+
+    # Some ort versions also require this companion DLL
+    $providerDll = Get-ChildItem -Path $onnxStag -Recurse `
+                   -Filter "onnxruntime_providers_shared.dll" `
+                   | Select-Object -First 1
+    if ($providerDll) {
+        Copy-Item $providerDll.FullName `
+                  -Destination (Join-Path $DestDir "onnxruntime_providers_shared.dll") `
+                  -Force
+    }
+
+    Remove-Item $onnxStag -Recurse -Force -EA SilentlyContinue
+    return $true, ""
 }
 
-$dllPath = Join-Path $OutDir "onnxruntime.dll"
 if (Test-Path $dllPath) {
-    info ("onnxruntime.dll        " + $DIM + "$([math]::Round((Get-Item $dllPath).Length/1MB)) MB" + $RESET)
+    $sizeMb = [math]::Round((Get-Item $dllPath).Length / 1MB, 1)
+    ok "onnxruntime.dll  $DIM($sizeMb MB -- already present)$RESET"
+} else {
+    info "onnxruntime.dll not in release archive -- fetching from Microsoft..."
+    $onnxOk, $onnxErr = Install-OnnxRuntime -DestDir $OutDir -Version $OnnxVersion
+    if ($onnxOk) {
+        $sizeMb = [math]::Round((Get-Item $dllPath).Length / 1MB, 1)
+        ok "onnxruntime.dll installed  $DIM($sizeMb MB)$RESET"
+    } else {
+        warn "ONNX Runtime auto-install failed: $onnxErr"
+        warn "Context injection will fail until this is resolved."
+        warn "Re-run this script when the network is available, or run 'OmniContext: Repair Environment' in VS Code."
+    }
 }
 
 # ---------------------------------------------------------------------------

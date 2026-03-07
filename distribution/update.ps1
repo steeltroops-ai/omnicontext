@@ -66,6 +66,22 @@ hr
 blank
 
 # ---------------------------------------------------------------------------
+# step 0 – terminate running processes (must happen before binary replacement)
+# Windows cannot overwrite a locked .exe. Kill first, update second.
+# ---------------------------------------------------------------------------
+blank
+step "0" "Stopping active OmniContext processes"
+
+$procs = Get-Process -Name "omnicontext","omnicontext-mcp","omnicontext-daemon" -EA SilentlyContinue
+if ($procs) {
+    $procs | Stop-Process -Force -EA SilentlyContinue
+    Start-Sleep -Milliseconds 800
+    ok "Stopped $($procs.Count) process(es)"
+} else {
+    info "No active OmniContext processes found"
+}
+
+# ---------------------------------------------------------------------------
 # step 1 – verify installed
 # ---------------------------------------------------------------------------
 step "1/4" "Checking installed version"

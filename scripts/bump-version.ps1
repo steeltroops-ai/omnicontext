@@ -77,29 +77,72 @@ function Update-CargoVersion {
     Write-Host "✓ Updated Cargo.toml files" -ForegroundColor Green
 }
 
-# Update CHANGELOG.md
+# Update CHANGELOG.md using git-cliff for auto-generation from conventional commits.
+# Falls back to a manual template if git-cliff is not installed.
 function Update-Changelog {
     param([string]$NewVersion)
     
     Write-Host "Updating CHANGELOG.md..." -ForegroundColor Yellow
     
+    # Try git-cliff first (preferred — generates real content from commits)
+    if (Get-Command git-cliff -ErrorAction SilentlyContinue) {
+        Write-Host "  Using git-cliff to generate changelog..." -ForegroundColor Gray
+        git-cliff --tag "v$NewVersion" --output CHANGELOG.md
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "  git-cliff succeeded" -ForegroundColor Gray
+        } else {
+            Write-Host "  git-cliff failed, writing template placeholder..." -ForegroundColor Yellow
+            _Write-ChangelogTemplate -NewVersion $NewVersion
+        }
+    } else {
+        Write-Host "  git-cliff not found (install: cargo install git-cliff)" -ForegroundColor Yellow
+        Write-Host "  Writing template placeholder -- fill in manually before committing" -ForegroundColor Yellow
+        _Write-ChangelogTemplate -NewVersion $NewVersion
+    }
+
+    # Also update the VS Code extension changelog
+    $vscodeChangelog = Join-Path $PSScriptRoot "..\editors\vscode\CHANGELOG.md"
+    if (Test-Path $vscodeChangelog) {
+        $date = Get-Date -Format "yyyy-MM-dd"
+        $section = @"
+
+## [$NewVersion] - $date
+
+### Added
+- 
+
+### Fixed
+- 
+
+"@
+        $content = Get-Content $vscodeChangelog -Raw
+        # Insert after the first ## [Unreleased] block header
+        $content = $content -replace '(## \[Unreleased\]\n)', "`$1$section"
+        $content | Set-Content $vscodeChangelog -Encoding UTF8
+        Write-Host "  Updated editors/vscode/CHANGELOG.md" -ForegroundColor Gray
+    }
+    
+    Write-Host "[v] Updated CHANGELOG.md" -ForegroundColor Green
+}
+
+function _Write-ChangelogTemplate {
+    param([string]$NewVersion)
     $date = Get-Date -Format "yyyy-MM-dd"
     
     if (-not (Test-Path CHANGELOG.md)) {
         @"
 # Changelog
 
-All notable changes to this project will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+All notable changes to OmniContext are documented here.
+Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [$NewVersion] - $date
 
 ### Added
 - Initial release
 
-"@ | Set-Content CHANGELOG.md
+"@ | Set-Content CHANGELOG.md -Encoding UTF8
     } else {
         $content = Get-Content CHANGELOG.md -Raw
         $newSection = @"
@@ -109,19 +152,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - 
 
-### Changed
-- 
-
 ### Fixed
 - 
 
 "@
-        $content = $content -replace '(## \[Unreleased\])', "`$1$newSection"
-        $content | Set-Content CHANGELOG.md
+        # Insert new section at the top, after the header block
+        if ($content -match '## \[') {
+            $content = $content -replace '(## \[)', "$newSection`$1"
+        } else {
+            $content = $newSection + $content
+        }
+        $content | Set-Content CHANGELOG.md -Encoding UTF8
     }
-    
-    Write-Host "✓ Updated CHANGELOG.md" -ForegroundColor Green
 }
+
+
 
 # Update package manifests
 function Update-PackageManifests {
