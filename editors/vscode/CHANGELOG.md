@@ -1,5 +1,39 @@
 # OmniContext — Changelog
 
+## [0.9.2] - 2026-03-07
+
+### Bug Fixes
+
+- Resolve all CI workflow failures: license allowlist, security gate logic, release archive packaging
+- Upgrade CodeQL action from v3 to v4
+
+### Maintenance
+
+- Whitelist accepted RUSTSEC advisories in deny.toml for transitive dependencies
+- Restructure and normalize documentation to kebab-case naming conventions
+
+## [0.9.1] - 2026-03-07
+
+### Bug Fixes
+
+- Migrate deny.toml to cargo-deny v2 schema, eliminate deprecated keys
+- Fix ort mutex poisoning in parallel test execution via ONNX model skip
+
+### Maintenance
+
+- Harden CI pipelines and resolve supply chain audit failures
+
+## [0.9.0] - 2026-03-07
+
+### Bug Fixes
+
+- Remove invalid `default` key from deny.toml licenses section
+
+### Maintenance
+
+- Remove `Phase N` terminology from codebase, replace with descriptive category names
+- Update distribution scripts to use consistent staging terminology
+
 ## [Unreleased]
 
 ### Added

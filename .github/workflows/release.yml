@@ -150,62 +150,86 @@ jobs:
           last_tag="${{ needs.analyze.outputs.last_tag }}"
           if [ -z "$last_tag" ] || [ "$last_tag" = "v0.0.0" ]; then
             commits=$(git log --pretty=format:"%s|%h" HEAD)
+            vscode_commits=$(git log --pretty=format:"%s|%h" HEAD -- editors/vscode/)
           else
             commits=$(git log --pretty=format:"%s|%h" "${last_tag}..HEAD" 2>/dev/null || git log --pretty=format:"%s|%h" HEAD)
+            vscode_commits=$(git log --pretty=format:"%s|%h" "${last_tag}..HEAD" -- editors/vscode/ 2>/dev/null || git log --pretty=format:"%s|%h" HEAD -- editors/vscode/)
           fi
 
-          changelog="## What's Changed\n\n"
-          breaking=""; features=""; fixes=""; maintenance=""; other=""
+          generate_changelog() {
+            local input_commits="$1"
+            local output_file="$2"
+            
+            local changelog="## What's Changed\n\n"
+            local breaking="" features="" fixes="" maintenance="" other=""
 
-          while IFS='|' read -r msg hash; do
-            # Skip empty lines and [skip ci] commits
-            [ -z "$msg" ] && continue
-            echo "$msg" | grep -qi '\[skip ci\]' && continue
+            while IFS='|' read -r msg hash; do
+              [ -z "$msg" ] && continue
+              echo "$msg" | grep -qi '\[skip ci\]' && continue
 
-            if echo "$msg" | grep -qE '^[a-z]+(\([^)]*\))?!:|BREAKING CHANGE:'; then
-              breaking="${breaking}- ${msg} (${hash})\n"
-            elif echo "$msg" | grep -qE '^feat(\([^)]*\))?:'; then
-              clean=$(echo "$msg" | sed -E 's/^feat(\([^)]+\))?:[[:space:]]*//')
-              features="${features}- ${clean} (${hash})\n"
-            elif echo "$msg" | grep -qE '^fix(\([^)]*\))?:'; then
-              clean=$(echo "$msg" | sed -E 's/^fix(\([^)]+\))?:[[:space:]]*//')
-              fixes="${fixes}- ${clean} (${hash})\n"
-            elif echo "$msg" | grep -qE '^(chore|ci|docs|refactor|perf|test|build|style)(\([^)]*\))?:'; then
-              clean=$(echo "$msg" | sed -E 's/^[a-z]+(\([^)]+\))?:[[:space:]]*//')
-              maintenance="${maintenance}- ${clean} (${hash})\n"
-            else
-              other="${other}- ${msg} (${hash})\n"
+              if echo "$msg" | grep -qE '^[a-z]+(\([^)]*\))?!:|BREAKING CHANGE:'; then
+                breaking="${breaking}- ${msg} (${hash})\n"
+              elif echo "$msg" | grep -qE '^feat(\([^)]*\))?:'; then
+                clean=$(echo "$msg" | sed -E 's/^feat(\([^)]+\))?:[[:space:]]*//')
+                features="${features}- ${clean} (${hash})\n"
+              elif echo "$msg" | grep -qE '^fix(\([^)]*\))?:'; then
+                clean=$(echo "$msg" | sed -E 's/^fix(\([^)]+\))?:[[:space:]]*//')
+                fixes="${fixes}- ${clean} (${hash})\n"
+              elif echo "$msg" | grep -qE '^(chore|ci|docs|refactor|perf|test|build|style)(\([^)]*\))?:'; then
+                clean=$(echo "$msg" | sed -E 's/^[a-z]+(\([^)]+\))?:[[:space:]]*//')
+                maintenance="${maintenance}- ${clean} (${hash})\n"
+              else
+                other="${other}- ${msg} (${hash})\n"
+              fi
+            done <<< "$input_commits"
+
+            [ -n "$breaking" ] && changelog="${changelog}### Breaking Changes\n\n${breaking}\n"
+            [ -n "$features" ] && changelog="${changelog}### Features\n\n${features}\n"
+            [ -n "$fixes" ] && changelog="${changelog}### Bug Fixes\n\n${fixes}\n"
+            [ -n "$maintenance" ] && changelog="${changelog}### Maintenance\n\n${maintenance}\n"
+            [ -n "$other" ] && changelog="${changelog}### Other\n\n${other}\n"
+
+            # If no commits match, just set it to empty so awk logic is clean, or put a placeholder
+            if [ "$changelog" = "## What's Changed\n\n" ]; then
+              changelog="${changelog}*No direct changes in this directory.*"
             fi
-          done <<< "$commits"
 
-          [ -n "$breaking" ] && changelog="${changelog}### Breaking Changes\n\n${breaking}\n"
-          [ -n "$features" ] && changelog="${changelog}### Features\n\n${features}\n"
-          [ -n "$fixes" ] && changelog="${changelog}### Bug Fixes\n\n${fixes}\n"
-          [ -n "$maintenance" ] && changelog="${changelog}### Maintenance\n\n${maintenance}\n"
-          [ -n "$other" ] && changelog="${changelog}### Other\n\n${other}\n"
+            echo -e "$changelog" > "$output_file"
+          }
 
-          echo -e "$changelog" > /tmp/changelog.md
-          echo "--- Generated changelog ---"
+          generate_changelog "$commits" "/tmp/changelog.md"
+          generate_changelog "$vscode_commits" "/tmp/vscode_changelog.md"
+
+          echo "--- Generated global changelog ---"
           cat /tmp/changelog.md
+          echo "--- Generated vscode changelog ---"
+          cat /tmp/vscode_changelog.md
 
       - name: Update CHANGELOG.md
         run: |
           new_version="${{ needs.analyze.outputs.new_version }}"
           date=$(date +%Y-%m-%d)
-          changelog=$(cat /tmp/changelog.md)
 
+          # Update root CHANGELOG.md
           if [ ! -f CHANGELOG.md ]; then
-            echo "# Changelog" > CHANGELOG.md
-            echo "" >> CHANGELOG.md
-            echo "## [${new_version}] - ${date}" >> CHANGELOG.md
-            echo "" >> CHANGELOG.md
+            echo "# Changelog\n\n## [${new_version}] - ${date}\n\n" > CHANGELOG.md
             cat /tmp/changelog.md >> CHANGELOG.md
           else
             awk -v version="$new_version" -v date="$date" -v changelog="$(cat /tmp/changelog.md)" '
-              /^# Changelog/ { print; print ""; print "## [" version "] - " date; print ""; print changelog; next }
+              /^#.*Changelog/ { print; print ""; print "## [" version "] - " date; print ""; print changelog; next }
               { print }
             ' CHANGELOG.md > CHANGELOG.md.tmp
             mv CHANGELOG.md.tmp CHANGELOG.md
+          fi
+
+          # Update VS Code extension CHANGELOG.md
+          vscode_cl="editors/vscode/CHANGELOG.md"
+          if [ -f "$vscode_cl" ]; then
+            awk -v version="$new_version" -v date="$date" -v changelog="$(cat /tmp/vscode_changelog.md)" '
+              /^#.*Changelog/ { print; print ""; print "## [" version "] - " date; print ""; print changelog; next }
+              { print }
+            ' "$vscode_cl" > "$vscode_cl.tmp"
+            mv "$vscode_cl.tmp" "$vscode_cl"
           fi
 
       - name: Commit and push
@@ -215,7 +239,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add Cargo.toml Cargo.lock crates/*/Cargo.toml editors/vscode/package.json CHANGELOG.md
+          git add Cargo.toml Cargo.lock crates/*/Cargo.toml editors/vscode/package.json CHANGELOG.md editors/vscode/CHANGELOG.md
           git commit -m "chore(release): bump version to ${new_version} [skip ci]"
           git tag -a "v${new_version}" -m "Release v${new_version}"
 
