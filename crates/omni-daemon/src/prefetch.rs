@@ -4,15 +4,14 @@
 //! IDE events (file open, cursor move, text edit). The goal is to have context
 //! ready before the user explicitly requests it, reducing perceived latency.
 
-#![allow(dead_code)] // TODO: Remove when fully implemented
-#![allow(clippy::unwrap_used)] // TODO: Proper error handling
-#![allow(clippy::expect_used)] // TODO: Proper error handling
 #![allow(clippy::cast_precision_loss)] // Acceptable for hit rate calculation
 
 use lru::LruCache;
+use parking_lot::Mutex;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// A pre-fetched context entry with TTL.
@@ -50,10 +49,10 @@ pub struct PrefetchCache {
     cache: Arc<Mutex<LruCache<CacheKey, CachedContext>>>,
     /// Default TTL for cached entries.
     default_ttl: Arc<Mutex<Duration>>,
-    /// Cache hit counter.
-    hits: Arc<Mutex<u64>>,
-    /// Cache miss counter.
-    misses: Arc<Mutex<u64>>,
+    /// Cache hit counter (lock-free).
+    hits: Arc<AtomicU64>,
+    /// Cache miss counter (lock-free).
+    misses: Arc<AtomicU64>,
 }
 
 impl PrefetchCache {
@@ -62,14 +61,17 @@ impl PrefetchCache {
     /// # Arguments
     /// * `capacity` - Maximum number of entries (default: 100)
     /// * `ttl` - Time-to-live for entries (default: 5 minutes)
+    ///
+    /// # Panics
+    /// Panics if `capacity` is zero.
     pub fn new(capacity: usize, ttl: Duration) -> Self {
+        #[allow(clippy::expect_used)]
+        let cache_capacity = NonZeroUsize::new(capacity).expect("capacity must be non-zero");
         Self {
-            cache: Arc::new(Mutex::new(LruCache::new(
-                NonZeroUsize::new(capacity).expect("capacity must be non-zero"),
-            ))),
+            cache: Arc::new(Mutex::new(LruCache::new(cache_capacity))),
             default_ttl: Arc::new(Mutex::new(ttl)),
-            hits: Arc::new(Mutex::new(0)),
-            misses: Arc::new(Mutex::new(0)),
+            hits: Arc::new(AtomicU64::new(0)),
+            misses: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -120,8 +122,8 @@ impl PrefetchCache {
 
     /// Get cache hit rate (0.0 to 1.0).
     pub fn hit_rate(&self) -> f64 {
-        let hits = *self.hits.lock().unwrap();
-        let misses = *self.misses.lock().unwrap();
+        let hits = self.hits.load(Ordering::Relaxed);
+        let misses = self.misses.load(Ordering::Relaxed);
         let total = hits + misses;
         if total == 0 {
             0.0
@@ -132,9 +134,9 @@ impl PrefetchCache {
 
     /// Get cache statistics.
     pub fn stats(&self) -> CacheStats {
-        let hits = *self.hits.lock().unwrap();
-        let misses = *self.misses.lock().unwrap();
-        let size = self.cache.lock().unwrap().len();
+        let hits = self.hits.load(Ordering::Relaxed);
+        let misses = self.misses.load(Ordering::Relaxed);
+        let size = self.cache.lock().len();
         CacheStats {
             hits,
             misses,
@@ -145,9 +147,9 @@ impl PrefetchCache {
 
     /// Clear all cached entries.
     pub fn clear(&self) {
-        self.cache.lock().unwrap().clear();
-        *self.hits.lock().unwrap() = 0;
-        *self.misses.lock().unwrap() = 0;
+        self.cache.lock().clear();
+        self.hits.store(0, Ordering::Relaxed);
+        self.misses.store(0, Ordering::Relaxed);
     }
 
     /// Update cache configuration dynamically.
@@ -164,7 +166,8 @@ impl PrefetchCache {
         // Update capacity if provided
         if let Some(new_capacity) = capacity {
             if new_capacity > 0 {
-                let mut cache = self.cache.lock().unwrap();
+                let mut cache = self.cache.lock();
+                #[allow(clippy::expect_used)]
                 let new_cache = LruCache::new(
                     NonZeroUsize::new(new_capacity).expect("capacity must be non-zero"),
                 );
@@ -184,7 +187,7 @@ impl PrefetchCache {
         if let Some(new_ttl_seconds) = ttl_seconds {
             if new_ttl_seconds > 0 {
                 let new_ttl = Duration::from_secs(new_ttl_seconds);
-                *self.default_ttl.lock().unwrap() = new_ttl;
+                *self.default_ttl.lock() = new_ttl;
                 updated = true;
                 tracing::debug!(
                     new_ttl_seconds = new_ttl_seconds,
@@ -199,33 +202,33 @@ impl PrefetchCache {
     // Internal methods
 
     fn get(&self, key: &CacheKey) -> Option<String> {
-        let mut cache = self.cache.lock().unwrap();
+        let mut cache = self.cache.lock();
         if let Some(entry) = cache.get(key) {
             if entry.is_expired() {
                 // Entry expired, remove it
                 let _ = cache.pop(key);
-                *self.misses.lock().unwrap() += 1;
+                self.misses.fetch_add(1, Ordering::Relaxed);
                 None
             } else {
                 // Cache hit
-                *self.hits.lock().unwrap() += 1;
+                self.hits.fetch_add(1, Ordering::Relaxed);
                 Some(entry.context.clone())
             }
         } else {
             // Cache miss
-            *self.misses.lock().unwrap() += 1;
+            self.misses.fetch_add(1, Ordering::Relaxed);
             None
         }
     }
 
     fn put(&self, key: CacheKey, context: String) {
-        let ttl = *self.default_ttl.lock().unwrap();
+        let ttl = *self.default_ttl.lock();
         let entry = CachedContext {
             context,
             created_at: Instant::now(),
             ttl,
         };
-        self.cache.lock().unwrap().put(key, entry);
+        self.cache.lock().put(key, entry);
     }
 }
 
@@ -374,101 +377,101 @@ mod tests {
         assert_eq!(cache.get_file_context(&file1), None);
         assert_eq!(cache.get_file_context(&file2), None);
     }
-}
 
-#[test]
-fn test_update_config_capacity() {
-    let cache = PrefetchCache::new(5, Duration::from_secs(300));
+    #[test]
+    fn test_update_config_capacity() {
+        let cache = PrefetchCache::new(5, Duration::from_secs(300));
 
-    // Add 3 entries
-    cache.put_file_context(PathBuf::from("file1.rs"), "context1".to_string());
-    cache.put_file_context(PathBuf::from("file2.rs"), "context2".to_string());
-    cache.put_file_context(PathBuf::from("file3.rs"), "context3".to_string());
+        // Add 3 entries
+        cache.put_file_context(PathBuf::from("file1.rs"), "context1".to_string());
+        cache.put_file_context(PathBuf::from("file2.rs"), "context2".to_string());
+        cache.put_file_context(PathBuf::from("file3.rs"), "context3".to_string());
 
-    assert_eq!(cache.stats().size, 3);
+        assert_eq!(cache.stats().size, 3);
 
-    // Update capacity to 10
-    let updated = cache.update_config(Some(10), None);
-    assert!(updated);
+        // Update capacity to 10
+        let updated = cache.update_config(Some(10), None);
+        assert!(updated);
 
-    // Existing entries should still be present
-    assert_eq!(cache.stats().size, 3);
-    assert!(cache.get_file_context(&PathBuf::from("file1.rs")).is_some());
-    assert!(cache.get_file_context(&PathBuf::from("file2.rs")).is_some());
-    assert!(cache.get_file_context(&PathBuf::from("file3.rs")).is_some());
-}
-
-#[test]
-fn test_update_config_ttl() {
-    let cache = PrefetchCache::new(100, Duration::from_secs(300));
-
-    // Add an entry with old TTL
-    cache.put_file_context(PathBuf::from("old.rs"), "old_context".to_string());
-
-    // Update TTL to 1ms (very short)
-    let updated = cache.update_config(None, Some(1));
-    assert!(updated);
-
-    // Add a new entry with new TTL
-    cache.put_file_context(PathBuf::from("new.rs"), "new_context".to_string());
-
-    // Wait for new entry to expire (1 second + buffer)
-    std::thread::sleep(Duration::from_millis(1100));
-
-    // Old entry should still be valid (has 300s TTL)
-    assert!(cache.get_file_context(&PathBuf::from("old.rs")).is_some());
-
-    // New entry should be expired (has 1s TTL)
-    assert!(cache.get_file_context(&PathBuf::from("new.rs")).is_none());
-}
-
-#[test]
-fn test_update_config_both() {
-    let cache = PrefetchCache::new(5, Duration::from_secs(300));
-
-    // Update both capacity and TTL
-    let updated = cache.update_config(Some(20), Some(600));
-    assert!(updated);
-
-    // Add entries to verify new configuration
-    for i in 1..=10 {
-        cache.put_file_context(
-            PathBuf::from(format!("file{}.rs", i)),
-            format!("context{}", i),
-        );
+        // Existing entries should still be present
+        assert_eq!(cache.stats().size, 3);
+        assert!(cache.get_file_context(&PathBuf::from("file1.rs")).is_some());
+        assert!(cache.get_file_context(&PathBuf::from("file2.rs")).is_some());
+        assert!(cache.get_file_context(&PathBuf::from("file3.rs")).is_some());
     }
 
-    // All 10 entries should fit in new capacity
-    assert_eq!(cache.stats().size, 10);
-}
+    #[test]
+    fn test_update_config_ttl() {
+        let cache = PrefetchCache::new(100, Duration::from_secs(300));
 
-#[test]
-fn test_update_config_no_changes() {
-    let cache = PrefetchCache::new(100, Duration::from_secs(300));
+        // Add an entry with old TTL
+        cache.put_file_context(PathBuf::from("old.rs"), "old_context".to_string());
 
-    // Update with no parameters
-    let updated = cache.update_config(None, None);
-    assert!(!updated);
-}
+        // Update TTL to 1ms (very short)
+        let updated = cache.update_config(None, Some(1));
+        assert!(updated);
 
-#[test]
-fn test_update_config_capacity_reduction() {
-    let cache = PrefetchCache::new(10, Duration::from_secs(300));
+        // Add a new entry with new TTL
+        cache.put_file_context(PathBuf::from("new.rs"), "new_context".to_string());
 
-    // Add 5 entries
-    for i in 1..=5 {
-        cache.put_file_context(
-            PathBuf::from(format!("file{}.rs", i)),
-            format!("context{}", i),
-        );
+        // Wait for new entry to expire (1 second + buffer)
+        std::thread::sleep(Duration::from_millis(1100));
+
+        // Old entry should still be valid (has 300s TTL)
+        assert!(cache.get_file_context(&PathBuf::from("old.rs")).is_some());
+
+        // New entry should be expired (has 1s TTL)
+        assert!(cache.get_file_context(&PathBuf::from("new.rs")).is_none());
     }
 
-    assert_eq!(cache.stats().size, 5);
+    #[test]
+    fn test_update_config_both() {
+        let cache = PrefetchCache::new(5, Duration::from_secs(300));
 
-    // Reduce capacity to 3
-    let updated = cache.update_config(Some(3), None);
-    assert!(updated);
+        // Update both capacity and TTL
+        let updated = cache.update_config(Some(20), Some(600));
+        assert!(updated);
 
-    // Only 3 entries should remain
-    assert_eq!(cache.stats().size, 3);
+        // Add entries to verify new configuration
+        for i in 1..=10 {
+            cache.put_file_context(
+                PathBuf::from(format!("file{}.rs", i)),
+                format!("context{}", i),
+            );
+        }
+
+        // All 10 entries should fit in new capacity
+        assert_eq!(cache.stats().size, 10);
+    }
+
+    #[test]
+    fn test_update_config_no_changes() {
+        let cache = PrefetchCache::new(100, Duration::from_secs(300));
+
+        // Update with no parameters
+        let updated = cache.update_config(None, None);
+        assert!(!updated);
+    }
+
+    #[test]
+    fn test_update_config_capacity_reduction() {
+        let cache = PrefetchCache::new(10, Duration::from_secs(300));
+
+        // Add 5 entries
+        for i in 1..=5 {
+            cache.put_file_context(
+                PathBuf::from(format!("file{}.rs", i)),
+                format!("context{}", i),
+            );
+        }
+
+        assert_eq!(cache.stats().size, 5);
+
+        // Reduce capacity to 3
+        let updated = cache.update_config(Some(3), None);
+        assert!(updated);
+
+        // Only 3 entries should remain
+        assert_eq!(cache.stats().size, 3);
+    }
 }

@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 use omni_core::Engine;
 
@@ -25,6 +26,7 @@ pub fn default_pipe_name(repo_path: &Path) -> String {
     let normalized = repo_path
         .to_string_lossy()
         .replace(r"\\?\", "")
+        .replace('\\', "/")
         .to_lowercase();
     let mut hasher = Sha256::new();
     hasher.update(normalized.as_bytes());
@@ -48,11 +50,13 @@ pub async fn serve(engine: Engine, pipe_name: &str) -> anyhow::Result<()> {
     let prefetch_cache = Arc::new(crate::prefetch::PrefetchCache::default());
     let daemon_start_time = Arc::new(std::time::Instant::now());
     let performance_metrics = Arc::new(crate::metrics::PerformanceMetrics::default());
+    let shutdown_token = CancellationToken::new();
 
     #[cfg(windows)]
     {
         serve_named_pipe(
             engine, prefetch_cache, daemon_start_time, performance_metrics, pipe_name,
+            shutdown_token,
         )
         .await
     }
@@ -61,6 +65,7 @@ pub async fn serve(engine: Engine, pipe_name: &str) -> anyhow::Result<()> {
     {
         serve_unix_socket(
             engine, prefetch_cache, daemon_start_time, performance_metrics, pipe_name,
+            shutdown_token,
         )
         .await
     }
@@ -77,6 +82,7 @@ async fn serve_named_pipe(
     daemon_start_time: Arc<std::time::Instant>,
     performance_metrics: Arc<crate::metrics::PerformanceMetrics>,
     pipe_name: &str,
+    shutdown_token: CancellationToken,
 ) -> anyhow::Result<()> {
     use tokio::net::windows::named_pipe::ServerOptions;
 
@@ -88,8 +94,14 @@ async fn serve_named_pipe(
             .first_pipe_instance(false)
             .create(pipe_name)?;
 
-        // Wait for a client to connect
-        server.connect().await?;
+        // Wait for a client to connect, or a shutdown signal
+        tokio::select! {
+            result = server.connect() => { result?; }
+            () = shutdown_token.cancelled() => {
+                tracing::info!("shutdown signal received, stopping server");
+                return Ok(());
+            }
+        }
 
         tracing::info!("client connected");
 
@@ -97,9 +109,11 @@ async fn serve_named_pipe(
         let cache = prefetch_cache.clone();
         let start_time = daemon_start_time.clone();
         let metrics = performance_metrics.clone();
+        let token = shutdown_token.clone();
         tokio::spawn(async move {
             let (reader, writer) = tokio::io::split(server);
-            if let Err(e) = handle_client(engine, cache, start_time, metrics, reader, writer).await
+            if let Err(e) =
+                handle_client(engine, cache, start_time, metrics, token, reader, writer).await
             {
                 tracing::warn!(error = %e, "client handler error");
             }
@@ -119,6 +133,7 @@ async fn serve_unix_socket(
     daemon_start_time: Arc<std::time::Instant>,
     performance_metrics: Arc<crate::metrics::PerformanceMetrics>,
     socket_path: &str,
+    shutdown_token: CancellationToken,
 ) -> anyhow::Result<()> {
     use tokio::net::UnixListener;
 
@@ -129,21 +144,30 @@ async fn serve_unix_socket(
     tracing::info!(socket = %socket_path, "listening on unix socket");
 
     loop {
-        let (stream, _) = listener.accept().await?;
-        tracing::info!("client connected");
+        tokio::select! {
+            result = listener.accept() => {
+                let (stream, _) = result?;
+                tracing::info!("client connected");
 
-        let engine = engine.clone();
-        let cache = prefetch_cache.clone();
-        let start_time = daemon_start_time.clone();
-        let metrics = performance_metrics.clone();
-        tokio::spawn(async move {
-            let (reader, writer) = tokio::io::split(stream);
-            if let Err(e) = handle_client(engine, cache, start_time, metrics, reader, writer).await
-            {
-                tracing::warn!(error = %e, "client handler error");
+                let engine = engine.clone();
+                let cache = prefetch_cache.clone();
+                let start_time = daemon_start_time.clone();
+                let metrics = performance_metrics.clone();
+                let token = shutdown_token.clone();
+                tokio::spawn(async move {
+                    let (reader, writer) = tokio::io::split(stream);
+                    if let Err(e) = handle_client(engine, cache, start_time, metrics, token, reader, writer).await
+                    {
+                        tracing::warn!(error = %e, "client handler error");
+                    }
+                    tracing::info!("client disconnected");
+                });
             }
-            tracing::info!("client disconnected");
-        });
+            () = shutdown_token.cancelled() => {
+                tracing::info!("shutdown signal received, stopping server");
+                return Ok(());
+            }
+        }
     }
 }
 
@@ -160,6 +184,7 @@ async fn handle_client<R, W>(
     prefetch_cache: Arc<crate::prefetch::PrefetchCache>,
     daemon_start_time: Arc<std::time::Instant>,
     performance_metrics: Arc<crate::metrics::PerformanceMetrics>,
+    shutdown_token: CancellationToken,
     reader: R,
     mut writer: W,
 ) -> anyhow::Result<()>
@@ -182,6 +207,7 @@ where
                     prefetch_cache.clone(),
                     daemon_start_time.clone(),
                     performance_metrics.clone(),
+                    shutdown_token.clone(),
                     req,
                 )
                 .await
@@ -208,6 +234,7 @@ async fn dispatch(
     prefetch_cache: Arc<crate::prefetch::PrefetchCache>,
     daemon_start_time: Arc<std::time::Instant>,
     performance_metrics: Arc<crate::metrics::PerformanceMetrics>,
+    shutdown_token: CancellationToken,
     req: protocol::Request,
 ) -> Response {
     let start = std::time::Instant::now();
@@ -272,7 +299,7 @@ async fn dispatch(
                 Ok(p) => p,
                 Err(r) => return r,
             };
-            handle_ide_event(prefetch_cache.clone(), params).await
+            handle_ide_event(engine.clone(), prefetch_cache.clone(), params).await
         }
 
         "prefetch_stats" => handle_prefetch_stats(prefetch_cache.clone()).await,
@@ -296,8 +323,9 @@ async fn dispatch(
         }
 
         "shutdown" => {
-            tracing::info!("shutdown requested via IPC");
-            std::process::exit(0);
+            tracing::info!("shutdown requested via IPC, initiating graceful shutdown");
+            shutdown_token.cancel();
+            Ok(serde_json::json!({ "shutdown": true }))
         }
 
         _ => Err((
@@ -507,7 +535,7 @@ async fn handle_preflight(
     // Check cache first if active_file is provided
     if let Some(ref active_file) = params.active_file {
         let cache_key = std::path::PathBuf::from(active_file);
-        if let Some(cached_context) = prefetch_cache.get_file_context(&cache_key) {
+        if let Some(cached) = prefetch_cache.get_file_context(&cache_key) {
             #[allow(clippy::cast_possible_truncation)]
             let elapsed_ms = start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
 
@@ -517,12 +545,13 @@ async fn handle_preflight(
                 "cache hit: returning cached preflight context"
             );
 
-            // Parse the cached context to extract metadata
-            // For now, we'll return reasonable defaults since we're caching the full context
+            // Reconstruct metadata from the cached JSON blob
+            let (entries_count, tokens_used) = parse_cached_meta(&cached);
+
             let response = protocol::PreflightResponse {
-                system_context: cached_context,
-                entries_count: 0, // Unknown from cache
-                tokens_used: 0,   // Unknown from cache
+                system_context: cached,
+                entries_count,
+                tokens_used,
                 token_budget: params.token_budget,
                 elapsed_ms,
                 from_cache: true,
@@ -561,7 +590,9 @@ async fn handle_preflight(
 
     // Assemble the system context prompt
     let intent_label = params.intent.as_deref().unwrap_or("general");
-    let mut system_context = String::with_capacity(ctx.total_tokens as usize * 4);
+    let entries_count = ctx.len();
+    let tokens_used = ctx.total_tokens;
+    let mut system_context = String::with_capacity(tokens_used as usize * 4);
 
     system_context.push_str("<context_engine>\n");
     system_context.push_str(
@@ -587,6 +618,13 @@ async fn handle_preflight(
         system_context.push('\n');
     }
 
+    // Embed metadata header for cache reconstruction
+    write!(
+        system_context,
+        "<!-- omni-meta entries={entries_count} tokens={tokens_used} -->\n"
+    )
+    .ok();
+
     // Relevant code (ranked by relevance)
     system_context.push_str("## Relevant Code (ranked by relevance)\n\n");
     system_context.push_str(&ctx.render());
@@ -609,8 +647,8 @@ async fn handle_preflight(
 
     let response = protocol::PreflightResponse {
         system_context,
-        entries_count: ctx.len(),
-        tokens_used: ctx.total_tokens,
+        entries_count,
+        tokens_used,
         token_budget: ctx.token_budget,
         elapsed_ms,
         from_cache: false,
@@ -622,6 +660,31 @@ async fn handle_preflight(
             format!("serialization failed: {e}"),
         )
     })
+}
+
+/// Parse cached metadata from the embedded HTML comment.
+/// Returns `(entries_count, tokens_used)`.
+fn parse_cached_meta(context: &str) -> (usize, u32) {
+    // Look for: <!-- omni-meta entries=N tokens=N -->
+    if let Some(start) = context.find("<!-- omni-meta ") {
+        if let Some(end) = context[start..].find("-->") {
+            let meta = &context[start..start + end + 3];
+            let entries = meta
+                .split("entries=")
+                .nth(1)
+                .and_then(|s| s.split_whitespace().next())
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(0);
+            let tokens = meta
+                .split("tokens=")
+                .nth(1)
+                .and_then(|s| s.split_whitespace().next())
+                .and_then(|s| s.trim_end_matches("-->").trim().parse::<u32>().ok())
+                .unwrap_or(0);
+            return (entries, tokens);
+        }
+    }
+    (0, 0)
 }
 
 async fn handle_module_map(
@@ -703,9 +766,13 @@ async fn handle_index(engine: Arc<Mutex<Engine>>) -> Result<serde_json::Value, (
 }
 
 /// Handle IDE event for pre-fetch.
-#[allow(clippy::unused_async)] // Will be async when fully implemented
+///
+/// Spawns background tasks to pre-compute context for the given file/symbol
+/// and stores results in the prefetch cache. Returns immediately to the client.
+#[allow(clippy::unused_async)]
 async fn handle_ide_event(
-    _prefetch_cache: Arc<crate::prefetch::PrefetchCache>,
+    engine: Arc<Mutex<Engine>>,
+    prefetch_cache: Arc<crate::prefetch::PrefetchCache>,
     params: protocol::IdeEventParams,
 ) -> Result<serde_json::Value, (i32, String)> {
     tracing::debug!(
@@ -714,33 +781,33 @@ async fn handle_ide_event(
         "IDE event received"
     );
 
-    // For now, just acknowledge the event
-    // In a full implementation, we would:
-    // 1. Parse the event type
-    // 2. Trigger appropriate pre-fetch based on heuristics
-    // 3. Store results in the cache
-
     match params.event_type.as_str() {
         "file_opened" => {
-            // Pre-fetch file-level context
-            tracing::debug!(file = %params.file_path, "pre-fetching file context");
-            // TODO: Implement actual pre-fetch logic
+            let eng = engine.clone();
+            let cache = prefetch_cache.clone();
+            let file_path = params.file_path.clone();
+            tokio::spawn(async move {
+                prefetch_file_context(eng, cache, &file_path).await;
+            });
         }
         "cursor_moved" => {
-            // Pre-fetch symbol dependencies if symbol is known
-            if let Some(symbol) = &params.symbol {
-                tracing::debug!(
-                    file = %params.file_path,
-                    symbol = %symbol,
-                    "pre-fetching symbol context"
-                );
-                // TODO: Implement actual pre-fetch logic
+            if let Some(ref symbol) = params.symbol {
+                let eng = engine.clone();
+                let cache = prefetch_cache.clone();
+                let file_path = params.file_path.clone();
+                let symbol = symbol.clone();
+                tokio::spawn(async move {
+                    prefetch_symbol_context(eng, cache, &file_path, &symbol).await;
+                });
             }
         }
         "text_edited" => {
-            // Pre-fetch related tests
-            tracing::debug!(file = %params.file_path, "pre-fetching related tests");
-            // TODO: Implement actual pre-fetch logic
+            let eng = engine.clone();
+            let cache = prefetch_cache.clone();
+            let file_path = params.file_path.clone();
+            tokio::spawn(async move {
+                prefetch_file_context(eng, cache, &file_path).await;
+            });
         }
         _ => {
             tracing::warn!(event_type = %params.event_type, "unknown IDE event type");
@@ -751,6 +818,88 @@ async fn handle_ide_event(
         "acknowledged": true,
         "event_type": params.event_type,
     }))
+}
+
+/// Background pre-fetch: search for context relevant to the given file
+/// and store it in the cache so subsequent preflight requests hit the cache.
+async fn prefetch_file_context(
+    engine: Arc<Mutex<Engine>>,
+    cache: Arc<crate::prefetch::PrefetchCache>,
+    file_path: &str,
+) {
+    use std::fmt::Write;
+    let start = std::time::Instant::now();
+
+    let eng = engine.lock().await;
+    let query = format!("file:{file_path}");
+    match eng.search_context_window(&query, 10, Some(4096)) {
+        Ok(ctx) => {
+            let mut context = String::with_capacity(ctx.total_tokens as usize * 4);
+            write!(
+                context,
+                "<!-- omni-meta entries={} tokens={} -->\n",
+                ctx.len(),
+                ctx.total_tokens
+            )
+            .ok();
+            context.push_str(&ctx.render());
+
+            let cache_key = std::path::PathBuf::from(file_path);
+            cache.put_file_context(cache_key, context);
+
+            #[allow(clippy::cast_possible_truncation)]
+            let elapsed_ms = start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+            tracing::debug!(
+                file = %file_path,
+                elapsed_ms = elapsed_ms,
+                entries = ctx.len(),
+                "pre-fetch complete for file"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(file = %file_path, error = %e, "pre-fetch failed for file");
+        }
+    }
+}
+
+/// Background pre-fetch: search for context relevant to a specific symbol.
+async fn prefetch_symbol_context(
+    engine: Arc<Mutex<Engine>>,
+    cache: Arc<crate::prefetch::PrefetchCache>,
+    file_path: &str,
+    symbol: &str,
+) {
+    let start = std::time::Instant::now();
+
+    let eng = engine.lock().await;
+    match eng.search_context_window(symbol, 10, Some(4096)) {
+        Ok(ctx) => {
+            let rendered = ctx.render();
+            cache.put_symbol_context(
+                std::path::PathBuf::from(file_path),
+                symbol.to_string(),
+                rendered,
+            );
+
+            #[allow(clippy::cast_possible_truncation)]
+            let elapsed_ms = start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+            tracing::debug!(
+                file = %file_path,
+                symbol = %symbol,
+                elapsed_ms = elapsed_ms,
+                entries = ctx.len(),
+                "pre-fetch complete for symbol"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                file = %file_path,
+                symbol = %symbol,
+                error = %e,
+                "pre-fetch failed for symbol"
+            );
+        }
+    }
 }
 
 /// Handle request for pre-fetch cache statistics.
@@ -841,10 +990,14 @@ mod tests {
     use std::path::PathBuf;
     use std::time::Duration;
 
-    /// Helper to create a test engine with minimal setup
+    /// Helper to create a test engine with minimal setup.
+    ///
+    /// Uses `Config::defaults` directly to avoid any model download attempt
+    /// and to stay clear of `std::env::set_var` (UB in multithreaded test
+    /// environments per Rust 2024 edition).
     fn create_test_engine() -> Engine {
-        std::env::set_var("OMNI_SKIP_MODEL_DOWNLOAD", "1");
-        std::env::set_var("OMNI_DISABLE_RERANKER", "1");
+        use omni_core::config::Config;
+
         let temp_dir = std::env::temp_dir().join(format!(
             "omni-test-{}-{}",
             std::process::id(),
@@ -859,7 +1012,11 @@ mod tests {
         let test_file = temp_dir.join("test.rs");
         std::fs::write(&test_file, "fn main() { println!(\"Hello\"); }").unwrap();
 
-        Engine::new(&temp_dir).unwrap()
+        // Use Config::defaults so the engine skips model download entirely.
+        // The embedder degrades gracefully to keyword-only mode when the ONNX
+        // model file is not present -- no env var hacks required.
+        let config = Config::defaults(&temp_dir);
+        Engine::with_config(config).unwrap()
     }
 
     #[tokio::test]

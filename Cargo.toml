@@ -76,6 +76,7 @@ petgraph = "0.7"
 # Concurrent data structures
 dashmap = "6"
 lru = "0.12"
+parking_lot = "0.12"
 
 # Configuration
 toml = "0.8"
@@ -97,6 +98,9 @@ schemars = "1"
 # Hashing
 sha2 = "0.10"
 hex = "0.4"
+
+# Async utilities
+tokio-util = "0.7"
 
 # Tokenization
 tokenizers = "0.22"

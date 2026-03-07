@@ -37,8 +37,22 @@ use rmcp::ServiceExt;
 )]
 struct Args {
     /// Path to the repository to serve.
+    ///
+    /// Resolution priority (highest wins):
+    ///   1. This flag if explicitly set to something other than "."
+    ///   2. `OMNICONTEXT_REPO` environment variable
+    ///   3. `--cwd` flag (if provided)
+    ///   4. Process working directory (the "." default)
     #[arg(long, default_value = ".")]
     repo: String,
+
+    /// Override the working directory used when `--repo .` is the default.
+    ///
+    /// External AI agent launchers (Antigravity, Claude Desktop, Cursor)
+    /// can pass the active workspace root here so the "." default resolves
+    /// correctly even when the agent's spawned process inherits a different cwd.
+    #[arg(long)]
+    cwd: Option<String>,
 
     /// Log level (trace, debug, info, warn, error).
     #[arg(long, default_value = "info")]
@@ -60,12 +74,36 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    let repo_path = std::path::PathBuf::from(&args.repo)
+    // Resolve repository path with priority order:
+    //   1. --repo if the caller explicitly passed something other than the default "."
+    //   2. OMNICONTEXT_REPO environment variable (set by external agent launchers)
+    //   3. --cwd flag (overrides the cwd used to resolve ".")
+    //   4. The bare "." default, which resolves against the process cwd
+    let repo_str: String = if args.repo != "." {
+        // Explicit --repo wins unconditionally.
+        args.repo.clone()
+    } else if let Ok(env_repo) = std::env::var("OMNICONTEXT_REPO") {
+        tracing::info!(
+            env_repo = %env_repo,
+            "using OMNICONTEXT_REPO environment variable for repository path"
+        );
+        env_repo
+    } else if let Some(ref cwd_override) = args.cwd {
+        tracing::info!(
+            cwd = %cwd_override,
+            "using --cwd override to resolve repository path"
+        );
+        cwd_override.clone()
+    } else {
+        args.repo.clone()
+    };
+
+    let repo_path = std::path::PathBuf::from(&repo_str)
         .canonicalize()
-        .unwrap_or_else(|_| std::path::PathBuf::from(&args.repo));
+        .unwrap_or_else(|_| std::path::PathBuf::from(&repo_str));
 
     if !repo_path.exists() {
-        anyhow::bail!("repository path does not exist: {}", args.repo);
+        anyhow::bail!("repository path does not exist: {}", repo_str);
     }
 
     tracing::info!(

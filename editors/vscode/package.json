@@ -186,7 +186,7 @@
         {
           "id": "omnicontext-sidebar",
           "title": "OmniContext",
-          "icon": "resources/icon-white.svg"
+          "icon": "resources/icon-logo.svg"
         }
       ]
     },
@@ -196,7 +196,7 @@
           "id": "omnicontext.mainView",
           "name": "Control Center",
           "type": "webview",
-          "icon": "resources/icon-white.svg"
+          "icon": "resources/icon-logo.svg"
         }
       ]
     },

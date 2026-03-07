@@ -1,0 +1,23 @@
+{
+    "name": "omnicontext-wrapper",
+    "version": "1.0.0",
+    "description": "Programmatic wrapper for OmniContext MCP with controlled context injection",
+    "main": "omnicontext_wrapper.ts",
+    "scripts": {
+        "build": "tsc omnicontext_wrapper.ts",
+        "start": "ts-node omnicontext_wrapper.ts"
+    },
+    "keywords": [
+        "mcp",
+        "omnicontext",
+        "code-intelligence",
+        "programmatic-tools"
+    ],
+    "author": "",
+    "license": "MIT",
+    "devDependencies": {
+        "@types/node": "^20.0.0",
+        "ts-node": "^10.9.0",
+        "typescript": "^5.0.0"
+    }
+}

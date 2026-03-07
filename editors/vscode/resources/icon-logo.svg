@@ -1,0 +1,10 @@
+<svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- C bottom half (Graphite Gray) -> UNDER the 'O' ring -->
+  <path d="M 19.17 16.98 A 6.5 6.5 0 0 1 8.5 12" stroke="#374151" stroke-width="2.5" stroke-linecap="round" fill="none" />
+  
+  <!-- O full shape (Deep Indigo) -> MIDDLE LAYER -->
+  <circle cx="9" cy="12" r="6.5" stroke="#1e1b4b" stroke-width="2.5" fill="none" />
+  
+  <!-- C top half (Graphite Gray) -> OVER the 'O' ring -->
+  <path d="M 8.5 12 A 6.5 6.5 0 0 1 19.17 7.02" stroke="#374151" stroke-width="2.5" stroke-linecap="round" fill="none" />
+</svg>

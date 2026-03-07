@@ -12,7 +12,10 @@ import * as crypto from "crypto";
  * filesystem-safe pipe name. Consistent across extension restarts.
  */
 export function derivePipeName(repoRoot: string): string {
-  const normalized = repoRoot.replace("\\\\?\\", "").toLowerCase();
+  const normalized = repoRoot
+    .replace("\\\\?\\", "")
+    .replace(/\\/g, "/")
+    .toLowerCase();
   const hash = crypto
     .createHash("sha256")
     .update(normalized)
@@ -293,6 +296,8 @@ export function getKnownMcpClients(): McpClientTarget[] {
 
 /**
  * Build the MCP server entry for OmniContext.
+ * Uses a workspace-specific key derived from the repo root hash to
+ * prevent multiple VS Code windows from overwriting each other.
  */
 export function buildMcpServerEntry(
   mcpBinaryPath: string,
@@ -306,13 +311,28 @@ export function buildMcpServerEntry(
 }
 
 /**
+ * Derive a short workspace key for MCP server config entries.
+ * Uses a 6-char hash to create unique keys like "omnicontext-a1b2c3".
+ */
+export function deriveMcpEntryKey(repoRoot: string): string {
+  const hash = crypto
+    .createHash("sha256")
+    .update(repoRoot.replace(/\\/g, "/").toLowerCase())
+    .digest("hex")
+    .substring(0, 6);
+  return `omnicontext-${hash}`;
+}
+
+/**
  * Merge an OmniContext MCP entry into a client's config JSON.
  * Returns the updated config object. Does NOT write to disk.
+ * Uses workspace-specific keys to avoid overwriting configs from other workspaces.
  */
 export function mergeMcpConfig(
   existingJson: string | null,
   target: McpClientTarget,
   entry: McpServerEntry,
+  entryKey: string = "omnicontext",
 ): any {
   let config: any = {};
 
@@ -328,10 +348,10 @@ export function mergeMcpConfig(
     if (!config.powers) config.powers = {};
     if (!config.powers[target.serversKey])
       config.powers[target.serversKey] = {};
-    config.powers[target.serversKey].omnicontext = entry;
+    config.powers[target.serversKey][entryKey] = entry;
   } else {
     if (!config[target.serversKey]) config[target.serversKey] = {};
-    config[target.serversKey].omnicontext = entry;
+    config[target.serversKey][entryKey] = entry;
   }
 
   return config;

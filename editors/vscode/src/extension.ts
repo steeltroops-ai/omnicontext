@@ -15,6 +15,7 @@ import {
   parseJsonRpcResponse,
   calculateBackoffDelay,
   deriveMcpBinaryPath,
+  deriveMcpEntryKey,
   formatPreflightContext,
   getKnownMcpClients,
   buildMcpServerEntry,
@@ -270,6 +271,7 @@ async function syncMcpToClients(): Promise<{
 
   const mcpBinary = deriveMcpBinaryPath(binary);
   const entry = buildMcpServerEntry(mcpBinary, root);
+  const entryKey = deriveMcpEntryKey(root);
   const clients = getKnownMcpClients();
 
   let synced = 0;
@@ -286,7 +288,7 @@ async function syncMcpToClients(): Promise<{
         ? fs.readFileSync(client.configPath, "utf-8")
         : null;
 
-      const merged = mergeMcpConfig(existingJson, client, entry);
+      const merged = mergeMcpConfig(existingJson, client, entry, entryKey);
       fs.writeFileSync(
         client.configPath,
         JSON.stringify(merged, null, 2),
@@ -492,6 +494,18 @@ function getWorkspaceRoot(): string {
     vscode.window.showWarningMessage("No workspace folder open");
     return "";
   }
+
+  // In multi-root workspaces, prefer the folder containing the active editor
+  const activeEditor = vscode.window.activeTextEditor;
+  if (activeEditor && folders.length > 1) {
+    const activeFolder = vscode.workspace.getWorkspaceFolder(
+      activeEditor.document.uri,
+    );
+    if (activeFolder) {
+      return activeFolder.uri.fsPath;
+    }
+  }
+
   return folders[0].uri.fsPath;
 }
 

@@ -165,8 +165,8 @@ pub struct IdeEventParams {
     pub symbol: Option<String>,
 }
 
-/// Parameters for getting pre-fetch cache statistics.
-#[allow(dead_code)] // TODO: Remove when used in VS Code extension
+/// Pre-fetch cache statistics response.
+#[allow(dead_code)] // Response schema type -- used for documentation/serialization reference
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrefetchStatsResponse {
     /// Number of cache hits.
@@ -250,10 +250,10 @@ fn default_token_budget() -> u32 {
 
 /// Standard JSON-RPC error codes.
 pub mod error_codes {
-    #![allow(dead_code)]
     /// Invalid JSON was received by the server.
     pub const PARSE_ERROR: i32 = -32700;
     /// The JSON sent is not a valid Request object.
+    #[allow(dead_code)] // Reserved for future request validation
     pub const INVALID_REQUEST: i32 = -32600;
     /// The method does not exist / is not available.
     pub const METHOD_NOT_FOUND: i32 = -32601;

@@ -61,6 +61,9 @@ pub struct Engine {
     reranker: Reranker,
     /// Cross-file dependency graph.
     dep_graph: DependencyGraph,
+    /// Token counter: uses the embedding tokenizer when available,
+    /// falls back to the heuristic estimator.
+    token_counter: Box<dyn chunker::token_counter::TokenCounter>,
 }
 
 impl Engine {
@@ -99,6 +102,17 @@ impl Engine {
         // Initialize dependency graph
         let dep_graph = DependencyGraph::new();
 
+        // Resolve the tokenizer from the model directory, if present.
+        // tokenizer.json is downloaded alongside the ONNX model file.
+        // Falls back to heuristic EstimateTokenCounter (~4 chars/token) when unavailable.
+        let tokenizer_path = config
+            .embedding
+            .model_path
+            .parent()
+            .map(|p| p.join("tokenizer.json"));
+        let token_counter = chunker::token_counter::create_token_counter(tokenizer_path.as_deref());
+        tracing::info!(counter = token_counter.name(), "token counter initialized");
+
         tracing::info!(
             repo = %config.repo_path.display(),
             data_dir = %data_dir.display(),
@@ -114,6 +128,7 @@ impl Engine {
             search_engine,
             reranker,
             dep_graph,
+            token_counter,
         };
 
         // Load dependency graph from SQLite index
@@ -307,14 +322,20 @@ impl Engine {
         let imports = parser::parse_imports(path, content.as_bytes(), language).unwrap_or_default();
 
         // Chunk the elements (returns Vec<Chunk>)
-        // TODO(Task 1.1 Phase 2): Upgrade to ActualTokenCounter loaded from model dir
-        let token_counter = chunker::token_counter::EstimateTokenCounter;
+        // Engine now owns a `token_counter` that auto-selects actual vs estimate.
         let mut chunks = chunker::chunk_elements(
-            &elements, &file_info, &imports, file_id, &self.config, &content, &token_counter,
+            &elements,
+            &file_info,
+            &imports,
+            file_id,
+            &self.config,
+            &content,
+            self.token_counter.as_ref(),
         );
 
         // Generate RAPTOR-style summary chunks for files with enough leaf chunks
-        let summary_chunks = chunker::generate_summary_chunks(&chunks, &file_info, &token_counter);
+        let summary_chunks =
+            chunker::generate_summary_chunks(&chunks, &file_info, self.token_counter.as_ref());
         if !summary_chunks.is_empty() {
             tracing::debug!(
                 path = %rel_path.display(),
