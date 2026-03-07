@@ -12,6 +12,7 @@ use std::path::PathBuf;
 
 /// Golden query dataset structure.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // fields populated by serde; not all read directly in Rust
 struct GoldenDataset {
     version: String,
     description: String,
@@ -20,6 +21,7 @@ struct GoldenDataset {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // fields populated by serde; used for dataset validation
 struct DatasetMetadata {
     total_queries: usize,
     intents: HashMap<String, usize>,
@@ -36,6 +38,7 @@ struct GoldenQuery {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)] // reason field populated by serde for human readability in JSON
 struct ExpectedResult {
     symbol_path: String,
     relevance: u32, // 3=highly relevant, 2=relevant, 1=marginally relevant

@@ -3,21 +3,26 @@ targets = [
     { triple = "x86_64-unknown-linux-gnu" },
     { triple = "x86_64-apple-darwin" },
     { triple = "x86_64-pc-windows-msvc" },
+    { triple = "aarch64-apple-darwin" },
 ]
 
 [advisories]
-db-urls = ["https://github.com/rustsec/advisory-db"]
-vulnerability = "deny"
-unmaintained = "workspace"
-yanked = "workspace"
-notice = "workspace"
-ignore = []
+# cargo-deny v2 valid values: "allow", "warn", "deny"
+# "workspace" was removed in cargo-deny v2 -- use "warn" to surface without hard-failing
+version = 2
+ignore = [
+    # Add specific RUSTSEC advisory IDs here when you have a pinned dep reason:
+    # "RUSTSEC-2024-XXXX",
+]
 
 [licenses]
+version = 2
 unlicensed = "deny"
 allow = [
     "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
     "MIT",
+    "MIT-0",
     "BSD-3-Clause",
     "BSD-2-Clause",
     "ISC",
@@ -25,6 +30,7 @@ allow = [
     "Zlib",
     "MPL-2.0",
     "Unicode-DFS-2016",
+    "Unicode-3.0",
 ]
 confidence-threshold = 0.8
 copyleft = "warn"
