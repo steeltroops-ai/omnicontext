@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.11.0] - 2026-03-07
+
+## What's Changed
+
+### Features
+
+- overhaul sidebar UI, fix path normalization, and add set_workspace tool (4a8cf35)
+
+### Maintenance
+
+- add marketplace badges and pre-rendered mermaid diagrams to readmes (1b38992)
+
 ## [0.10.0] - 2026-03-07
 
 ## What's Changed
