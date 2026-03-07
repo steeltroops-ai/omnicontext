@@ -122,6 +122,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: dtolnay/rust-toolchain@stable
@@ -147,35 +148,45 @@ jobs:
       - name: Generate changelog
         run: |
           last_tag="${{ needs.analyze.outputs.last_tag }}"
-          if [ "$last_tag" = "v0.0.0" ]; then
+          if [ -z "$last_tag" ] || [ "$last_tag" = "v0.0.0" ]; then
             commits=$(git log --pretty=format:"%s|%h" HEAD)
           else
-            commits=$(git log --pretty=format:"%s|%h" ${last_tag}..HEAD)
+            commits=$(git log --pretty=format:"%s|%h" "${last_tag}..HEAD" 2>/dev/null || git log --pretty=format:"%s|%h" HEAD)
           fi
 
           changelog="## What's Changed\n\n"
-          breaking=""; features=""; fixes=""; other=""
+          breaking=""; features=""; fixes=""; maintenance=""; other=""
 
           while IFS='|' read -r msg hash; do
-            if echo "$msg" | grep -qiE '^[a-z]+(\([a-zA-Z0-9_-]+\))?!:|BREAKING CHANGE:'; then
+            # Skip empty lines and [skip ci] commits
+            [ -z "$msg" ] && continue
+            echo "$msg" | grep -qi '\[skip ci\]' && continue
+
+            if echo "$msg" | grep -qE '^[a-z]+(\([^)]*\))?!:|BREAKING CHANGE:'; then
               breaking="${breaking}- ${msg} (${hash})\n"
-            elif echo "$msg" | grep -qiE '^feat(\([a-zA-Z0-9_-]+\))?:'; then
-              clean=$(echo "$msg" | sed -r 's/^feat(\([^)]+\))?:[[:space:]]*//i')
+            elif echo "$msg" | grep -qE '^feat(\([^)]*\))?:'; then
+              clean=$(echo "$msg" | sed -E 's/^feat(\([^)]+\))?:[[:space:]]*//')
               features="${features}- ${clean} (${hash})\n"
-            elif echo "$msg" | grep -qiE '^fix(\([a-zA-Z0-9_-]+\))?:'; then
-              clean=$(echo "$msg" | sed -r 's/^fix(\([^)]+\))?:[[:space:]]*//i')
+            elif echo "$msg" | grep -qE '^fix(\([^)]*\))?:'; then
+              clean=$(echo "$msg" | sed -E 's/^fix(\([^)]+\))?:[[:space:]]*//')
               fixes="${fixes}- ${clean} (${hash})\n"
+            elif echo "$msg" | grep -qE '^(chore|ci|docs|refactor|perf|test|build|style)(\([^)]*\))?:'; then
+              clean=$(echo "$msg" | sed -E 's/^[a-z]+(\([^)]+\))?:[[:space:]]*//')
+              maintenance="${maintenance}- ${clean} (${hash})\n"
             else
               other="${other}- ${msg} (${hash})\n"
             fi
           done <<< "$commits"
 
-          [ -n "$breaking" ] && changelog="${changelog}### ⚠️ Breaking Changes\n\n${breaking}\n"
-          [ -n "$features" ] && changelog="${changelog}### ✨ Features\n\n${features}\n"
-          [ -n "$fixes" ] && changelog="${changelog}### 🐛 Bug Fixes\n\n${fixes}\n"
-          [ -n "$other" ] && changelog="${changelog}### 🔧 Other Changes\n\n${other}\n"
+          [ -n "$breaking" ] && changelog="${changelog}### Breaking Changes\n\n${breaking}\n"
+          [ -n "$features" ] && changelog="${changelog}### Features\n\n${features}\n"
+          [ -n "$fixes" ] && changelog="${changelog}### Bug Fixes\n\n${fixes}\n"
+          [ -n "$maintenance" ] && changelog="${changelog}### Maintenance\n\n${maintenance}\n"
+          [ -n "$other" ] && changelog="${changelog}### Other\n\n${other}\n"
 
           echo -e "$changelog" > /tmp/changelog.md
+          echo "--- Generated changelog ---"
+          cat /tmp/changelog.md
 
       - name: Update CHANGELOG.md
         run: |
