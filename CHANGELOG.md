@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.9.3] - 2026-03-07
+
+## What's Changed
+
+### Bug Fixes
+
+- resolve release workflow failures and rewrite changelog generation (85161e3)
+- resolve all workflow failures - license allowlist, security gate logic, release archive, changelog output (f38e62f)
+
 ## [0.9.2] - 2026-03-07
 
 ### Bug Fixes

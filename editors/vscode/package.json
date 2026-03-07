@@ -2,7 +2,7 @@
   "name": "omnicontext",
   "displayName": "OmniContext",
   "description": "Universal code context engine for AI coding agents -- semantic search, dependency graph, pre-flight context injection, MCP integration",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "publisher": "steeltroops",
   "license": "Apache-2.0",
   "icon": "icon.png",
