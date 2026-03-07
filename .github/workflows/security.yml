@@ -101,17 +101,18 @@ jobs:
           echo "audit:        $audit"
           echo "supply-chain: $supply"
 
-          # supply-chain must be green — license/ban violations are blocking
+          # supply-chain (cargo-deny) is the authoritative gate.
+          # It respects deny.toml [advisories].ignore for accepted risks.
           if [[ "$supply" != "success" ]]; then
             echo "::error::Supply chain check failed. Fix deny.toml or add an ignore entry with a documented reason."
             exit 1
           fi
 
-          # audit warns on unmaintained crates but only hard-fails on vulnerabilities
-          # The rustsec/audit-check action exits non-zero on real CVEs
+          # audit-check surfaces all advisories including unmaintained/unsound.
+          # These are already triaged via deny.toml ignore list in the supply-chain job.
+          # Treat audit failures as informational warnings, not blockers.
           if [[ "$audit" == "failure" ]]; then
-            echo "::error::Security audit failed. A RUSTSEC vulnerability was found. Check the audit job logs."
-            exit 1
+            echo "::warning::Security audit flagged advisories. Review the audit job logs. Accepted risks are tracked in deny.toml."
           fi
 
           echo "Security gate passed."

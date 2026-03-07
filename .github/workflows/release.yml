@@ -26,6 +26,7 @@ jobs:
       should_release: ${{ steps.check.outputs.should_release }}
       bump_type: ${{ steps.check.outputs.bump_type }}
       new_version: ${{ steps.version.outputs.new_version }}
+      last_tag: ${{ steps.versions.outputs.last_tag }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -55,11 +56,11 @@ jobs:
           has_fix=false
 
           while IFS= read -r commit; do
-            if echo "$commit" | grep -qiE '^[a-z]+(\([a-z]+\))?!:|BREAKING CHANGE:'; then
+            if echo "$commit" | grep -qiE '^[a-z]+(\([a-zA-Z0-9_-]+\))?!:|BREAKING CHANGE:'; then
               has_breaking=true
-            elif echo "$commit" | grep -qiE '^feat(\([a-z]+\))?:'; then
+            elif echo "$commit" | grep -qiE '^feat(\([a-zA-Z0-9_-]+\))?:'; then
               has_feat=true
-            elif echo "$commit" | grep -qiE '^fix(\([a-z]+\))?:'; then
+            elif echo "$commit" | grep -qiE '^fix(\([a-zA-Z0-9_-]+\))?:'; then
               has_fix=true
             fi
           done <<< "$commits"
@@ -156,13 +157,13 @@ jobs:
           breaking=""; features=""; fixes=""; other=""
 
           while IFS='|' read -r msg hash; do
-            if echo "$msg" | grep -qiE '^[a-z]+!:|BREAKING CHANGE:'; then
+            if echo "$msg" | grep -qiE '^[a-z]+(\([a-zA-Z0-9_-]+\))?!:|BREAKING CHANGE:'; then
               breaking="${breaking}- ${msg} (${hash})\n"
-            elif echo "$msg" | grep -qiE '^feat:'; then
-              clean=$(echo "$msg" | sed 's/^feat[^:]*: //')
+            elif echo "$msg" | grep -qiE '^feat(\([a-zA-Z0-9_-]+\))?:'; then
+              clean=$(echo "$msg" | sed -r 's/^feat(\([^)]+\))?:[[:space:]]*//i')
               features="${features}- ${clean} (${hash})\n"
-            elif echo "$msg" | grep -qiE '^fix:'; then
-              clean=$(echo "$msg" | sed 's/^fix[^:]*: //')
+            elif echo "$msg" | grep -qiE '^fix(\([a-zA-Z0-9_-]+\))?:'; then
+              clean=$(echo "$msg" | sed -r 's/^fix(\([^)]+\))?:[[:space:]]*//i')
               fixes="${fixes}- ${clean} (${hash})\n"
             else
               other="${other}- ${msg} (${hash})\n"
@@ -282,7 +283,7 @@ jobs:
               Get-ChildItem -Path "target" -Filter "*.dll" -Recurse | Copy-Item -Destination staging/ -ErrorAction SilentlyContinue
           }
 
-          Copy-Item README.md, LICENSE, INSTALL.md staging/
+          Copy-Item README.md, LICENSE staging/
 
           Compress-Archive -Path staging/* -DestinationPath $archive
           $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash
@@ -302,7 +303,7 @@ jobs:
           cp "target/${{ matrix.target }}/release/omnicontext-mcp" staging/
           cp "target/${{ matrix.target }}/release/omnicontext-daemon" staging/ || true
           cp "target/${{ matrix.target }}/release/"libonnxruntime* staging/ 2>/dev/null || true
-          cp README.md LICENSE INSTALL.md staging/
+          cp README.md LICENSE staging/
 
           tar -czf "$archive" -C staging .
 
