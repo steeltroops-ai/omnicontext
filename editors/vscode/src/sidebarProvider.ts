@@ -7,6 +7,17 @@ import * as vscode from "vscode";
 import { CacheStatsManager } from "./cacheStats";
 import { EventTracker } from "./eventTracker";
 import { BootstrapStatus } from "./bootstrapService";
+import {
+  getIndexedRepos,
+  registerRepo,
+  unregisterRepo,
+  IndexedRepo,
+  hasIndexOnDisk,
+  getOmniReposDir,
+  discoverReposFromDisk,
+} from "./repoRegistry";
+import * as fs from "fs";
+import * as path from "path";
 
 interface SystemStatus {
   initialization_status: "initializing" | "ready" | "error";
@@ -39,6 +50,9 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
   private _view?: vscode.WebviewView;
   private activityLog: ActivityLogEntry[] = [];
   private readonly maxActivityEntries = 10;
+  /** Guards against rapid-fire refresh() calls (tab switches, events). */
+  private _refreshTimer: ReturnType<typeof setTimeout> | null = null;
+  private _refreshPending = false;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -89,8 +103,37 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
       await this.handleWebviewMessage(message);
     });
 
+    // Automatically update the "Active" repository tracking badge when switching tabs.
+    // Throttled to max once per 500ms so rapid tab-cycling doesn't saturate the CPU.
+    vscode.window.onDidChangeActiveTextEditor(() => {
+      if (this._view && this._view.visible) {
+        this.scheduleRefresh();
+      }
+    });
+
     // Initial refresh
     await this.refresh();
+  }
+
+  /**
+   * Schedule a debounced refresh. Prevents back-to-back refresh() calls from
+   * saturating the CPU when you rapidly switch tabs or VS Code fires multiple
+   * editor-change events.
+   */
+  private scheduleRefresh(): void {
+    if (this._refreshTimer) {
+      this._refreshPending = true;
+      return; // A refresh is already scheduled
+    }
+    this._refreshTimer = setTimeout(async () => {
+      this._refreshTimer = null;
+      await this.refresh();
+      // If another refresh was requested while we were running, do one more
+      if (this._refreshPending) {
+        this._refreshPending = false;
+        this.scheduleRefresh();
+      }
+    }, 500);
   }
 
   /**
@@ -101,22 +144,26 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    // Circuit breaker: skip all IPC calls when daemon is not connected.
-    // This is the primary fix for the "sidebar freeze" bug where awaiting
-    // IPC calls on a non-existent daemon stacked up hundreds of timed-out promises.
-    if (!this.isDaemonConnected()) {
+    const isConnected = this.isDaemonConnected();
+
+    if (!isConnected) {
       this._view.webview.postMessage({ type: "daemonOffline" });
-      return;
+      // We do NOT return early here, because we still need to send the repo list,
+      // version info, and settings to the UI even if the backend is down.
     }
 
     // Retrieve cache statistics
-    const cacheStats = await this.cacheStatsManager.getStats();
+    const cacheStats = isConnected
+      ? await this.cacheStatsManager.getStats()
+      : null;
 
     // Retrieve system status
-    const systemStatus = await this.getSystemStatus();
+    const systemStatus = isConnected ? await this.getSystemStatus() : null;
 
     // Retrieve performance metrics
-    const performanceMetrics = await this.getPerformanceMetrics();
+    const performanceMetrics = isConnected
+      ? await this.getPerformanceMetrics()
+      : null;
 
     // Get prefetch enabled state from configuration
     const config = vscode.workspace.getConfiguration("omnicontext.prefetch");
@@ -177,14 +224,49 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
     }
 
     // Send repository info
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (workspaceFolders && workspaceFolders.length > 0) {
-      const repoPath = workspaceFolders[0].uri.fsPath;
+    let currentRepoPath = "";
+
+    // 1. Prioritize the folder of the currently focused document
+    const activeEditor = vscode.window.activeTextEditor;
+    if (activeEditor) {
+      const activeFolder = vscode.workspace.getWorkspaceFolder(
+        activeEditor.document.uri,
+      );
+      if (activeFolder) {
+        currentRepoPath = activeFolder.uri.fsPath;
+      }
+    }
+
+    // 2. Fallback to the first workspace folder if no document is focused
+    if (
+      !currentRepoPath &&
+      vscode.workspace.workspaceFolders &&
+      vscode.workspace.workspaceFolders.length > 0
+    ) {
+      currentRepoPath = vscode.workspace.workspaceFolders[0].uri.fsPath;
+    }
+
+    if (currentRepoPath) {
       this._view.webview.postMessage({
         type: "updateRepositoryInfo",
-        repoPath,
+        repoPath: currentRepoPath,
       });
     }
+
+    // Auto-discover repos indexed via CLI that aren't in registry.json yet.
+    // We pass all known workspace folder paths so hashes can be resolved to names.
+    const allWorkspacePaths = (vscode.workspace.workspaceFolders || []).map(
+      (f) => f.uri.fsPath,
+    );
+    discoverReposFromDisk(allWorkspacePaths);
+
+    // Send indexed repos registry
+    const indexedRepos = getIndexedRepos();
+    this._view.webview.postMessage({
+      type: "updateIndexedRepos",
+      repos: indexedRepos,
+      activeRepoPath: currentRepoPath,
+    });
 
     // Send automation settings
     const omniConfig = vscode.workspace.getConfiguration("omnicontext");
@@ -206,14 +288,22 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
       activities: this.activityLog.slice(-this.maxActivityEntries),
     });
 
-    // Send system info
+    // Send system info -- including IDE identity for dynamic sync buttons.
+    // Use the extension context to find ourselves, regardless of publisher ID.
+    let extensionVersion = "unknown";
+    for (const ext of vscode.extensions.all) {
+      if (ext.packageJSON?.name === "omnicontext") {
+        extensionVersion = ext.packageJSON.version;
+        break;
+      }
+    }
     this._view.webview.postMessage({
       type: "updateSystemInfo",
       info: {
-        version:
-          vscode.extensions.getExtension("steeltroops-ai.omnicontext")
-            ?.packageJSON.version || "0.2.0",
+        version: extensionVersion,
         platform: `${process.platform} ${process.arch}`,
+        ideName: vscode.env.appName,
+        ideVersion: vscode.version,
       },
     });
   }
@@ -283,14 +373,6 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
         await this.handleQuickSearch();
         break;
 
-      case "syncToClaudeMcp":
-        await this.handleSyncToClaudeMcp();
-        break;
-
-      case "syncToKiroMcp":
-        await this.handleSyncToKiroMcp();
-        break;
-
       case "clearActivityLog":
         await this.handleClearActivityLog();
         break;
@@ -305,6 +387,22 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
 
       case "viewActivityDetails":
         await this.handleViewActivityDetails(message.index);
+        break;
+
+      case "removeIndexedRepo":
+        await this.handleRemoveIndexedRepo(message.hash);
+        break;
+
+      case "cleanupOrphans":
+        vscode.commands.executeCommand("omnicontext.cleanupIndexes");
+        break;
+
+      case "updateBinary":
+        vscode.commands.executeCommand("omnicontext.repair");
+        break;
+
+      case "syncMcpConfig":
+        vscode.commands.executeCommand("omnicontext.syncMcp");
         break;
 
       default:
@@ -362,6 +460,16 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
           const result = await this.sendIpcRequest("index", {});
 
           progress.report({ increment: 100, message: "Complete!" });
+
+          // Register in repo registry
+          const workspaceFolders = vscode.workspace.workspaceFolders;
+          if (workspaceFolders && workspaceFolders.length > 0) {
+            registerRepo(
+              workspaceFolders[0].uri.fsPath,
+              result.files_processed,
+              result.chunks_created,
+            );
+          }
 
           const message = `Re-indexed ${result.files_processed} files, ${result.chunks_created} chunks in ${result.elapsed_ms}ms`;
           vscode.window.showInformationMessage(message);
@@ -452,22 +560,6 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   /**
-   * Handle sync to Claude MCP request.
-   */
-  private async handleSyncToClaudeMcp(): Promise<void> {
-    // Trigger the sync command
-    vscode.commands.executeCommand("omnicontext.syncMcp");
-  }
-
-  /**
-   * Handle sync to Kiro MCP request.
-   */
-  private async handleSyncToKiroMcp(): Promise<void> {
-    // Trigger the sync command (same as Claude for now)
-    vscode.commands.executeCommand("omnicontext.syncMcp");
-  }
-
-  /**
    * Log an activity to the activity log.
    */
   public logActivity(
@@ -498,6 +590,70 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
         activities: this.activityLog.slice(-this.maxActivityEntries),
       });
     }
+  }
+
+  /**
+   * Handle remove indexed repo request.
+   */
+  private async handleRemoveIndexedRepo(hash: string): Promise<void> {
+    if (!hash) return;
+
+    const answer = await vscode.window.showWarningMessage(
+      "Remove this repository from the OmniContext registry?",
+      {
+        modal: true,
+        detail:
+          "Do you also want to delete all generated index data from disk to free up space?",
+      },
+      "Yes, delete data",
+      "No, keep data",
+      "Cancel",
+    );
+
+    if (answer === "Cancel" || !answer) {
+      return;
+    }
+
+    if (answer === "Yes, delete data") {
+      try {
+        const repoDir = path.join(getOmniReposDir(), hash);
+        if (fs.existsSync(repoDir)) {
+          fs.rmSync(repoDir, { recursive: true, force: true });
+          this.logActivity(
+            "Remove Repo",
+            "success",
+            `Deleted index data for ${hash}`,
+          );
+        } else {
+          this.logActivity(
+            "Remove Repo",
+            "info",
+            `Index data not found for ${hash}`,
+          );
+        }
+      } catch (err: any) {
+        vscode.window.showErrorMessage(
+          `Failed to delete index data: ${err.message}`,
+        );
+        this.logActivity(
+          "Remove Repo",
+          "error",
+          `Cleanup failed: ${err.message}`,
+        );
+      }
+    }
+
+    unregisterRepo(hash);
+
+    if (answer === "No, keep data") {
+      this.logActivity(
+        "Remove Repo",
+        "warning",
+        `Unregistered indexed repo: ${hash}`,
+      );
+    }
+
+    await this.refresh();
   }
 
   /**
@@ -538,14 +694,18 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
    * Collect system diagnostics.
    */
   private async collectDiagnostics(): Promise<string> {
-    const extension = vscode.extensions.getExtension(
-      "steeltroops-ai.omnicontext",
-    );
+    let extensionVersion = "unknown";
+    for (const ext of vscode.extensions.all) {
+      if (ext.packageJSON?.name === "omnicontext") {
+        extensionVersion = ext.packageJSON.version;
+        break;
+      }
+    }
     const workspaceFolders = vscode.workspace.workspaceFolders;
 
     let diagnostics = "# OmniContext Diagnostics\n\n";
-    diagnostics += `Extension Version: ${extension?.packageJSON.version || "unknown"}\n`;
-    diagnostics += `VS Code Version: ${vscode.version}\n`;
+    diagnostics += `Extension Version: ${extensionVersion}\n`;
+    diagnostics += `IDE: ${vscode.env.appName} ${vscode.version}\n`;
     diagnostics += `Platform: ${process.platform} ${process.arch}\n`;
     diagnostics += `Node Version: ${process.version}\n\n`;
 
@@ -846,6 +1006,81 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
             transition: opacity 0.2s;
         }
         
+        /* Indexed Repo Styles */
+        .repo-item {
+            padding: 8px;
+            margin-bottom: 4px;
+            background: var(--vscode-input-background);
+            border-radius: 4px;
+            border-left: 3px solid transparent;
+            font-size: 11px;
+        }
+        
+        .repo-item.active { border-left-color: #4ade80; }
+        .repo-item.stale { border-left-color: #fbbf24; }
+        .repo-item.missing { border-left-color: #f87171; }
+        
+        .repo-item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2px;
+        }
+        
+        .repo-item-name {
+            font-weight: 600;
+            font-size: 11px;
+        }
+        
+        .repo-item-badge {
+            font-size: 9px;
+            padding: 1px 5px;
+            border-radius: 3px;
+            font-weight: 500;
+        }
+        
+        .repo-item-badge.active {
+            background: rgba(74, 222, 128, 0.15);
+            color: #4ade80;
+        }
+        
+        .repo-item-badge.stale {
+            background: rgba(251, 191, 36, 0.15);
+            color: #fbbf24;
+        }
+        
+        .repo-item-badge.missing {
+            background: rgba(248, 113, 113, 0.15);
+            color: #f87171;
+        }
+        
+        .repo-item-meta {
+            font-size: 10px;
+            color: var(--vscode-descriptionForeground);
+            margin-bottom: 4px;
+        }
+        
+        .repo-item-actions {
+            display: flex;
+            justify-content: flex-end;
+        }
+        
+        .repo-item-remove {
+            background: none;
+            border: none;
+            color: var(--vscode-descriptionForeground);
+            cursor: pointer;
+            font-size: 10px;
+            padding: 2px 4px;
+            opacity: 0.6;
+            transition: opacity 0.2s, color 0.2s;
+        }
+        
+        .repo-item-remove:hover {
+            opacity: 1;
+            color: #f87171;
+        }
+        
         .activity-item:hover {
             opacity: 0.8;
         }
@@ -878,11 +1113,37 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
     </style>
 </head>
 <body>
-    <!-- System Status Section -->
+    <!-- Section 1: Indexed Repositories (TOP) -->
     <div class="section">
         <div class="section-title">
-            <span><i class="codicon codicon-pulse"></i> System Status</span>
-            <button class="refresh-btn" onclick="refreshStatus()" title="Refresh Status"><i class="codicon codicon-sync"></i></button>
+            <span><i class="codicon codicon-database"></i> Indexed Repositories</span>
+            <button class="refresh-btn" onclick="refreshStatus()" title="Refresh"><i class="codicon codicon-sync"></i></button>
+        </div>
+        
+        <div id="indexed-repos-list" style="max-height: 220px; overflow-y: auto;">
+            <div style="text-align: center; padding: 12px; color: var(--vscode-descriptionForeground); font-size: 11px;">
+                No indexed repositories found
+            </div>
+        </div>
+
+        <button class="btn btn-primary" onclick="reindexRepository()" id="reindex-btn">Index Current Workspace</button>
+        
+        <div style="margin-top: 4px;">
+            <div style="background: var(--vscode-input-background); border-radius: 4px; height: 6px; overflow: hidden; display: none;" id="progress-bar-container">
+                <div id="progress-bar" style="background: #4ade80; height: 100%; width: 0%; transition: width 0.3s;"></div>
+            </div>
+        </div>
+        
+        <button class="btn btn-secondary" onclick="cleanupOrphans()">Clean Up Orphaned Indexes</button>
+    </div>
+
+    <!-- Section 2: Engine Status -->
+    <div class="section">
+        <div class="section-title"><i class="codicon codicon-pulse"></i> Engine Status</div>
+        
+        <div class="metric-row">
+            <span class="metric-label">Repository:</span>
+            <span class="metric-value" id="repo-path" style="font-size: 10px; word-break: break-all;">-</span>
         </div>
         
         <div class="metric-row">
@@ -922,66 +1183,13 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
         </div>
     </div>
 
-    <!-- Pre-Fetch Cache Section -->
+    <!-- Section 3: Performance & Cache -->
     <div class="section">
-        <div class="section-title"><i class="codicon codicon-zap"></i> Pre-Fetch Cache</div>
-        
-        <div class="status-row active" id="prefetch-status">
-            <span class="status-label">Status</span>
-            <span class="status-value">
-                <span class="status-icon codicon" id="cache-status-icon"></span>
-                <span id="cache-status-text">Active</span>
-            </span>
-        </div>
+        <div class="section-title"><i class="codicon codicon-graph"></i> Performance</div>
         
         <div class="metric-row">
-            <span class="metric-label">Hit Rate</span>
-            <span class="metric-value" id="cache-hit-rate">0%</span>
-        </div>
-        
-        <div class="metric-row">
-            <span class="metric-label">Cache Hits</span>
-            <span class="metric-value" id="cache-hits">0</span>
-        </div>
-        
-        <div class="metric-row">
-            <span class="metric-label">Cache Misses</span>
-            <span class="metric-value" id="cache-misses">0</span>
-        </div>
-        
-        <div class="metric-row">
-            <span class="metric-label">Cache Size</span>
-            <span class="metric-value" id="cache-size">0/100</span>
-        </div>
-        
-        <div class="toggle-row">
-            <span class="toggle-label">Enable Pre-Fetch</span>
-            <label class="toggle-switch">
-                <input type="checkbox" id="prefetch-toggle" checked onchange="togglePrefetch()">
-                <span class="toggle-slider"></span>
-            </label>
-        </div>
-        
-        <button class="btn btn-secondary" onclick="clearCache()">Clear Cache</button>
-    </div>
-
-    <!-- Performance Metrics Section -->
-    <div class="section">
-        <div class="section-title"><i class="codicon codicon-graph"></i> Performance Metrics</div>
-        
-        <div class="metric-row">
-            <span class="metric-label">Search Latency (P50):</span>
-            <span class="metric-value" id="latency-p50">0ms</span>
-        </div>
-        
-        <div class="metric-row">
-            <span class="metric-label">Search Latency (P95):</span>
-            <span class="metric-value" id="latency-p95">0ms</span>
-        </div>
-        
-        <div class="metric-row">
-            <span class="metric-label">Search Latency (P99):</span>
-            <span class="metric-value" id="latency-p99">0ms</span>
+            <span class="metric-label">Search P50 / P95 / P99:</span>
+            <span class="metric-value"><span id="latency-p50">0</span> / <span id="latency-p95">0</span> / <span id="latency-p99">0</span>ms</span>
         </div>
         
         <div class="metric-row">
@@ -990,49 +1198,51 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
         </div>
         
         <div class="metric-row">
-            <span class="metric-label">Memory Usage:</span>
-            <span class="metric-value" id="memory-usage">0 MB</span>
-        </div>
-        
-        <div class="metric-row">
-            <span class="metric-label">Peak Memory:</span>
-            <span class="metric-value" id="peak-memory">0 MB</span>
+            <span class="metric-label">Memory:</span>
+            <span class="metric-value"><span id="memory-usage">0</span> / <span id="peak-memory">0</span> MB</span>
         </div>
         
         <div class="metric-row">
             <span class="metric-label">Total Searches:</span>
             <span class="metric-value" id="total-searches">0</span>
         </div>
-    </div>
-
-    <!-- Repository Management Section -->
-    <div class="section">
-        <div class="section-title"><i class="codicon codicon-folder"></i> Repository Management</div>
         
-        <div class="metric-row">
-            <span class="metric-label">Current Repository:</span>
-            <span class="metric-value" id="repo-path" style="font-size: 10px; word-break: break-all;">-</span>
-        </div>
+        <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--vscode-panel-border);">
+            <div class="section-title" style="font-size: 11px; margin-bottom: 4px;"><i class="codicon codicon-zap"></i> Pre-Fetch Cache</div>
         
-        <div class="metric-row" id="indexing-progress-row" style="display: none;">
-            <span class="metric-label">Indexing Progress:</span>
-            <span class="metric-value" id="indexing-progress">0%</span>
-        </div>
-        
-        <div style="margin-top: 8px;">
-            <div style="background: var(--vscode-input-background); border-radius: 4px; height: 6px; overflow: hidden; display: none;" id="progress-bar-container">
-                <div id="progress-bar" style="background: #4ade80; height: 100%; width: 0%; transition: width 0.3s;"></div>
+            <div class="status-row active" id="prefetch-status">
+                <span class="status-label">Status</span>
+                <span class="status-value">
+                    <span class="status-icon codicon" id="cache-status-icon"></span>
+                    <span id="cache-status-text">Active</span>
+                </span>
             </div>
+            
+            <div class="metric-row">
+                <span class="metric-label">Hit Rate:</span>
+                <span class="metric-value"><span id="cache-hit-rate">0%</span> (<span id="cache-hits">0</span> hits / <span id="cache-misses">0</span> misses)</span>
+            </div>
+            
+            <div class="metric-row">
+                <span class="metric-label">Cache Size:</span>
+                <span class="metric-value" id="cache-size">0/100</span>
+            </div>
+            
+            <div class="toggle-row">
+                <span class="toggle-label">Enable Pre-Fetch</span>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="prefetch-toggle" checked onchange="togglePrefetch()">
+                    <span class="toggle-slider"></span>
+                </label>
+            </div>
+            
+            <button class="btn btn-secondary" onclick="clearCache()">Clear Cache</button>
         </div>
-        
-        <button class="btn btn-primary" onclick="reindexRepository()" id="reindex-btn">Re-index Repository</button>
-        <button class="btn btn-secondary" onclick="clearContextCache()">Clear Context Cache</button>
-        <button class="btn btn-secondary" onclick="clearIndex()">Clear Index</button>
     </div>
 
-    <!-- Automation Section -->
+    <!-- Section 4: Settings -->
     <div class="section">
-        <div class="section-title"><i class="codicon codicon-settings-gear"></i> Automation</div>
+        <div class="section-title"><i class="codicon codicon-settings-gear"></i> Settings</div>
         
         <div class="toggle-row">
             <span class="toggle-label">Auto-Index on Open</span>
@@ -1059,16 +1269,16 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
         </div>
     </div>
 
-    <!-- Quick Actions Section -->
+    <!-- Section 5: Integrations (IDE-adaptive) -->
     <div class="section">
-        <div class="section-title"><i class="codicon codicon-rocket"></i> Quick Actions</div>
+        <div class="section-title"><i class="codicon codicon-plug"></i> Integrations</div>
         
         <button class="btn btn-primary" onclick="quickSearch()">Quick Search</button>
-        <button class="btn btn-secondary" onclick="syncToClaudeMcp()">Sync to Claude</button>
-        <button class="btn btn-secondary" onclick="syncToKiroMcp()">Sync to Kiro</button>
+        <button class="btn btn-secondary" id="sync-mcp-btn" onclick="syncMcpConfig()">Sync MCP Config</button>
+        <button class="btn btn-secondary" onclick="updateBinary()">Update / Repair</button>
     </div>
 
-    <!-- Activity Log Section -->
+    <!-- Section 6: Activity Log -->
     <div class="section">
         <div class="section-title">
             <span><i class="codicon codicon-list-unordered"></i> Activity Log</span>
@@ -1082,13 +1292,18 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
         </div>
     </div>
 
-    <!-- System Information Section -->
+    <!-- Section 7: About -->
     <div class="section">
-        <div class="section-title"><i class="codicon codicon-info"></i> System Information</div>
+        <div class="section-title"><i class="codicon codicon-info"></i> About</div>
         
         <div class="metric-row">
-            <span class="metric-label">Extension Version:</span>
-            <span class="metric-value" id="extension-version">0.2.0</span>
+            <span class="metric-label">Extension:</span>
+            <span class="metric-value" id="extension-version">-</span>
+        </div>
+        
+        <div class="metric-row">
+            <span class="metric-label">IDE:</span>
+            <span class="metric-value" id="ide-info">-</span>
         </div>
         
         <div class="metric-row">
@@ -1103,6 +1318,14 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
     <script>
         const vscode = acquireVsCodeApi();
 
+        // -- State --
+        let _ideName = 'Visual Studio Code';
+        let _systemInfo = {};
+        let _systemStatus = {};
+        let _performanceMetrics = {};
+        let _indexedRepos = [];
+
+        // -- Actions --
         function refreshStatus() {
             vscode.postMessage({ command: 'refreshStatus' });
         }
@@ -1120,12 +1343,8 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
             vscode.postMessage({ command: 'reindexRepository' });
         }
         
-        function clearContextCache() {
-            vscode.postMessage({ command: 'clearCache' });
-        }
-        
         function clearIndex() {
-            if (confirm('Are you sure you want to clear the entire index? This will require a full re-index.')) {
+            if (confirm('Are you sure you want to clear the entire index?')) {
                 vscode.postMessage({ command: 'clearIndex' });
             }
         }
@@ -1149,12 +1368,16 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
             vscode.postMessage({ command: 'quickSearch' });
         }
         
-        function syncToClaudeMcp() {
-            vscode.postMessage({ command: 'syncToClaudeMcp' });
+        function syncMcpConfig() {
+            vscode.postMessage({ command: 'syncMcpConfig' });
         }
         
-        function syncToKiroMcp() {
-            vscode.postMessage({ command: 'syncToKiroMcp' });
+        function cleanupOrphans() {
+            vscode.postMessage({ command: 'cleanupOrphans' });
+        }
+
+        function updateBinary() {
+            vscode.postMessage({ command: 'updateBinary' });
         }
         
         function clearActivityLog() {
@@ -1173,7 +1396,11 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
             vscode.postMessage({ command: 'viewActivityDetails', index });
         }
 
-        // Listen for updates from extension
+        function removeIndexedRepo(hash) {
+            vscode.postMessage({ command: 'removeIndexedRepo', hash });
+        }
+
+        // -- Message listener --
         window.addEventListener('message', event => {
             const message = event.data;
             
@@ -1199,15 +1426,17 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
                 case 'updateSystemInfo':
                     updateSystemInfo(message.info);
                     break;
+                case 'updateIndexedRepos':
+                    updateIndexedRepos(message.repos, message.activeRepoPath);
+                    break;
             }
         });
         
+        // -- Update functions --
         function updateCacheStats(data) {
-            // Update status indicator
             const statusRow = document.getElementById('prefetch-status');
             statusRow.className = 'status-row ' + data.status;
             
-            // Use codicon classes
             const iconElement = document.getElementById('cache-status-icon');
             iconElement.className = 'status-icon codicon';
             
@@ -1220,18 +1449,15 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
             }
             
             document.getElementById('cache-status-text').textContent = data.statusText;
-            
-            // Update metrics
             document.getElementById('cache-hit-rate').textContent = data.hitRate;
             document.getElementById('cache-hits').textContent = data.hits;
             document.getElementById('cache-misses').textContent = data.misses;
             document.getElementById('cache-size').textContent = data.cacheSize;
-            
-            // Update toggle state
             document.getElementById('prefetch-toggle').checked = data.prefetchEnabled;
         }
         
         function updateSystemStatus(status) {
+            _systemStatus = status || {};
             if (!status) {
                 document.getElementById('init-status').innerHTML = 
                     '<span class="status-indicator gray"></span><span>Unknown</span>';
@@ -1240,78 +1466,57 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
                 return;
             }
             
-            // Update initialization status
             const initIndicator = status.initialization_status === 'ready' ? 'green' :
                                  status.initialization_status === 'error' ? 'red' : 'yellow';
             document.getElementById('init-status').innerHTML = 
                 \`<span class="status-indicator \${initIndicator}"></span>\` +
                 \`<span>\${capitalize(status.initialization_status)}</span>\`;
             
-            // Update connection health
             const connIndicator = status.connection_health === 'connected' ? 'green pulsing' :
                                  status.connection_health === 'reconnecting' ? 'yellow' : 'red';
             document.getElementById('connection-status').innerHTML = 
                 \`<span class="status-indicator \${connIndicator}"></span>\` +
                 \`<span>\${capitalize(status.connection_health)}</span>\`;
             
-            // Update last index time
             if (status.last_index_time) {
-                const relativeTime = formatRelativeTime(status.last_index_time);
-                document.getElementById('last-index-time').textContent = relativeTime;
+                document.getElementById('last-index-time').textContent = formatRelativeTime(status.last_index_time);
             } else {
                 document.getElementById('last-index-time').textContent = 'Never';
             }
             
-            // Update daemon uptime
-            const uptime = formatUptime(status.daemon_uptime_seconds);
-            document.getElementById('daemon-uptime').textContent = uptime;
-            
-            // Update file and chunk counts
+            document.getElementById('daemon-uptime').textContent = formatUptime(status.daemon_uptime_seconds);
             document.getElementById('files-indexed').textContent = status.files_indexed.toString();
             document.getElementById('chunks-indexed').textContent = status.chunks_indexed.toString();
         }
         
         function updatePerformanceMetrics(metrics) {
-            if (!metrics) {
-                return;
-            }
+            if (!metrics) return;
+            _performanceMetrics = metrics;
             
-            // Update latency metrics
-            document.getElementById('latency-p50').textContent = \`\${metrics.search_latency_p50_ms.toFixed(1)}ms\`;
-            document.getElementById('latency-p95').textContent = \`\${metrics.search_latency_p95_ms.toFixed(1)}ms\`;
-            document.getElementById('latency-p99').textContent = \`\${metrics.search_latency_p99_ms.toFixed(1)}ms\`;
+            document.getElementById('latency-p50').textContent = metrics.search_latency_p50_ms.toFixed(1);
+            document.getElementById('latency-p95').textContent = metrics.search_latency_p95_ms.toFixed(1);
+            document.getElementById('latency-p99').textContent = metrics.search_latency_p99_ms.toFixed(1);
             
-            // Update embedding coverage
-            const coveragePercent = metrics.embedding_coverage_percent.toFixed(1);
-            document.getElementById('embedding-coverage').textContent = \`\${coveragePercent}%\`;
+            document.getElementById('embedding-coverage').textContent = \`\${metrics.embedding_coverage_percent.toFixed(1)}%\`;
             
-            // Update memory usage (convert bytes to MB)
-            const memoryMB = (metrics.memory_usage_bytes / (1024 * 1024)).toFixed(1);
-            const peakMemoryMB = (metrics.peak_memory_usage_bytes / (1024 * 1024)).toFixed(1);
-            document.getElementById('memory-usage').textContent = \`\${memoryMB} MB\`;
-            document.getElementById('peak-memory').textContent = \`\${peakMemoryMB} MB\`;
+            const memMB = (metrics.memory_usage_bytes / (1024 * 1024)).toFixed(1);
+            const peakMB = (metrics.peak_memory_usage_bytes / (1024 * 1024)).toFixed(1);
+            document.getElementById('memory-usage').textContent = memMB;
+            document.getElementById('peak-memory').textContent = peakMB;
             
-            // Update total searches
             document.getElementById('total-searches').textContent = metrics.total_searches.toString();
         }
         
         function updateRepositoryInfo(repoPath) {
-            if (!repoPath) {
-                return;
-            }
-            
-            // Extract just the folder name for display
-            const parts = repoPath.split(/[\\/]/);
+            if (!repoPath) return;
+            const parts = repoPath.split(/[\\\\/]/);
             const folderName = parts[parts.length - 1] || repoPath;
             document.getElementById('repo-path').textContent = folderName;
-            document.getElementById('repo-path').title = repoPath; // Full path in tooltip
+            document.getElementById('repo-path').title = repoPath;
         }
         
         function updateAutomationSettings(settings) {
-            if (!settings) {
-                return;
-            }
-            
+            if (!settings) return;
             document.getElementById('auto-index-toggle').checked = settings.autoIndex;
             document.getElementById('auto-daemon-toggle').checked = settings.autoStartDaemon;
             document.getElementById('auto-sync-toggle').checked = settings.autoSyncMcp;
@@ -1343,12 +1548,88 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
         }
         
         function updateSystemInfo(info) {
-            if (!info) {
+            if (!info) return;
+            _systemInfo = info;
+            _ideName = info.ideName || 'Visual Studio Code';
+            
+            document.getElementById('extension-version').textContent = 'v' + (info.version || 'unknown');
+            document.getElementById('platform-info').textContent = info.platform || '-';
+            document.getElementById('ide-info').textContent = \`\${_ideName} \${info.ideVersion || ''}\`;
+            
+            // Adapt Sync MCP button label based on IDE
+            const syncBtn = document.getElementById('sync-mcp-btn');
+            const name = _ideName.toLowerCase();
+            if (name.includes('cursor')) {
+                syncBtn.textContent = 'Sync MCP to Cursor';
+            } else if (name.includes('kiro')) {
+                syncBtn.textContent = 'Sync MCP to Kiro';
+            } else if (name.includes('windsurf')) {
+                syncBtn.textContent = 'Sync MCP to Windsurf';
+            } else if (name.includes('antigravity')) {
+                syncBtn.style.display = 'none'; // Built-in, no sync needed
+            } else if (name.includes('cloud code')) {
+                syncBtn.textContent = 'Sync MCP to Cloud Code';
+            } else {
+                // VS Code / Codium / etc.
+                syncBtn.textContent = 'Sync MCP to Claude/Copilot';
+            }
+        }
+
+        function updateIndexedRepos(repos, activeRepoPath) {
+            const container = document.getElementById('indexed-repos-list');
+            _indexedRepos = repos || [];
+            
+            if (!repos || repos.length === 0) {
+                container.innerHTML = '<div style="text-align: center; padding: 12px; color: var(--vscode-descriptionForeground); font-size: 11px;">No indexed repositories found</div>';
                 return;
             }
             
-            document.getElementById('extension-version').textContent = info.version || '0.2.0';
-            document.getElementById('platform-info').textContent = info.platform || '-';
+            const normalizedActive = (activeRepoPath || '').replace(/\\\\/g, '/').toLowerCase();
+            
+            container.innerHTML = repos.map(repo => {
+                const normalizedRepo = repo.repoPath.replace(/\\\\/g, '/').toLowerCase();
+                const isActive = normalizedActive && normalizedRepo === normalizedActive;
+                const isMissing = !repo.exists;
+                
+                let statusClass = 'stale';
+                let badgeText = 'Ready';
+                
+                if (isMissing) {
+                    statusClass = 'missing';
+                    badgeText = 'Missing';
+                } else if (isActive) {
+                    statusClass = 'active';
+                    badgeText = 'Active';
+                }
+                
+                const indexedAgo = formatRelativeTimeMs(repo.lastIndexedAt);
+                
+                return \`
+                    <div class="repo-item \${statusClass}" title="\${repo.repoPath}">
+                        <div class="repo-item-header">
+                            <span class="repo-item-name">\${repo.name}</span>
+                            <span class="repo-item-badge \${statusClass}">\${badgeText}</span>
+                        </div>
+                        <div class="repo-item-meta">
+                            \${repo.filesIndexed} files, \${repo.chunksIndexed} chunks -- \${indexedAgo}
+                        </div>
+                        <div class="repo-item-actions">
+                            <button class="repo-item-remove" onclick="removeIndexedRepo('\${repo.hash}')" title="Remove from registry">
+                                <i class="codicon codicon-close"></i> Remove
+                            </button>
+                        </div>
+                    </div>
+                \`;
+            }).join('');
+        }
+        
+        function formatRelativeTimeMs(timestampMs) {
+            const seconds = Math.floor((Date.now() - timestampMs) / 1000);
+            
+            if (seconds < 60) return \`\${seconds}s ago\`;
+            if (seconds < 3600) return \`\${Math.floor(seconds / 60)}m ago\`;
+            if (seconds < 86400) return \`\${Math.floor(seconds / 3600)}h ago\`;
+            return \`\${Math.floor(seconds / 86400)}d ago\`;
         }
         
         function formatRelativeTime(timestamp) {

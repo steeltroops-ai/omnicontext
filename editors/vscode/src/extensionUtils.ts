@@ -10,12 +10,24 @@ import * as crypto from "crypto";
  *
  * Uses a SHA-256 hash of the normalized path to create a deterministic,
  * filesystem-safe pipe name. Consistent across extension restarts.
+ *
+ * Normalization must match the daemon's `default_pipe_name()`:
+ *   1. Strip `\\?\` prefix
+ *   2. Backslash -> forward slash
+ *   3. Lowercase
+ *   4. Strip trailing separator(s)
  */
 export function derivePipeName(repoRoot: string): string {
-  const normalized = repoRoot
+  let normalized = repoRoot
     .replace("\\\\?\\", "")
     .replace(/\\/g, "/")
     .toLowerCase();
+
+  // Strip trailing separator(s) for consistency
+  while (normalized.endsWith("/")) {
+    normalized = normalized.slice(0, -1);
+  }
+
   const hash = crypto
     .createHash("sha256")
     .update(normalized)
@@ -298,6 +310,13 @@ export function getKnownMcpClients(): McpClientTarget[] {
  * Build the MCP server entry for OmniContext.
  * Uses a workspace-specific key derived from the repo root hash to
  * prevent multiple VS Code windows from overwriting each other.
+ *
+ * Defense-in-depth: passes the repo path via three independent channels
+ * so external AI agents (Antigravity, Claude Desktop, Cursor, etc.)
+ * always resolve the correct workspace even if one mechanism is stripped:
+ *   1. --repo <path>           (primary)
+ *   2. --cwd  <path>           (fallback if --repo is swallowed)
+ *   3. OMNICONTEXT_REPO env    (fallback if args are not forwarded)
  */
 export function buildMcpServerEntry(
   mcpBinaryPath: string,
@@ -305,7 +324,10 @@ export function buildMcpServerEntry(
 ): McpServerEntry {
   return {
     command: mcpBinaryPath,
-    args: ["--repo", repoRoot],
+    args: ["--repo", repoRoot, "--cwd", repoRoot],
+    env: {
+      OMNICONTEXT_REPO: repoRoot,
+    },
     disabled: false,
   };
 }
@@ -360,6 +382,7 @@ export function mergeMcpConfig(
 export interface McpServerEntry {
   command: string;
   args: string[];
+  env?: Record<string, string>;
   disabled?: boolean;
   autoApprove?: string[];
 }

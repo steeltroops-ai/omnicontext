@@ -21,13 +21,25 @@ use crate::metrics::PerformanceMetrics;
 use crate::protocol::{self, error_codes, Response};
 
 /// Derive a deterministic pipe/socket name from the repository path.
+///
+/// Normalization must match the extension's `derivePipeName()`:
+///   1. Strip `\\?\` prefix
+///   2. Backslash -> forward slash
+///   3. Lowercase
+///   4. Strip trailing separator(s)
 pub fn default_pipe_name(repo_path: &Path) -> String {
     use sha2::{Digest, Sha256};
-    let normalized = repo_path
+    let mut normalized = repo_path
         .to_string_lossy()
         .replace(r"\\?\", "")
         .replace('\\', "/")
         .to_lowercase();
+
+    // Strip trailing separator to match extension behavior
+    while normalized.ends_with('/') {
+        normalized.pop();
+    }
+
     let mut hasher = Sha256::new();
     hasher.update(normalized.as_bytes());
     let hash = hex::encode(&hasher.finalize()[..6]);

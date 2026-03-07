@@ -1,12 +1,15 @@
 # OmniContext VS Code Extension
 
+> Provides intelligent pre-fetch caching and automatic semantic context injection capabilities, bridging the OmniContext daemon and AI assistants within Visual Studio Code.
+
+---
+
 [![VS Code Marketplace](https://img.shields.io/badge/VS%20Code-Marketplace-blue?logo=visual-studio-code)](https://marketplace.visualstudio.com/items?itemName=steeltroops.omnicontext&ssr=false#overview)
 [![Open VSX](https://img.shields.io/badge/Open%20VSX-Registry-purple)](https://open-vsx.org/extension/steeltroops/omnicontext)
-Provides intelligent pre-fetch caching and automatic semantic context injection capabilities, bridging the OmniContext daemon and AI assistants within Visual Studio Code.
 
 ## Architecture
 
-![Extension Architecture Breakdown](./resources/extension-architecture-diagram.svg)
+![Extension Architecture Breakdown](./resources/extension-architecture-diagram.png)
 
 ## System Implementation Constraints
 

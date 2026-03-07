@@ -490,13 +490,21 @@ suite("extensionUtils", () => {
   });
 
   suite("buildMcpServerEntry", () => {
-    test("should build entry with correct command and args", () => {
+    test("should build entry with correct command, args, and env", () => {
       const entry = buildMcpServerEntry(
         "/usr/bin/omnicontext-mcp",
         "/home/user/project",
       );
       assert.strictEqual(entry.command, "/usr/bin/omnicontext-mcp");
-      assert.deepStrictEqual(entry.args, ["--repo", "/home/user/project"]);
+      assert.deepStrictEqual(entry.args, [
+        "--repo",
+        "/home/user/project",
+        "--cwd",
+        "/home/user/project",
+      ]);
+      assert.deepStrictEqual(entry.env, {
+        OMNICONTEXT_REPO: "/home/user/project",
+      });
       assert.strictEqual(entry.disabled, false);
     });
 
@@ -506,7 +514,15 @@ suite("extensionUtils", () => {
         "C:\\Users\\dev\\project",
       );
       assert.strictEqual(entry.command, "C:\\bin\\omnicontext-mcp.exe");
-      assert.deepStrictEqual(entry.args, ["--repo", "C:\\Users\\dev\\project"]);
+      assert.deepStrictEqual(entry.args, [
+        "--repo",
+        "C:\\Users\\dev\\project",
+        "--cwd",
+        "C:\\Users\\dev\\project",
+      ]);
+      assert.deepStrictEqual(entry.env, {
+        OMNICONTEXT_REPO: "C:\\Users\\dev\\project",
+      });
     });
   });
 
@@ -600,7 +616,12 @@ suite("extensionUtils", () => {
       assert.deepStrictEqual(merged.mcpServers.omnicontext.args, [
         "--repo",
         "/new/repo",
+        "--cwd",
+        "/new/repo",
       ]);
+      assert.deepStrictEqual(merged.mcpServers.omnicontext.env, {
+        OMNICONTEXT_REPO: "/new/repo",
+      });
     });
   });
 });

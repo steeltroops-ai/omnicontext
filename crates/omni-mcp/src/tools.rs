@@ -99,6 +99,15 @@ pub struct SearchByIntentParams {
     pub token_budget: Option<u32>,
 }
 
+/// Parameters for `set_workspace` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SetWorkspaceParams {
+    /// Absolute path to the new repository root.
+    pub path: String,
+    /// Whether to auto-index the new workspace if no index exists (default: true).
+    pub auto_index: Option<bool>,
+}
+
 // -----------------------------------------------------------------------
 // MCP Server
 // -----------------------------------------------------------------------
@@ -862,6 +871,84 @@ impl OmniContextServer {
             )),
         }
     }
+
+    #[tool(
+        name = "set_workspace",
+        description = "Switch the engine to a different repository/workspace path at runtime. Use this when the current repository is incorrect or you need to query a different project. The engine will reinitialize with the new path and optionally auto-index it."
+    )]
+    async fn set_workspace(
+        &self,
+        params: Parameters<SetWorkspaceParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let path_str = &params.0.path;
+        let auto_index = params.0.auto_index.unwrap_or(true);
+
+        let new_path = std::path::PathBuf::from(path_str)
+            .canonicalize()
+            .unwrap_or_else(|_| std::path::PathBuf::from(path_str));
+
+        if !new_path.exists() {
+            return Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: path does not exist: {path_str}",
+            ))]));
+        }
+
+        // Reinitialize the engine with the new path
+        let new_engine = match omni_core::Engine::new(&new_path) {
+            Ok(e) => e,
+            Err(e) => {
+                return Err(McpError::internal_error(
+                    format!(
+                        "failed to initialize engine for {}: {e}",
+                        new_path.display()
+                    ),
+                    None,
+                ));
+            }
+        };
+
+        // Check if auto-index is needed
+        let status_before = new_engine.status().ok();
+        let needs_index = auto_index
+            && status_before
+                .as_ref()
+                .map_or(true, |s| s.files_indexed == 0);
+
+        // Swap the engine
+        {
+            let mut engine = self.engine.lock().await;
+            *engine = new_engine;
+        }
+
+        // Auto-index if needed
+        if needs_index {
+            let mut engine = self.engine.lock().await;
+            match engine.run_index().await {
+                Ok(result) => {
+                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                        "Workspace switched to: {}\nAuto-indexed: {} files, {} chunks, {} symbols",
+                        new_path.display(),
+                        result.files_processed,
+                        result.chunks_created,
+                        result.symbols_extracted,
+                    ))]));
+                }
+                Err(e) => {
+                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                        "Workspace switched to: {}\nWarning: auto-index failed: {e}",
+                        new_path.display(),
+                    ))]));
+                }
+            }
+        }
+
+        let files = status_before.map_or(0, |s| s.files_indexed);
+        Ok(CallToolResult::success(vec![Content::text(format!(
+            "Workspace switched to: {} ({} files in existing index)",
+            new_path.display(),
+            files,
+        ))]))
+    }
 }
 
 #[tool_handler]
@@ -873,7 +960,8 @@ impl ServerHandler for OmniContextServer {
                  It indexes source code into searchable chunks with full-text and semantic search. \
                  Use search_code for general queries, get_symbol for specific lookups, \
                  get_file_summary for file structure, get_module_map for architecture overview, \
-                 and search_by_intent for natural language queries with automatic expansion."
+                 search_by_intent for natural language queries with automatic expansion, \
+                 and set_workspace to switch the active repository at runtime."
                     .into(),
             ),
             capabilities: ServerCapabilities::builder().enable_tools().build(),

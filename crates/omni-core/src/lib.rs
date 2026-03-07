@@ -91,6 +91,7 @@ pub mod workspace;
 // Service Layer
 pub mod server;
 
+pub use config::normalize_repo_hash;
 pub use config::Config;
 pub use error::OmniError;
 /// Re-export the primary engine interface.

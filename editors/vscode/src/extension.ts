@@ -26,6 +26,7 @@ import {
   resolveBinaries,
   BootstrapResult,
 } from "./bootstrapService";
+import { registerRepo } from "./repoRegistry";
 
 let statusBarItem: vscode.StatusBarItem;
 let outputChannel: vscode.OutputChannel;
@@ -138,6 +139,9 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("omnicontext.refreshSidebar", () => {
       sidebarProvider.refresh();
     }),
+    vscode.commands.registerCommand("omnicontext.cleanupIndexes", () =>
+      runCleanupIndexes(),
+    ),
   );
 
   // Register the chat participant for context injection
@@ -191,7 +195,24 @@ export function activate(context: vscode.ExtensionContext) {
         if (config.get<boolean>("autoStartDaemon", true)) {
           await startDaemon(true);
         } else if (config.get<boolean>("autoIndex", true)) {
-          await runIndex(true);
+          // Only auto-index if this workspace was previously indexed.
+          // For new/unindexed workspaces, prompt the user first.
+          const root = getWorkspaceRoot();
+          if (root) {
+            const { isRepoIndexed } = await import("./repoRegistry");
+            if (isRepoIndexed(root)) {
+              await runIndex(true);
+            } else {
+              const answer = await vscode.window.showInformationMessage(
+                `Index "${path.basename(root)}" for AI context?`,
+                "Index Now",
+                "Not Now",
+              );
+              if (answer === "Index Now") {
+                await runIndex(false);
+              }
+            }
+          }
         }
 
         sidebarProvider.refresh();
@@ -205,10 +226,12 @@ export function activate(context: vscode.ExtensionContext) {
     },
   );
 
-  // Poll for status updates for sidebar (non-blocking; sidebar guards internally)
+  // Poll for status updates for sidebar. With event-based tab-switch refresh
+  // now in place, we only need this for daemon status changes (connect/disconnect).
+  // 30s is sufficient and much lighter on CPU than the old 10s interval.
   sidebarRefreshInterval = setInterval(() => {
     sidebarProvider.refresh();
-  }, 10000);
+  }, 30000);
 }
 
 export function deactivate() {
@@ -330,6 +353,30 @@ async function runRepairEnvironment() {
   } else {
     vscode.window.showInformationMessage("Repair is only needed on Windows.");
   }
+}
+
+async function runCleanupIndexes() {
+  const { purgeOrphanedIndexes, getOmniReposDir } =
+    await import("./repoRegistry");
+  const reposDir = getOmniReposDir();
+
+  const answer = await vscode.window.showWarningMessage(
+    `This will remove orphaned index folders from:\n${reposDir}\n\nOnly indexes tracked in the registry will be kept. Continue?`,
+    "Clean Up",
+    "Cancel",
+  );
+
+  if (answer !== "Clean Up") return;
+
+  const result = purgeOrphanedIndexes();
+  const msg = `Cleanup complete: ${result.removed.length} orphaned indexes removed, ${result.kept.length} kept.`;
+  outputChannel.appendLine(`[cleanup] ${msg}`);
+
+  if (result.errors.length > 0) {
+    outputChannel.appendLine(`[cleanup] errors: ${result.errors.join(", ")}`);
+  }
+
+  vscode.window.showInformationMessage(msg);
 }
 
 // ... (existing helper functions) ...
@@ -945,6 +992,13 @@ async function runIndex(silent: boolean = false) {
     try {
       const result = await sendIpcRequest("index", {});
       statusBarItem.text = `$(zap) OmniContext (${result.files_processed} files)`;
+
+      // Record in repo registry for sidebar tracking
+      const root = getWorkspaceRoot();
+      if (root) {
+        registerRepo(root, result.files_processed, result.chunks_created);
+      }
+
       if (!silent) {
         vscode.window.showInformationMessage(
           `OmniContext: Indexed ${result.files_processed} files, ` +
@@ -977,6 +1031,9 @@ async function runIndex(silent: boolean = false) {
 
     const data = JSON.parse(result);
     statusBarItem.text = `$(search) OmniContext (${data.files_processed} files)`;
+
+    // Record in repo registry for sidebar tracking
+    registerRepo(root, data.files_processed, data.chunks_created);
 
     if (!silent) {
       vscode.window.showInformationMessage(

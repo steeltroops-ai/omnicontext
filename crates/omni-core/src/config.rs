@@ -460,18 +460,56 @@ impl Config {
 
     /// Compute a short hash of the repo path for the data directory name.
     ///
-    /// Normalizes the path to avoid Windows `\\?\` extended path prefix
-    /// causing different hashes for the same physical directory.
+    /// **Full normalization** to prevent duplicate index directories:
+    ///   1. Strip Windows extended path prefix (`\\?\`)
+    ///   2. Convert all backslashes to forward slashes
+    ///   3. Lowercase (Windows paths are case-insensitive)
+    ///   4. Strip trailing separator
+    ///
+    /// Without this normalization, the same physical directory can produce
+    /// different hashes (and thus different index folders) depending on how
+    /// the path is passed (CLI vs canonicalize vs VS Code URI).
     fn repo_hash(&self) -> String {
-        use sha2::{Digest, Sha256};
-        let path_str = self.repo_path.to_string_lossy();
-        // Strip Windows extended path prefix for consistent hashing
-        let normalized = path_str.strip_prefix(r"\\?\").unwrap_or(&path_str);
-        let mut hasher = Sha256::new();
-        hasher.update(normalized.as_bytes());
-        let result = hasher.finalize();
-        hex::encode(&result[..4])
+        normalize_repo_hash(&self.repo_path.to_string_lossy())
     }
+}
+
+/// Normalize a repository path string and compute its 8-char hex hash.
+///
+/// Public so that extension-side code (TypeScript) can replicate the
+/// exact same normalization and hash.  The normalization steps are:
+///
+///   1. Strip `\\?\` extended path prefix (Windows `canonicalize()` quirk)
+///   2. Replace all backslashes with forward slashes
+///   3. Lowercase the entire string (Windows FS is case-insensitive)
+///   4. Trim any trailing `/`
+///
+/// The first 4 bytes (8 hex chars) of SHA-256 are used.
+pub fn normalize_repo_hash(path: &str) -> String {
+    use sha2::{Digest, Sha256};
+
+    let mut normalized = path.to_string();
+
+    // 1. Strip Windows extended path prefix
+    if let Some(stripped) = normalized.strip_prefix(r"\\?\") {
+        normalized = stripped.to_string();
+    }
+
+    // 2. Uniform separator: backslash -> forward slash
+    normalized = normalized.replace('\\', "/");
+
+    // 3. Case-fold (critical on Windows -- paths are case-insensitive)
+    normalized = normalized.to_lowercase();
+
+    // 4. Strip trailing separator
+    while normalized.ends_with('/') {
+        normalized.pop();
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(normalized.as_bytes());
+    let result = hasher.finalize();
+    hex::encode(&result[..4])
 }
 
 #[cfg(test)]
@@ -503,5 +541,60 @@ mod tests {
         use crate::types::ChunkKind;
         assert!(ChunkKind::Class.default_weight() > ChunkKind::Test.default_weight());
         assert!(ChunkKind::Function.default_weight() > ChunkKind::TopLevel.default_weight());
+    }
+
+    #[test]
+    fn test_normalize_repo_hash_case_insensitive() {
+        let h1 = normalize_repo_hash(r"C:\Users\Dev\MyProject");
+        let h2 = normalize_repo_hash(r"c:\users\dev\myproject");
+        assert_eq!(h1, h2, "same path, different case => same hash");
+    }
+
+    #[test]
+    fn test_normalize_repo_hash_separator_agnostic() {
+        let h1 = normalize_repo_hash(r"C:\Users\Dev\MyProject");
+        let h2 = normalize_repo_hash("C:/Users/Dev/MyProject");
+        assert_eq!(h1, h2, "backslash vs forward slash => same hash");
+    }
+
+    #[test]
+    fn test_normalize_repo_hash_trailing_separator() {
+        let h1 = normalize_repo_hash(r"C:\Users\Dev\MyProject");
+        let h2 = normalize_repo_hash(r"C:\Users\Dev\MyProject\");
+        let h3 = normalize_repo_hash("C:/Users/Dev/MyProject/");
+        assert_eq!(h1, h2, "trailing backslash stripped");
+        assert_eq!(h1, h3, "trailing forward slash stripped");
+    }
+
+    #[test]
+    fn test_normalize_repo_hash_extended_prefix() {
+        let h1 = normalize_repo_hash(r"C:\Users\Dev\MyProject");
+        let h2 = normalize_repo_hash(r"\\?\C:\Users\Dev\MyProject");
+        assert_eq!(h1, h2, "\\\\?\\ prefix stripped");
+    }
+
+    #[test]
+    fn test_normalize_repo_hash_combined() {
+        // All variations at once
+        let h1 = normalize_repo_hash(r"C:\Omniverse\Projects\omnicontext");
+        let h2 = normalize_repo_hash(r"\\?\C:\Omniverse\Projects\omnicontext\");
+        let h3 = normalize_repo_hash("c:/omniverse/projects/omnicontext");
+        let h4 = normalize_repo_hash(r"c:\OMNIVERSE\projects\OmniContext/");
+        assert_eq!(h1, h2);
+        assert_eq!(h1, h3);
+        assert_eq!(h1, h4);
+    }
+
+    #[test]
+    fn test_normalize_repo_hash_unix_paths() {
+        let h1 = normalize_repo_hash("/home/user/project");
+        let h2 = normalize_repo_hash("/home/user/project/");
+        assert_eq!(h1, h2, "trailing slash stripped on unix");
+    }
+
+    #[test]
+    fn test_normalize_repo_hash_length() {
+        let hash = normalize_repo_hash("/test/repo");
+        assert_eq!(hash.len(), 8, "hash should be 8 hex chars (4 bytes)");
     }
 }

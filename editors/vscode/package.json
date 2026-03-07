@@ -3,7 +3,7 @@
   "displayName": "OmniContext",
   "description": "Universal code context engine for AI coding agents -- semantic search, dependency graph, pre-flight context injection, MCP integration",
   "version": "0.10.0",
-  "publisher": "steeltroops",
+  "publisher": "steeltroops-ai",
   "license": "Apache-2.0",
   "icon": "logo.png",
   "repository": {
@@ -99,6 +99,16 @@
         "command": "omnicontext.refreshSidebar",
         "title": "OmniContext: Refresh Sidebar",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "omnicontext.cleanupIndexes",
+        "title": "OmniContext: Clean Up Orphaned Indexes",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "omnicontext.repair",
+        "title": "OmniContext: Update / Repair Extension Backend",
+        "icon": "$(tools)"
       }
     ],
     "configuration": {
