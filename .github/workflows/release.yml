@@ -56,11 +56,11 @@ jobs:
           has_fix=false
 
           while IFS= read -r commit; do
-            if echo "$commit" | grep -qiE '^[a-z]+(\([a-zA-Z0-9_-]+\))?!:|BREAKING CHANGE:'; then
+            if echo "$commit" | grep -qiE '^[a-z]+(\([a-zA-Z0-9_,-]+\))?!:|BREAKING CHANGE:'; then
               has_breaking=true
-            elif echo "$commit" | grep -qiE '^feat(\([a-zA-Z0-9_-]+\))?:'; then
+            elif echo "$commit" | grep -qiE '^feat(\([a-zA-Z0-9_,-]+\))?:'; then
               has_feat=true
-            elif echo "$commit" | grep -qiE '^fix(\([a-zA-Z0-9_-]+\))?:'; then
+            elif echo "$commit" | grep -qiE '^fix(\([a-zA-Z0-9_,-]+\))?:'; then
               has_fix=true
             fi
           done <<< "$commits"
