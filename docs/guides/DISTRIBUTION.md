@@ -1,218 +1,111 @@
-# OmniContext Distribution
+# OmniContext Distribution Systems
 
-This directory contains installation scripts and package manager manifests for distributing OmniContext.
+This subsystem governs the deployment paths, package manager integrations, and automated dependency resolution (ONNX Runtime, Jina Embeddings) required to initialize OmniContext across operating systems.
 
-## Quick Install
+## Distribution Architecture
 
-### Windows (PowerShell)
+```mermaid
+graph TD
+    subgraph Users [End User Systems]
+        win_user[Windows User]
+        mac_user[macOS User]
+        lin_user[Linux User]
+    end
+
+    subgraph Scripts [Bootstrap Scripts]
+        ps1[`install.ps1`]
+        sh[`install.sh`]
+        up1[`update.ps1`]
+        up2[`update.sh`]
+    end
+
+    subgraph PackageManagers [Package Managers]
+        scoop[Scoop: `omnicontext.json`]
+        brew[Homebrew: `omnicontext.rb`]
+        pkgx[Pkgx]
+        binstall[Cargo Binstall]
+    end
+
+    subgraph Dependencies [Runtime Requirements]
+        onnx_win[ONNX Runtime DLL]
+        onnx_mac[ONNX Runtime DYLIB]
+        onnx_lin[ONNX Runtime SO]
+        model[Jina AI Embedding Model]
+    end
+
+    subgraph CI [GitHub Actions / Release]
+        rel[GitHub Releases API]
+        assets[Pre-compiled Binaries]
+        sha[SHA256 Checksums]
+    end
+
+    win_user --> ps1
+    win_user --> scoop
+    mac_user --> sh
+    mac_user --> brew
+    lin_user --> sh
+    lin_user --> pkgx
+
+    ps1 --> rel
+    sh --> rel
+    brew --> rel
+    scoop --> rel
+
+    rel --> assets
+    rel --> sha
+
+    ps1 --> onnx_win
+    sh --> onnx_mac
+    sh --> onnx_lin
+
+    onnx_win --> model
+    onnx_mac --> model
+    onnx_lin --> model
+
+    model --> system_path[User PATH updated]
+    system_path --> mcp_inject[Zero-Config MCP Discovery]
+```
+
+## Supported Channels
+
+### Zero-Config Shell Scripts
+
+Directly bootstrap the target architecture, inject dependencies, and configure the user path.
+
+**Windows PowerShell**:
+
 ```powershell
 irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install.ps1 | iex
 ```
 
-### Linux/macOS (Bash)
+**macOS/Linux Bash**:
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install.sh | bash
 ```
 
-### Scoop (Windows)
-```powershell
-scoop bucket add omnicontext https://github.com/steeltroops-ai/omnicontext
-scoop install omnicontext
-```
+### Managed Packages
 
-### Homebrew (macOS/Linux)
-```bash
-brew tap steeltroops-ai/omnicontext
-brew install omnicontext
-```
+Manifests hosted in external tap repositories.
 
-## What Gets Installed
+- **Scoop (Windows)**: `distribution/scoop/omnicontext.json`
+- **Homebrew (macOS/Linux)**: `distribution/homebrew/omnicontext.rb`
 
-All installation methods automatically:
-1. Download OmniContext binaries (omnicontext, omnicontext-mcp, omnicontext-daemon)
-2. Download ONNX Runtime 1.23.0 (required for AI embeddings)
-3. Download Jina AI embedding model (~550MB)
-4. Add binaries to PATH
-5. Verify installation
+## Post-Install Resolution (Dependencies)
 
-## Files
+To execute semantic embedding, OmniContext requires ONNX Runtime 1.23.0 and the `jina-embeddings-v2-base-code` model.
 
-### Installation Scripts
+The distribution scripts actively fetch these during installation:
 
-- **`install.ps1`** - Windows PowerShell installer
-  - Downloads latest release from GitHub
-  - Installs to `$HOME\.omnicontext\bin`
-  - Automatically downloads ONNX Runtime 1.23.0
-  - Downloads embedding model
-  - Adds to User PATH
+1. **Windows**: Downloads `onnxruntime-win-x64-1.23.0.zip` from Microsoft directly to `$HOME\.omnicontext\bin`.
+2. **Unix**: Downloads `onnxruntime-linux-x64` or `onnxruntime-osx` and links the libraries automatically via `.dll`, `.so`, or `.dylib` co-location.
+3. Automatically triggers `omnicontext setup model-download` during bootstrap to cache the 550MB model cleanly.
 
-- **`install.sh`** - Linux/macOS Bash installer
-  - Downloads latest release from GitHub
-  - Installs to `$HOME/.local/bin`
-  - Automatically downloads ONNX Runtime 1.23.0
-  - Downloads embedding model
-  - Adds to PATH (requires shell restart)
+## Release Process Map
 
-### Package Manager Manifests
-
-- **`scoop/omnicontext.json`** - Scoop manifest for Windows
-  - Auto-updates from GitHub releases
-  - Includes post-install script for model download
-  - Validates SHA256 checksums
-
-- **`homebrew/omnicontext.rb`** - Homebrew formula for macOS/Linux
-  - Auto-updates from GitHub releases
-  - Includes post-install hook for model download
-  - Validates SHA256 checksums
-
-## Testing Locally
-
-### Test PowerShell Installer
-```powershell
-# From project root
-.\distribution\install.ps1
-```
-
-### Test Bash Installer
-```bash
-# From project root
-bash distribution/install.sh
-```
-
-### Test Scoop Manifest
-```powershell
-# Validate JSON syntax
-Get-Content distribution/scoop/omnicontext.json | ConvertFrom-Json
-
-# Test installation (requires actual release)
-scoop install distribution/scoop/omnicontext.json
-```
-
-### Test Homebrew Formula
-```bash
-# Validate Ruby syntax
-ruby -c distribution/homebrew/omnicontext.rb
-
-# Test installation (requires actual release)
-brew install --build-from-source distribution/homebrew/omnicontext.rb
-```
-
-## Release Checklist
-
-When creating a new release, update these files:
-
-1. **Update version in `Cargo.toml`**
-   ```toml
-   [workspace.package]
-   version = "0.2.0"
-   ```
-
-2. **Update `distribution/scoop/omnicontext.json`**
-   - Update `version` field
-   - Update SHA256 hash after building release
-
-3. **Update `distribution/homebrew/omnicontext.rb`**
-   - Update `version` field
-   - Update SHA256 hashes for each platform after building release
-
-4. **Build release binaries**
-   ```bash
-   # Build for all platforms
-   cargo build --release --target x86_64-pc-windows-msvc
-   cargo build --release --target x86_64-unknown-linux-gnu
-   cargo build --release --target x86_64-apple-darwin
-   cargo build --release --target aarch64-apple-darwin
-   ```
-
-5. **Generate SHA256 checksums**
-   ```bash
-   # Windows
-   sha256sum omnicontext-v0.2.0-x86_64-pc-windows-msvc.zip > omnicontext-v0.2.0-x86_64-pc-windows-msvc.zip.sha256
-   
-   # Linux
-   sha256sum omnicontext-v0.2.0-x86_64-unknown-linux-gnu.tar.gz > omnicontext-v0.2.0-x86_64-unknown-linux-gnu.tar.gz.sha256
-   
-   # macOS Intel
-   sha256sum omnicontext-v0.2.0-x86_64-apple-darwin.tar.gz > omnicontext-v0.2.0-x86_64-apple-darwin.tar.gz.sha256
-   
-   # macOS ARM
-   sha256sum omnicontext-v0.2.0-aarch64-apple-darwin.tar.gz > omnicontext-v0.2.0-aarch64-apple-darwin.tar.gz.sha256
-   ```
-
-6. **Create GitHub release**
-   - Tag: `v0.2.0`
-   - Upload all binaries and SHA256 files
-   - Update release notes
-
-7. **Test installation**
-   - Test PowerShell installer on Windows
-   - Test Bash installer on Linux/macOS
-   - Test Scoop installation
-   - Test Homebrew installation
-
-## ONNX Runtime Auto-Download
-
-All installation methods now automatically download ONNX Runtime 1.23.0, which is required for the AI embedding model to work.
-
-### Windows
-- Downloads from: `https://github.com/microsoft/onnxruntime/releases/download/v1.23.0/onnxruntime-win-x64-1.23.0.zip`
-- Installs to: `$HOME\.omnicontext\bin\` (same directory as binaries)
-- Files: `onnxruntime.dll`, `onnxruntime.lib`, `onnxruntime_providers_shared.dll`, etc.
-
-### Linux
-- Downloads from: `https://github.com/microsoft/onnxruntime/releases/download/v1.23.0/onnxruntime-linux-x64-1.23.0.tgz`
-- Installs to: `$HOME/.local/lib/onnxruntime/`
-- Requires: `export LD_LIBRARY_PATH="$HOME/.local/lib/onnxruntime:$LD_LIBRARY_PATH"`
-
-### macOS
-- Downloads from: 
-  - Intel: `https://github.com/microsoft/onnxruntime/releases/download/v1.23.0/onnxruntime-osx-x64-1.23.0.tgz`
-  - ARM: `https://github.com/microsoft/onnxruntime/releases/download/v1.23.0/onnxruntime-osx-arm64-1.23.0.tgz`
-- Installs to: `$HOME/.local/lib/onnxruntime/`
-- Requires: `export DYLD_LIBRARY_PATH="$HOME/.local/lib/onnxruntime:$DYLD_LIBRARY_PATH"`
-
-## Troubleshooting
-
-### ONNX Runtime Not Found
-If you see "ONNX Runtime version mismatch" or "model not available" errors:
-
-**Windows:**
-```powershell
-# Run the fix script
-pwsh scripts/fix-onnx-runtime.ps1
-```
-
-**Linux/macOS:**
-```bash
-# Add to ~/.bashrc or ~/.zshrc
-export LD_LIBRARY_PATH="$HOME/.local/lib/onnxruntime:$LD_LIBRARY_PATH"  # Linux
-export DYLD_LIBRARY_PATH="$HOME/.local/lib/onnxruntime:$DYLD_LIBRARY_PATH"  # macOS
-```
-
-### Model Download Failed
-If the embedding model fails to download during installation:
-```bash
-# Manually trigger download
-omnicontext index .
-```
-
-### PATH Not Updated
-If `omnicontext` command is not found after installation:
-
-**Windows:**
-```powershell
-# Restart terminal or manually add to PATH
-$env:PATH += ";$HOME\.omnicontext\bin"
-```
-
-**Linux/macOS:**
-```bash
-# Add to ~/.bashrc or ~/.zshrc
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-## Support
-
-- Documentation: https://github.com/steeltroops-ai/omnicontext
-- Issues: https://github.com/steeltroops-ai/omnicontext/issues
-- Discussions: https://github.com/steeltroops-ai/omnicontext/discussions
+1. Bump version across all `Cargo.toml` targets.
+2. Build matrix targets (`x86_64-pc-windows-msvc`, `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`).
+3. Generate SHA256 checksums per binary artifact.
+4. Update `distribution/scoop/omnicontext.json` and `distribution/homebrew/omnicontext.rb` strictly matching new SHA256 values.
+5. Create standard GitHub Release attached to the newly pushed Git tag.
+6. Execution scripts automatically resolve `latest` tag against the GitHub Releases API.

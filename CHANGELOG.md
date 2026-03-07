@@ -129,7 +129,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Phase 7 complete**: Enhanced VS Code sidebar with professional codicons, real-time performance metrics, activity log, and cache statistics panel
+- **Sidebar Control Center**: Enhanced VS Code sidebar with professional codicons, real-time performance metrics, activity log, and cache statistics panel
 - Language distribution visualization in sidebar
 - One-click environment repair from sidebar
 
@@ -139,7 +139,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Phase 6 complete**: VS Code extension pre-fetch context caching system
+- **Context Pre-fetching System**: VS Code extension pre-fetch context caching system
 - `EventTracker` module: debounced file-open, cursor-move, and text-edit tracking
 - `SymbolExtractor` module: cursor-position symbol detection using VS Code language providers
 - `CacheStatsManager`: hit rate, size, and TTL statistics surfaced in sidebar
@@ -160,8 +160,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Phase 5 + 6**: CI/CD release pipeline, MCP graph statistics, automated benchmarks
-- **Phase 7 + 8**: Distribution system, VSIX packaging, one-click install scripts
+- **Automation & Telemetry**: CI/CD release pipeline, MCP graph statistics, and automated benchmarks
+- **Distribution Architecture**: Installation system, VSIX packaging, and cross-platform setup scripts
 - Java, C, C++, C#, CSS language analyzers
 - Markdown, TOML, YAML, JSON, HTML, Shell document indexing (`DocumentAnalyzer`)
 - 8 MCP AI-facing tools: `search_code`, `get_context`, `get_file_summary`, `get_dependencies`, `get_dependents`, `get_stats`, `get_module_map`, `search_by_kind`
@@ -176,10 +176,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Phase 0**: Cargo workspace (`omni-core`, `omni-mcp`, `omni-cli`) with 10 decoupled subsystem modules
-- **Phase 1**: Language analyzers for Python, Rust, TypeScript, JavaScript, Go (81 tests, 0 failures)
-- **Phase 2**: Hybrid search engine with BM25 + semantic vector search and RRF fusion scoring
-- **Phase 3**: Dependency graph with petgraph, RwLock, and cycle detection
+- **Core Framework**: Cargo workspace (`omni-core`, `omni-mcp`, `omni-cli`) with 10 decoupled subsystem modules
+- **Semantic Parsers**: Language analyzers for Python, Rust, TypeScript, JavaScript, Go (81 tests, 0 failures)
+- **Hybrid Retrieval**: Retrieval engine with BM25 + semantic vector search and RRF fusion scoring
+- **Graph Topology**: Dependency graph with petgraph, RwLock, and cycle detection
 - SQLite schema with FTS5 full-text search, sync triggers, performance indexes
 - Configuration system with 5-level precedence chain (CLI > env > project > user > defaults)
 - Hierarchical error taxonomy (`OmniError`): Recoverable / Degraded / Fatal

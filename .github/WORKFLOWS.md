@@ -1,275 +1,71 @@
-# GitHub Actions Workflows
+# GitHub Actions CI/CD Architecture
 
-This document describes all GitHub Actions workflows in the OmniContext project.
+This document defines the operational pipeline and automation state machine for the OmniContext repository. All workflows strictly enforce production-grade continuous integration, deployment, security auditing, and performance tracking.
 
-## Workflows Overview
+## Pipeline Topologies
 
-### 1. CI (Continuous Integration)
+### 1. Verification Engine (`ci.yml`)
 
-**File**: `.github/workflows/ci.yml`
+**Purpose**: Pre-merge gatekeeper. Enforces logic correctness and style strictness.
+**Hook**: `push` / `pull_request` (target: `main`)
 
-**Triggers**:
-- Push to `main` branch
-- Pull requests to `main` branch
+**Execution Stages**:
 
-**Jobs**:
-- **Check**: Runs `cargo check` on all targets
-- **Test**: Runs test suite on Ubuntu, Windows, and macOS
-- **Format**: Checks code formatting with `cargo fmt`
-- **Clippy**: Lints code with `cargo clippy` (main crates only)
-- **CI Success**: Gates all checks - required for merge
+1. **Formatting (`cargo fmt`)**: Restrictive code style validation. Non-compliant formatting blocks the pipeline immediately.
+2. **Static Analysis (`cargo clippy`)**: Lints the core execution paths (`omni-mcp`, `omni-cli`, `omni-daemon`) enforcing zero warnings (`-D warnings`).
+3. **Compilation Check (`cargo check`)**: Verifies build viability across the workspace.
+4. **Test Matrix**: Full workspace unit tests across Windows, Ubuntu, and macOS targets.
+5. **State Aggregation**: `CI Success` job aggregates matrix results to satisfy GitHub branch protection rules seamlessly.
 
-**Purpose**: Ensures all code meets quality standards before merging.
+### 2. Release & Distribution (`release.yml`)
 
-**Branch Protection**: Enable "Require status checks to pass before merging" and select "CI Success" as required check.
+**Purpose**: Deterministic compilation, packaging, and versioned distribution.
+**Hook**: Tag push matching `v*` | Manual `workflow_dispatch`
 
----
+**Execution Stages**:
 
-### 2. Release
+1. **Source Resolution**: Extracts version data strictly from Cargo.toml or git tags.
+2. **Cross-Platform Compilation Matrix**:
+   - Compiles native binaries for `x86_64-pc-windows-msvc`, `x86_64-apple-darwin`, `aarch64-apple-darwin`, and `x86_64-unknown-linux-gnu`.
+   - Generates standardized archives (`.zip` for Windows, `.tar.gz` for UNIX).
+3. **Cryptographic Integrity**: Computes strictly deterministic `sha256` checksums for all distribution binaries.
+4. **Package Manager Registration**: Synchronizes remote Hombrew formula (`distribution/homebrew/omnicontext.rb`) and Scoop manifests (`distribution/scoop/omnicontext.json`) with the newly verified checksums.
+5. **Release Artifact Generation**: Publishes immutable release state to GitHub Releases.
 
-**File**: `.github/workflows/release.yml`
+### 3. Security Hardening (`security.yml`)
 
-**Triggers**:
-- Push tags matching `v*` (e.g., `v0.1.0`)
-- Manual workflow dispatch with version input
+**Purpose**: Proactive identification of supply chain and runtime vulnerabilities.
+**Hook**: `push` / `pull_request` / `schedule` (00:00 UTC)
 
-**Jobs**:
-- **Create Release**: Creates GitHub release with notes
-- **Build**: Builds binaries for all platforms (Windows, Linux, macOS x64/ARM64)
-- **Update Package Manifests**: Updates Homebrew and Scoop manifests with SHA256 hashes
+**Execution Stages**:
 
-**Artifacts**:
-- Platform-specific archives (`.zip` for Windows, `.tar.gz` for Unix)
-- SHA256 checksums for verification
-- Updated package manager manifests
+1. **Cargo Audit**: Checks `Cargo.lock` against the RustSec Advisory Database.
+2. **Cargo Deny**: Enforces structural project rules (dependency licensing limits, bans on unmaintained dependencies, cyclic dependency avoidance).
+3. **CodeQL SAST**: Performs deep static analysis on the C/C++/Rust logic trees to flag potential memory safety anomalies and vulnerabilities.
+4. **Dependency Auditing**: Triggers automatic security review of net-new dependencies added in pull requests.
 
-**Usage**:
-```bash
-# Bump version and create tag
-./scripts/bump-version.sh patch  # or minor, major, or custom version
-git push origin main
-git push origin v0.1.0
+### 4. Performance Telemetry (`benchmark.yml`)
 
-# Or trigger manually from GitHub Actions UI
-```
+**Purpose**: Prevent algorithmic degradation and compute regressions.
+**Hook**: `push` / `pull_request` / `workflow_dispatch`
 
----
+**Execution Stages**:
 
-### 3. Security Audit
+1. **Benchmark Execution**: Triggers `cargo bench` natively.
+2. **Regression Differential**: Evaluates the computational overhead of the PR diff relative to the `main` baseline. If a regression exceeds defined error margins, the step fails.
 
-**File**: `.github/workflows/security.yml`
+## Developer Execution Mandate
 
-**Triggers**:
-- Push to `main` branch
-- Pull requests to `main` branch
-- Daily schedule (00:00 UTC)
-- Manual workflow dispatch
+To bypass remote CI failures and maintain efficiency, run these checks precisely before submission:
 
-**Jobs**:
-- **Audit**: Runs `cargo audit` to check for known vulnerabilities
-- **Dependency Review**: Reviews dependency changes in PRs
-- **Supply Chain**: Checks licenses and advisories with `cargo deny`
-- **CodeQL**: Static analysis for security issues
-
-**Purpose**: Proactive security monitoring and vulnerability detection.
-
----
-
-### 4. Benchmark
-
-**File**: `.github/workflows/benchmark.yml`
-
-**Triggers**:
-- Push to `main` branch
-- Pull requests to `main` branch
-- Manual workflow dispatch
-
-**Jobs**:
-- **Benchmark**: Runs all benchmarks and uploads results
-- **Performance Regression**: Compares PR performance against main branch
-
-**Artifacts**:
-- Criterion benchmark results (retained for 30 days)
-
-**Purpose**: Track performance metrics and detect regressions.
-
----
-
-## Workflow Best Practices
-
-### For Contributors
-
-1. **Before Committing**: Run local checks
-   ```bash
-   cargo fmt --all
-   cargo clippy -p omni-mcp -p omni-daemon -p omni-cli --bins -- -D warnings
-   cargo test --workspace
-   ```
-
-2. **Install Git Hooks**: Automate local checks
-   ```bash
-   ./scripts/setup-dev.sh  # or setup-dev.ps1 on Windows
-   ```
-
-3. **Check CI Status**: Ensure all checks pass before requesting review
-
-### For Maintainers
-
-1. **Enable Branch Protection**:
-   - Go to Settings → Branches → Add rule for `main`
-   - Enable "Require status checks to pass before merging"
-   - Select "CI Success" as required check
-   - Enable "Require branches to be up to date before merging"
-
-2. **Release Process**:
-   ```bash
-   # 1. Bump version
-   ./scripts/bump-version.sh minor
-   
-   # 2. Review changes
-   git show
-   
-   # 3. Push commit and tag
-   git push origin main
-   git push origin v0.2.0
-   
-   # 4. GitHub Actions automatically creates release
-   ```
-
-3. **Security Monitoring**:
-   - Review daily security audit results
-   - Address vulnerabilities promptly
-   - Update dependencies regularly
-
-4. **Performance Tracking**:
-   - Review benchmark results on main branch
-   - Investigate performance regressions in PRs
-   - Set performance budgets for critical paths
-
----
-
-## Workflow Secrets
-
-No secrets are required for public repositories. For private repositories or additional features:
-
-- `GITHUB_TOKEN`: Automatically provided by GitHub Actions
-- `CARGO_REGISTRY_TOKEN`: (Optional) For publishing to crates.io
-
----
-
-## Troubleshooting
-
-### CI Failures
-
-**Format Check Failed**:
 ```bash
 cargo fmt --all
-git add .
-git commit --amend --no-edit
-git push --force-with-lease
-```
-
-**Clippy Warnings**:
-```bash
 cargo clippy -p omni-mcp -p omni-daemon -p omni-cli --bins -- -D warnings
-# Fix warnings, then commit
+cargo test --workspace
 ```
 
-**Test Failures**:
-```bash
-cargo test --workspace -- --nocapture
-# Debug and fix failing tests
-```
+## Maintenance Doctrine
 
-### Release Failures
-
-**Build Failed on Platform**:
-- Check platform-specific dependencies
-- Verify cross-compilation setup
-- Test locally with `cargo build --release --target <target>`
-
-**Package Manifest Update Failed**:
-- Verify SHA256 files were generated
-- Check sed commands in workflow
-- Manually update manifests if needed
-
-### Security Audit Failures
-
-**Known Vulnerability**:
-```bash
-cargo audit
-# Review advisory details
-cargo update <crate>  # Update vulnerable dependency
-```
-
-**License Issue**:
-```bash
-cargo deny check licenses
-# Review license compatibility
-# Update or replace incompatible dependency
-```
-
----
-
-## Adding New Workflows
-
-When adding new workflows:
-
-1. Create workflow file in `.github/workflows/`
-2. Use descriptive name (e.g., `deploy.yml`, `docs.yml`)
-3. Add concurrency control to prevent duplicate runs
-4. Document in this file
-5. Test with workflow dispatch before enabling automatic triggers
-
-Example template:
-```yaml
-name: New Workflow
-
-on:
-  push:
-    branches: [main]
-  workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
-env:
-  CARGO_TERM_COLOR: always
-
-jobs:
-  job-name:
-    name: Job Description
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo build
-```
-
----
-
-## Workflow Maintenance
-
-### Regular Updates
-
-- Update action versions quarterly
-- Review and update Rust toolchain version
-- Monitor GitHub Actions changelog for breaking changes
-- Test workflows after major updates
-
-### Performance Optimization
-
-- Use caching for cargo registry and build artifacts
-- Enable `fail-fast: false` for matrix builds when appropriate
-- Use `concurrency` to cancel outdated runs
-- Minimize workflow run time to reduce costs
-
----
-
-## Resources
-
-- [GitHub Actions Documentation](https://docs.github.com/en/actions)
-- [Rust GitHub Actions](https://github.com/actions-rs)
-- [Cargo Documentation](https://doc.rust-lang.org/cargo/)
-- [OmniContext Contributing Guide](../CONTRIBUTING.md)
+- **Toolchain Anchoring**: The remote CI toolchain must mirror the deterministic local toolchain defined in `rust-toolchain.toml`.
+- **Cache Optimization**: Build graphs and cargo caches (`Swatinem/rust-cache`) are to be invalidated accurately during crate lock changes to limit stale behavior.
+- **Fail-Fast**: Ensure independent and failing tasks abort the workflow matrix immediately to curtail wasted compute time unless differential debugging is underway.

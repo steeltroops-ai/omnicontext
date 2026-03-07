@@ -1,44 +1,100 @@
 # OmniContext VS Code Extension
 
-Provides intelligent pre-fetch caching and automatic context injection capabilities bridging the OmniContext daemon and AI assistants within Visual Studio Code.
+Provides intelligent pre-fetch caching and automatic semantic context injection capabilities, bridging the OmniContext daemon and AI assistants within Visual Studio Code.
 
 ## Architecture
 
-The extension operates as a high-performance IPC client to the `omnicontext-daemon`:
+```mermaid
+graph TD
+    subgraph VSCode [IDE Environment]
+        editor[Text Editor]
+        events[Document & Workspace Events]
+        sidebar[Activity Sidebar Webview]
+        chat[AI Chat / Copilot]
+    end
 
-1. **Event Interception**: Silently monitors IDE workspace events (file selection, text mutations, cursor displacement).
-2. **Context Pre-fetching**: Leverages background debouncing to proactively query the code index and hydrate a fast-access memory cache.
-3. **AI Injection**: Hooks into assistant request pipelines (e.g., GitHub Copilot Chat) to append context payloads automatically upon trigger.
+    subgraph Extension [VSIX Extension]
+        tracker[EventTracker]
+        symbol[SymbolExtractor]
+        cache[LRU CacheStatsManager]
+        ipc[IPC Protocol Client]
+        provider[SidebarProvider]
+    end
 
-## Development Constraints
+    subgraph Daemon [OmniContext IPC Server]
+        server[JSON-RPC Endpoint]
+        index[(SQLite FTS + Vector DB)]
+        search[Hybrid Search Engine]
+    end
 
-The extension uses TypeScript and targets standard VS Code APIs.
+    editor --> events
+    events --> tracker
 
-### Setup
+    tracker --> |Debounced cursor movements| symbol
+    symbol --> |AST boundary detection| symbol
+
+    tracker --> |Background query| ipc
+    chat --> |On-demand query| ipc
+
+    ipc --> |Socket / Named Pipe| server
+    server --> search
+    search --> index
+
+    server --> |Semantic JSON payload| ipc
+    ipc --> |Hydrate pre-fetch cache| cache
+    ipc --> |Immediate chat payload| chat
+
+    cache --> |Render Metrics| provider
+    provider --> sidebar
+
+    sidebar --> |Render `language_distribution`| sidebar
+```
+
+## System Implementation Constraints
+
+The extension uses strict TypeScript, compiled via Bun, and targets standard `vscode` APIs without external heavy dependencies. Use `bun` exclusively for dependency management.
+
+### Compilation & Testing
 
 ```bash
 cd editors/vscode
-npm install
-npm run compile
+bun install
+bun run compile
+bun run test
+bun run package
 ```
 
-### Execution
+### Execution Mapping
 
-Launch the Extension Development Host (`F5` in VS Code) from the `editors/vscode` workspace context.
+Launch the Extension Development Host (`F5` in VS Code) from the `editors/vscode` workspace context. Alternatively, execute via CLI:
 
-### Configuration Namespace
+```bash
+code --extensionDevelopmentPath=./editors/vscode
+```
+
+### Extension Configuration Directives
 
 - `omnicontext.prefetch.enabled`: Master toggle for predictive caching mechanism.
-- `omnicontext.prefetch.cacheSize`: LRU cache entry limit.
-- `omnicontext.prefetch.cacheTtlSeconds`: Entry eviction TTL.
-- `omnicontext.prefetch.debounceMs`: Inter-event debouncing filter (ms).
+- `omnicontext.prefetch.cacheSize`: Memory-bound LRU cache entry limit.
+- `omnicontext.prefetch.cacheTtlSeconds`: Invalidation window for pre-fetched semantic context.
+- `omnicontext.prefetch.debounceMs`: Inter-event filter window preventing RPC flooding.
 
-## Implementation Details
+## Subsystems
 
-Core modules:
+1. **EventTracker**: Filters high-frequency `TextDocumentChangeEvent` streams via strict debounce mechanisms, querying only on stable cursor displacement.
+2. **SymbolExtractor**: Discovers active code boundaries via `vscode.executeDocumentSymbolProvider`, allowing localized AST context expansion.
+3. **IPC Client**: Pipes queries asynchronously over `\\.\pipe\omnicontext-ipc` (Windows) or `/tmp/omnicontext-ipc.sock` (Unix). Implements an `isDaemonConnected` circuit breaker to prevent IDE serialization freezes.
 
-- `EventTracker`: Filters VS Code `TextDocumentChangeEvent` via high-frequency debounce loops.
-- `SymbolExtractor`: Bridges local language server semantic context via `vscode.executeDocumentSymbolProvider`.
-- `IPC Client`: Pipes raw queries over `\\.\pipe\omnicontext-ipc` (Windows) or `/tmp/omnicontext-ipc.sock` (Unix).
+## Diagnostics & Telemetry
 
-For end-user installation, please refer to the main [OmniContext Documentation](../../INSTALL.md).
+Monitor extension performance and state via standard VS Code diagnostic channels:
+
+1. **Output Channel**: View -> Output -> Select `OmniContext`. Logs all daemon lifecycle events and IPC transitions.
+2. **Developer Tools**: Help -> Toggle Developer Tools. Inspect unhandled Promise rejections or UI thread blockers.
+
+**Target Performance Boundaries:**
+
+- Event processing: `<5ms`
+- IPC round-trip: `<10ms`
+- Sidebar refresh: `<100ms`
+- Object memory allocation: `<50MB`

@@ -41,7 +41,7 @@ Thumbs.db
 # Generated reports and local documentation
 docs/reports/
 docs/local/
-docs/fixes_logs/
+docs/logs/
 docs/planning/
 
 # Junk files

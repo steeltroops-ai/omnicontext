@@ -320,7 +320,7 @@ if "${BIN_DIR}/omnicontext" --help 2>&1 | grep -q "setup"; then
 fi
 
 if [ "$HAS_SETUP" = "true" ]; then
-    # Phase 1: Query Current Status
+    # Stage 1: Query Current Status
     MODEL_READY="false"
     MODEL_NAME="jina-embeddings-v2-base-code"
     MODEL_SIZE="?"
