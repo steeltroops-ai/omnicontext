@@ -524,6 +524,7 @@ async fn handle_context_window(
         })
 }
 
+#[allow(clippy::too_many_lines)]
 async fn handle_preflight(
     engine: Arc<Mutex<Engine>>,
     prefetch_cache: Arc<crate::prefetch::PrefetchCache>,
@@ -619,9 +620,9 @@ async fn handle_preflight(
     }
 
     // Embed metadata header for cache reconstruction
-    write!(
+    writeln!(
         system_context,
-        "<!-- omni-meta entries={entries_count} tokens={tokens_used} -->\n"
+        "<!-- omni-meta entries={entries_count} tokens={tokens_used} -->"
     )
     .ok();
 
@@ -835,9 +836,9 @@ async fn prefetch_file_context(
     match eng.search_context_window(&query, 10, Some(4096)) {
         Ok(ctx) => {
             let mut context = String::with_capacity(ctx.total_tokens as usize * 4);
-            write!(
+            writeln!(
                 context,
-                "<!-- omni-meta entries={} tokens={} -->\n",
+                "<!-- omni-meta entries={} tokens={} -->",
                 ctx.len(),
                 ctx.total_tokens
             )
@@ -990,14 +991,9 @@ mod tests {
     use std::path::PathBuf;
     use std::time::Duration;
 
-    /// Helper to create a test engine with minimal setup.
-    ///
-    /// Uses `Config::defaults` directly to avoid any model download attempt
-    /// and to stay clear of `std::env::set_var` (UB in multithreaded test
-    /// environments per Rust 2024 edition).
     fn create_test_engine() -> Engine {
-        use omni_core::config::Config;
-
+        std::env::set_var("OMNI_SKIP_MODEL_DOWNLOAD", "1");
+        std::env::set_var("OMNI_DISABLE_RERANKER", "1");
         let temp_dir = std::env::temp_dir().join(format!(
             "omni-test-{}-{}",
             std::process::id(),
@@ -1012,11 +1008,7 @@ mod tests {
         let test_file = temp_dir.join("test.rs");
         std::fs::write(&test_file, "fn main() { println!(\"Hello\"); }").unwrap();
 
-        // Use Config::defaults so the engine skips model download entirely.
-        // The embedder degrades gracefully to keyword-only mode when the ONNX
-        // model file is not present -- no env var hacks required.
-        let config = Config::defaults(&temp_dir);
-        Engine::with_config(config).unwrap()
+        Engine::new(&temp_dir).unwrap()
     }
 
     #[tokio::test]

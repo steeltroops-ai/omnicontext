@@ -103,7 +103,7 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| std::path::PathBuf::from(&repo_str));
 
     if !repo_path.exists() {
-        anyhow::bail!("repository path does not exist: {}", repo_str);
+        anyhow::bail!("repository path does not exist: {repo_str}");
     }
 
     tracing::info!(

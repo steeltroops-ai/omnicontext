@@ -1,54 +1,12 @@
 # OmniContext VS Code Extension
 
+[![VS Code Marketplace](https://img.shields.io/badge/VS%20Code-Marketplace-blue?logo=visual-studio-code)](https://marketplace.visualstudio.com/items?itemName=steeltroops.omnicontext&ssr=false#overview)
+[![Open VSX](https://img.shields.io/badge/Open%20VSX-Registry-purple)](https://open-vsx.org/extension/steeltroops/omnicontext)
 Provides intelligent pre-fetch caching and automatic semantic context injection capabilities, bridging the OmniContext daemon and AI assistants within Visual Studio Code.
 
 ## Architecture
 
-```mermaid
-graph TD
-    subgraph VSCode [IDE Environment]
-        editor[Text Editor]
-        events[Document & Workspace Events]
-        sidebar[Activity Sidebar Webview]
-        chat[AI Chat / Copilot]
-    end
-
-    subgraph Extension [VSIX Extension]
-        tracker[EventTracker]
-        symbol[SymbolExtractor]
-        cache[LRU CacheStatsManager]
-        ipc[IPC Protocol Client]
-        provider[SidebarProvider]
-    end
-
-    subgraph Daemon [OmniContext IPC Server]
-        server[JSON-RPC Endpoint]
-        index[(SQLite FTS + Vector DB)]
-        search[Hybrid Search Engine]
-    end
-
-    editor --> events
-    events --> tracker
-
-    tracker --> |Debounced cursor movements| symbol
-    symbol --> |AST boundary detection| symbol
-
-    tracker --> |Background query| ipc
-    chat --> |On-demand query| ipc
-
-    ipc --> |Socket / Named Pipe| server
-    server --> search
-    search --> index
-
-    server --> |Semantic JSON payload| ipc
-    ipc --> |Hydrate pre-fetch cache| cache
-    ipc --> |Immediate chat payload| chat
-
-    cache --> |Render Metrics| provider
-    provider --> sidebar
-
-    sidebar --> |Render `language_distribution`| sidebar
-```
+![Extension Architecture Breakdown](./resources/extension-architecture-diagram.svg)
 
 ## System Implementation Constraints
 

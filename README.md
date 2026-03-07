@@ -10,31 +10,18 @@ OmniContext is engineered to perform high-speed code parsing, relationship extra
 [![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey)](https://github.com/steeltroops-ai/omnicontext)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue)](./LICENSE)
 
+## Editor Extensions
+
+You can install the official VS Code extension directly from the marketplaces:
+
+- [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=steeltroops.omnicontext&ssr=false#overview)
+- [Open VSX Registry](https://open-vsx.org/extension/steeltroops/omnicontext)
+
 ---
 
 ## Architecture Breakdown
 
-```mermaid
-graph LR
-    subgraph Engine [OmniContext Core]
-        watcher[Watcher] --> parser[Syntax Parser]
-        parser --> chunker[Semantic Chunker]
-        chunker --> embedder[Vector Embedder]
-        embedder --> index[(Hybrid Index)]
-        parser --> dep_graph(Dependency Graph)
-
-        query(Query) --> search[Search Engine]
-        search --> index
-        search --> dep_graph
-    end
-
-    subgraph Clients [AI Integrations]
-        mcp[MCP Server] --> search
-        ide[VS Code Extension] --> mcp
-        cursor[Cursor IDE] --> mcp
-        claude[Claude Desktop] --> mcp
-    end
-```
+![Architecture Breakdown](./editors/vscode/resources/architecture-diagram.svg)
 
 1. **Local Execution**: Embeddings (`jina-embeddings-v2-base-code`) and full database indexing execute locally. External cloud APIs are bypassed.
 2. **Speed & Recall**: Hybrid retrieval combines sub-millisecond AST boundary keyword matches with HNSW-optimized vector search and graph-boosted reranking.

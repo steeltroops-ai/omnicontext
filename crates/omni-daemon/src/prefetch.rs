@@ -40,6 +40,7 @@ enum CacheKey {
     /// Symbol-level context (specific symbol and its dependencies).
     Symbol { file: PathBuf, symbol: String },
     /// Function-level context (function and related tests).
+    #[allow(dead_code)]
     Function { file: PathBuf, function: String },
 }
 
@@ -84,6 +85,7 @@ impl PrefetchCache {
 
     /// Get cached context for a symbol.
     #[allow(clippy::ptr_arg)] // PathBuf is more ergonomic for cache keys
+    #[allow(dead_code)]
     pub fn get_symbol_context(&self, file: &PathBuf, symbol: &str) -> Option<String> {
         let key = CacheKey::Symbol {
             file: file.clone(),
@@ -94,6 +96,7 @@ impl PrefetchCache {
 
     /// Get cached context for a function.
     #[allow(clippy::ptr_arg)] // PathBuf is more ergonomic for cache keys
+    #[allow(dead_code)]
     pub fn get_function_context(&self, file: &PathBuf, function: &str) -> Option<String> {
         let key = CacheKey::Function {
             file: file.clone(),
@@ -115,6 +118,7 @@ impl PrefetchCache {
     }
 
     /// Store function-level context.
+    #[allow(dead_code)]
     pub fn put_function_context(&self, file: PathBuf, function: String, context: String) {
         let key = CacheKey::Function { file, function };
         self.put(key, context);

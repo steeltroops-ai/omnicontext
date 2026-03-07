@@ -5,7 +5,7 @@
   "version": "0.10.0",
   "publisher": "steeltroops",
   "license": "Apache-2.0",
-  "icon": "icon.png",
+  "icon": "logo.png",
   "repository": {
     "type": "git",
     "url": "https://github.com/steeltroops-ai/omnicontext"
