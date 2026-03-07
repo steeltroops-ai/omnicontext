@@ -103,6 +103,25 @@ enum Commands {
         #[arg(long)]
         init: bool,
     },
+
+    /// Initial setup and maintenance tasks.
+    Setup {
+        /// Type of setup task.
+        #[command(subcommand)]
+        action: SetupAction,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone, Copy)]
+enum SetupAction {
+    /// Download and cache the embedding model.
+    ModelDownload {
+        /// Force re-download even if already cached.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Show the status of the embedding model.
+    ModelStatus,
 }
 
 #[tokio::main]
@@ -146,6 +165,9 @@ async fn main() -> Result<()> {
         }
         Commands::Config { show, init } => {
             cmd_config(show, init)?;
+        }
+        Commands::Setup { action } => {
+            cmd_setup(action, cli.json)?;
         }
     }
 
@@ -476,6 +498,90 @@ fn cmd_config(show: bool, init: bool) -> Result<()> {
     if !show && !init {
         println!("Usage: omnicontext config --init   Create default config");
         println!("       omnicontext config --show   Show effective config");
+    }
+
+    Ok(())
+}
+
+/// Handle setup and maintenance tasks.
+fn cmd_setup(action: SetupAction, json: bool) -> Result<()> {
+    match action {
+        SetupAction::ModelDownload { force } => {
+            let spec = omni_core::embedder::model_manager::resolve_model_spec();
+            if !force && omni_core::embedder::model_manager::is_model_ready(spec) {
+                if json {
+                    println!(
+                        "{}",
+                        serde_json::json!({
+                            "status": "ok",
+                            "model": spec.name,
+                            "message": "model already cached"
+                        })
+                    );
+                } else {
+                    println!("Embedding model '{}' is already cached.", spec.name);
+                }
+                return Ok(());
+            }
+
+            if !json {
+                println!("Preparing embedding model: {}", spec.name);
+            }
+
+            omni_core::embedder::model_manager::ensure_model(spec)?;
+
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "status": "ok",
+                        "model": spec.name,
+                        "message": "download complete"
+                    })
+                );
+            } else {
+                println!();
+                println!("Model setup complete.");
+            }
+        }
+        SetupAction::ModelStatus => {
+            let spec = omni_core::embedder::model_manager::resolve_model_spec();
+            let ready = omni_core::embedder::model_manager::is_model_ready(spec);
+            let path = omni_core::embedder::model_manager::model_path(spec);
+            let size = if ready {
+                std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+            } else {
+                0
+            };
+
+            if json {
+                let output = serde_json::json!({
+                    "model_name": spec.name,
+                    "model_ready": ready,
+                    "model_path": path.display().to_string(),
+                    "model_size_bytes": size,
+                    "dimensions": spec.dimensions,
+                    "max_seq_length": spec.max_seq_length,
+                });
+                println!("{}", serde_json::to_string_pretty(&output)?);
+            } else {
+                println!("Embedding Model Status");
+                println!("---");
+                println!("  Name:             {}", spec.name);
+                println!("  Ready:            {}", if ready { "Yes" } else { "No" });
+                println!("  Path:             {}", path.display());
+                if ready {
+                    println!("  Size:             {} MB", size / 1024 / 1024);
+                } else {
+                    println!(
+                        "  Expected Size:    ~{} MB",
+                        spec.approx_size_bytes / 1024 / 1024
+                    );
+                }
+                println!("  Dimensions:       {}", spec.dimensions);
+                println!("  Max Seq Length:   {}", spec.max_seq_length);
+            }
+        }
     }
 
     Ok(())

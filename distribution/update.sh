@@ -28,8 +28,8 @@ else
 fi
 
 step()  { printf "${BOLD}${CYAN}  [%s]${RESET} %s\n" "$1" "$2"; }
-ok()    { printf "${GREEN}  [+]${RESET} %s\n" "$*"; }
-info()  { printf "${BLUE}  [-]${RESET} %s\n" "$*"; }
+ok()    { printf "${GREEN}  [v]${RESET} %s\n" "$*"; }
+info()  { printf "${BLUE}  [»]${RESET} %s\n" "$*"; }
 warn()  { printf "${YELLOW}  [!]${RESET} %s\n" "$*"; }
 err()   { printf "${RED}  [x]${RESET} %s\n" "$*"; }
 hr()    { printf "${DIM}%s${RESET}\n" "──────────────────────────────────────────────────────"; }
@@ -139,6 +139,38 @@ else
     ok "Update available  ${DIM}${CURRENT_VERSION}  ->  ${LATEST_VERSION}${RESET}"
 fi
 
+
+# ---------------------------------------------------------------------------
+# step 2.5 - verify model status
+# ---------------------------------------------------------------------------
+blank
+step "2.5/4" "Verifying embedding model"
+
+# Check if binary supports setup command
+if "$BIN_PATH" --help 2>&1 | grep -q "setup"; then
+    if status_json=$("$BIN_PATH" setup model-status --json 2>/dev/null); then
+        MODEL_READY=$(echo "$status_json" | grep -o '"model_ready": [a-z]*' | cut -d' ' -f2)
+        MODEL_NAME=$(echo "$status_json" | grep -o '"model_name": "[^"]*"' | cut -d'"' -f4)
+        MODEL_BYTES=$(echo "$status_json" | grep -o '"model_size_bytes": [0-9]*' | cut -d' ' -f2)
+        
+        if [ "$MODEL_READY" = "true" ]; then
+            SIZE_MB=$((MODEL_BYTES / 1024 / 1024))
+            ok "Model ready: ${BOLD}${MODEL_NAME}${RESET} ${DIM}(${SIZE_MB} MB)${RESET}"
+        else
+            warn "Model not ready - will be initialized during update"
+        fi
+    else
+        warn "Could not verify model status via binary"
+    fi
+else
+    # Legacy check
+    if [ -f "$HOME/.omnicontext/models/jina-embeddings-v2-base-code/model.onnx" ]; then
+        ok "Model already cached"
+    else
+        warn "Model not found - will be re-downloaded during installation"
+    fi
+fi
+
 # ---------------------------------------------------------------------------
 # step 3 - backup MCP configs
 # ---------------------------------------------------------------------------
@@ -189,8 +221,16 @@ blank
 step "4/4" "Running installer"
 blank
 
-INSTALL_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/distribution/install.sh"
-if ! bash <(curl -fsSL "$INSTALL_URL"); then
+INSTALL_SUCCESS=false
+if [ -f "./install.sh" ]; then
+    info "Running local installer  ${DIM}(./install.sh)${RESET}"
+    bash ./install.sh && INSTALL_SUCCESS=true
+else
+    INSTALL_URL="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/distribution/install.sh"
+    bash <(curl -fsSL "$INSTALL_URL") && INSTALL_SUCCESS=true
+fi
+
+if [ "$INSTALL_SUCCESS" = false ]; then
     blank
     err "Installer failed."
     if [ "$BACKED_UP" -gt 0 ]; then

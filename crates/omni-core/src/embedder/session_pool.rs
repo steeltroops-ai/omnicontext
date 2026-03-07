@@ -55,6 +55,11 @@ pub struct SessionGuard<'a> {
 
 impl SessionGuard<'_> {
     /// Get a mutable reference to the ONNX session.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the session has already been returned to the pool (exhausted guard).
+    #[allow(clippy::expect_used)]
     pub fn session_mut(&mut self) -> &mut Session {
         self.session.as_mut().expect("session was already returned")
     }
@@ -178,7 +183,9 @@ impl SessionPool {
             }
         }
 
-        let session = sessions.pop().expect("checked non-empty above");
+        let session = sessions
+            .pop()
+            .ok_or_else(|| OmniError::Internal("session pool state inconsistency".into()))?;
 
         Ok(SessionGuard {
             session: Some(session),

@@ -13,7 +13,10 @@
 
 #Requires -Version 5.1
 $ErrorActionPreference = "Stop"
-$ProgressPreference    = "SilentlyContinue"   # suppress Invoke-WebRequest default progress bar
+$ProgressPreference    = "SilentlyContinue"
+
+# Enable TLS 1.2 for secure downloads (GitHub)
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -32,9 +35,9 @@ $CYAN   = c "36"
 $WHITE  = c "97"
 
 function step   { param($n,$t) Write-Host "$BOLD$CYAN  [$n]$RESET $t" }
-function ok     { param($t)    Write-Host "$GREEN  [+]$RESET $t" }
-function info   { param($t)    Write-Host "$BLUE  [-]$RESET $t" }
-function warn   { param($t)    Write-Host "$YELLOW  [!]$RESET $t" }
+function ok     { param($t)    Write-Host "$GREEN  [v]$RESET $t" }
+function info   { param($t)    Write-Host "$BLUE  [»]$RESET $t" }
+function warn   { param($t)    Write-Host "$YELLOW  [!] $RESET $t" }
 function fail   { param($t)    Write-Host "$RED  [x]$RESET $t" }
 $HR      = $DIM + ('-' * 54) + $RESET
 function hr     { Write-Host $HR }
@@ -123,11 +126,15 @@ step "2/7" "Downloading  $DIM$AssetFileName$RESET"
 info "URL  $DIM$DownloadUrl$RESET"
 
 try {
-    # Use WebClient for a real progress bar
-    $wc = New-Object System.Net.WebClient
-    $wc.DownloadFile($DownloadUrl, $TempZip)
-    $sizeMb = [math]::Round((Get-Item $TempZip).Length / 1MB, 1)
-    ok "Downloaded $sizeMb MB"
+    # Invoke-WebRequest is more reliable for following redirects and handling TLS than WebClient.DownloadFile
+    Invoke-WebRequest -Uri $DownloadUrl -OutFile $TempZip -UseBasicParsing
+    
+    if (Test-Path $TempZip) {
+        $sizeMb = [math]::Round((Get-Item $TempZip).Length / 1MB, 1)
+        ok "Downloaded  $DIM$sizeMb MB$RESET"
+    } else {
+        Exit-Err "Download succeeded but file not found at $TempZip"
+    }
 } catch {
     blank
     fail "Download failed: $_"
@@ -203,38 +210,74 @@ if ($UserPath -notlike "*$OutDir*") {
 }
 
 # ---------------------------------------------------------------------------
-# step 6 – download embedding model
+# step 6 – embedding model setup
 # ---------------------------------------------------------------------------
 blank
-step "6/7" ("Downloading Jina AI embedding model  " + $DIM + "(~550 MB, one-time)" + $RESET)
+step "6/7" "Embedding model setup"
 
-$ModelPath = Join-Path $HOME ".omnicontext\models\jina-embeddings-v2-base-code.onnx"
+# Priority: Use local build if running from source (Dev Mode)
+$LocalExe = Join-Path $PSScriptRoot "..\target\release\omnicontext.exe"
+if (Test-Path $LocalExe) { $OutExe = $LocalExe }
 
-if (Test-Path $ModelPath) {
-    $modelSizeMb = [math]::Round((Get-Item $ModelPath).Length / 1MB, 0)
-    ok "Model already cached  $DIM${modelSizeMb} MB$RESET"
-} else {
-    info ("Triggering model download via  " + $DIM + "'omnicontext index'" + $RESET)
-    info "This may take several minutes on first run..."
-    blank
-    try {
-        $InitTemp = Join-Path $env:TEMP "omnicontext_init_$$"
-        New-Item -ItemType Directory -Path $InitTemp -Force | Out-Null
-        "fn main() {}" | Out-File "$InitTemp\dummy.rs" -Encoding UTF8
-        Push-Location $InitTemp
-        & $OutExe index . 2>&1
-        Pop-Location
-        Remove-Item $InitTemp -Recurse -Force -EA SilentlyContinue
-    } catch {
-        warn "Model download may have been interrupted."
-        info ("Trigger manually later: " + $DIM + "omnicontext index ." + $RESET)
-    }
+# Detect if the binary supports the new 'setup' command (Zero-Hardcoding)
+$helpText = & $OutExe --help 2>&1 | Out-String
+$hasSetup = $helpText -like "*setup*"
 
-    if (Test-Path $ModelPath) {
-        $modelSizeMb = [math]::Round((Get-Item $ModelPath).Length / 1MB, 0)
-        ok "Model downloaded  $DIM${modelSizeMb} MB$RESET"
+if ($hasSetup) {
+    $status = $null
+    try { $status = & $OutExe setup model-status --json | ConvertFrom-Json } catch { }
+
+    if ($status -and $status.model_ready) {
+        $sizeMb = [math]::Round($status.model_size_bytes / 1MB, 0)
+        ok ("Model ready: " + $BOLD + $status.model_name + $RESET + $DIM + " ($sizeMb MB)" + $RESET)
     } else {
-        warn "Model not found - will auto-download on first use"
+        $modelName = if ($status) { $status.model_name } else { "jina-embeddings-v2-base-code" }
+        info ("Establishing model: " + $BOLD + $modelName + $RESET)
+        info ("Source: HuggingFace (~550 MB)")
+        
+        try {
+            Write-Host "  $DIM$($HR.Substring(0, 40))$RESET"
+            # Trigger non-crashing download
+            & $OutExe setup model-download
+            Write-Host "  $DIM$($HR.Substring(0, 40))$RESET"
+            
+            $status = & $OutExe setup model-status --json | ConvertFrom-Json
+            if ($status.model_ready) {
+                $sizeMb = [math]::Round($status.model_size_bytes / 1MB, 0)
+                ok "Model setup successful  $DIM($sizeMb MB)$RESET"
+            }
+        } catch {
+            warn "Model initialization failed."
+        }
+    }
+} else {
+    # Fallback for older versions (v0.7.1)
+    $DataDir   = Join-Path $HOME ".omnicontext"
+    $ModelPath = Join-Path $DataDir "models\jina-embeddings-v2-base-code\model.onnx"
+    
+    if (Test-Path $ModelPath) {
+        $sizeMb = [math]::Round((Get-Item $ModelPath).Length / 1MB, 0)
+        ok ("Model ready (cached)  " + $DIM + "($sizeMb MB)" + $RESET)
+    } else {
+        info "Legacy binary detected - triggering automated download..."
+        
+        $InitTemp = Join-Path $env:TEMP "omnicontext_init_$PID"
+        if (Test-Path $InitTemp) { Remove-Item $InitTemp -Recurse -Force }
+        New-Item -ItemType Directory -Path $InitTemp -Force | Out-Null
+        "// OmniContext Init" | Out-File "$InitTemp\main.rs" -Encoding UTF8
+        
+        Write-Host "  $DIM$($HR.Substring(0, 40))$RESET"
+        Push-Location $InitTemp
+        & $OutExe index .
+        Pop-Location
+        Write-Host "  $DIM$($HR.Substring(0, 40))$RESET"
+        
+        if (Test-Path $ModelPath) {
+            $sizeMb = [math]::Round((Get-Item $ModelPath).Length / 1MB, 0)
+            ok "Model ready  $DIM($sizeMb MB)$RESET"
+        } else {
+            warn "Model download may have been interrupted. Check 'omnicontext index .'"
+        }
     }
 }
 

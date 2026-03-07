@@ -33,6 +33,9 @@ param(
 #Requires -Version 5.1
 $ErrorActionPreference = "Stop"
 
+# Enable TLS 1.2 for secure downloads (GitHub)
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
@@ -43,11 +46,11 @@ $BOLD   = c "1"; $DIM  = c "2"; $RESET = c "0"
 $RED    = c "31"; $GREEN = c "32"; $YELLOW = c "33"
 $BLUE   = c "34"; $CYAN  = c "36"
 
-function step  { param($n,$t) Write-Host "$BOLD$CYAN  [$n]$RESET $t" }
-function ok    { param($t)    Write-Host "$GREEN  [+]$RESET $t" }
-function info  { param($t)    Write-Host "$BLUE  [-]$RESET $t" }
-function warn  { param($t)    Write-Host "$YELLOW  [!]$RESET $t" }
-function fail  { param($t)    Write-Host "$RED  [x]$RESET $t" }
+function step   { param($n,$t) Write-Host "$BOLD$CYAN  [$n]$RESET $t" }
+function ok     { param($t)    Write-Host "$GREEN  [v]$RESET $t" }
+function info   { param($t)    Write-Host "$BLUE  [»]$RESET $t" }
+function warn   { param($t)    Write-Host "$YELLOW  [!] $RESET $t" }
+function fail   { param($t)    Write-Host "$RED  [x]$RESET $t" }
 $HR      = $DIM + ('-' * 54) + $RESET
 function hr    { Write-Host $HR }
 function blank { Write-Host '' }
@@ -93,15 +96,41 @@ blank
 # ---------------------------------------------------------------------------
 # step 1 – terminate processes
 # ---------------------------------------------------------------------------
-step "1/4" "Stopping active processes"
+# Priority: Use local build if available for stopping processes
+$LocalExe = Join-Path $PSScriptRoot "..\target\release\omnicontext.exe"
+if (Test-Path $LocalExe) {
+    # If we are in dev mode, we might want to stop the local build processes too
+}
 
 $procs = Get-Process -Name "omnicontext","omnicontext-mcp","omnicontext-daemon" -EA SilentlyContinue
 if ($procs) {
     $procs | Stop-Process -Force -EA SilentlyContinue
     Start-Sleep -Milliseconds 600
-    ok "Stopped $($procs.Count) process(es)"
+    ok "Stopped $($procs.Count) active process(es)"
 } else {
     info "No active OmniContext processes found"
+}
+
+# Check for .cargo/bin conflicts (Mayank's case)
+$CargoBinDir = Join-Path $HOME ".cargo\bin"
+$conflicts = @()
+if (Test-Path $CargoBinDir) {
+    $conflicts = Get-ChildItem $CargoBinDir -Filter "omnicontext*.exe" -EA SilentlyContinue
+}
+
+if ($conflicts) {
+    blank
+    warn "Detected conflicting binaries in .cargo\bin:"
+    foreach ($c in $conflicts) { info "  $($c.Name)" }
+    if (-not $Silent) {
+        $remCargo = Read-Host "  Remove these conflicts too? [y/N]"
+        if ($remCargo -match "^[yY]") {
+            foreach ($c in $conflicts) {
+                Remove-Item $c.FullName -Force -EA SilentlyContinue
+                ok "Removed conflict: $($c.Name)"
+            }
+        }
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -113,23 +142,22 @@ step "2/4" "Removing binaries"
 if (Test-Path $BinDir) {
     $exes = Get-ChildItem $BinDir -Filter "omnicontext*.exe" -EA SilentlyContinue
     foreach ($exe in $exes) {
-        Remove-Item $exe.FullName -Force -EA SilentlyContinue
-        info "Removed  $DIM$($exe.Name)$RESET"
+        if (Remove-Item $exe.FullName -Force -EA SilentlyContinue) {
+            info "Removed  $DIM$($exe.Name)$RESET"
+        }
     }
     Remove-Item $BinDir -Recurse -Force -EA SilentlyContinue
-    ok "Binary directory removed  $DIM$BinDir$RESET"
+    ok "Binaries uninstalled  $DIM$BinDir$RESET"
 } else {
-    info "Binary directory not found  $DIM$BinDir$RESET"
+    info "Binary directory not found"
 }
 
 # Remove from PATH
 $UserPath = [Environment]::GetEnvironmentVariable("PATH", "User")
 if ($UserPath -like "*$BinDir*") {
-    $newPath = ($UserPath -split ';' | Where-Object { $_.Trim() -ne "" -and $_ -ne $BinDir }) -join ';'
+    $newPath = ($UserPath -split ';' | Where-Object { $_.Trim() -ne "" -and $_.Trim() -ne $BinDir }) -join ';'
     [Environment]::SetEnvironmentVariable("PATH", $newPath, "User")
     ok "Removed from User PATH"
-} else {
-    info "Not found in User PATH"
 }
 
 # ---------------------------------------------------------------------------

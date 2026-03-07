@@ -23,6 +23,9 @@ param([switch]$Force)
 $ErrorActionPreference = "Stop"
 $ProgressPreference    = "SilentlyContinue"
 
+# Enable TLS 1.2 for secure downloads (GitHub)
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
@@ -33,11 +36,11 @@ $BOLD   = c "1"; $DIM  = c "2"; $RESET = c "0"
 $RED    = c "31"; $GREEN = c "32"; $YELLOW = c "33"
 $BLUE   = c "34"; $CYAN  = c "36"
 
-function step  { param($n,$t) Write-Host "$BOLD$CYAN  [$n]$RESET $t" }
-function ok    { param($t)    Write-Host "$GREEN  [+]$RESET $t" }
-function info  { param($t)    Write-Host "$BLUE  [-]$RESET $t" }
-function warn  { param($t)    Write-Host "$YELLOW  [!]$RESET $t" }
-function fail  { param($t)    Write-Host "$RED  [x]$RESET $t" }
+function step   { param($n,$t) Write-Host "$BOLD$CYAN  [$n]$RESET $t" }
+function ok     { param($t)    Write-Host "$GREEN  [v]$RESET $t" }
+function info   { param($t)    Write-Host "$BLUE  [»]$RESET $t" }
+function warn   { param($t)    Write-Host "$YELLOW  [!] $RESET $t" }
+function fail   { param($t)    Write-Host "$RED  [x]$RESET $t" }
 $HR      = $DIM + ('-' * 54) + $RESET
 function hr    { Write-Host $HR }
 function blank { Write-Host '' }
@@ -134,6 +137,38 @@ if ($Force) {
 }
 
 # ---------------------------------------------------------------------------
+# step 2.5 – verify model status
+# ---------------------------------------------------------------------------
+blank
+step "2.5/4" "Verifying embedding model"
+$DataDir   = Join-Path $HOME ".omnicontext"
+$ModelPath = Join-Path $DataDir "models\jina-embeddings-v2-base-code\model.onnx"
+
+# Check if binary supports setup command
+$helpText = & $BinPath --help 2>&1 | Out-String
+if ($helpText -like "*setup*") {
+    try {
+        $status = & $BinPath setup model-status --json | ConvertFrom-Json
+        if ($status.model_ready) {
+            $sizeMb = [math]::Round($status.model_size_bytes / 1MB, 0)
+            ok ("Model ready: " + $BOLD + $status.model_name + $RESET + $DIM + " ($sizeMb MB)" + $RESET)
+        } else {
+            warn "Model not ready - will be initialized during update"
+        }
+    } catch { 
+        warn "Could not verify model status via binary"
+    }
+} else {
+    # Legacy check
+    if (Test-Path $ModelPath) {
+        $sizeMb = [math]::Round((Get-Item $ModelPath).Length / 1MB, 0)
+        ok "Model already cached  $DIM($sizeMb MB)$RESET"
+    } else {
+        warn "Model not found - will be re-downloaded during installation"
+    }
+}
+
+# ---------------------------------------------------------------------------
 # step 3 – backup known MCP configs
 # ---------------------------------------------------------------------------
 blank
@@ -179,9 +214,16 @@ step "4/4" ("Running installer  " + $DIM + "(install.ps1)" + $RESET)
 blank
 
 try {
-    $installUrl     = "https://raw.githubusercontent.com/$RepoOwner/$RepoName/main/distribution/install.ps1"
-    $scriptContent  = Invoke-RestMethod -Uri $installUrl -UseBasicParsing
-    Invoke-Expression $scriptContent
+    # Priority: if we are running in the repo, use the local installer
+    $LocalInstall = Join-Path $PSScriptRoot "install.ps1"
+    if (Test-Path $LocalInstall) {
+        info "Running local installer  $DIM($LocalInstall)$RESET"
+        & $LocalInstall
+    } else {
+        $installUrl     = "https://raw.githubusercontent.com/$RepoOwner/$RepoName/main/distribution/install.ps1"
+        $scriptContent  = Invoke-RestMethod -Uri $installUrl -UseBasicParsing
+        Invoke-Expression $scriptContent
+    }
 } catch {
     blank
     fail "Installer failed: $_"

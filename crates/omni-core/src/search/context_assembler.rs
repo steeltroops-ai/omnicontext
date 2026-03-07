@@ -43,7 +43,7 @@ impl ContextAssembler {
         let strategy = intent.context_strategy();
 
         // Scale token budget by intent
-        let budget_fraction = Self::intent_budget_fraction(&intent);
+        let budget_fraction = Self::intent_budget_fraction(intent);
         let effective_budget = (self.token_budget as f32 * budget_fraction) as u32;
 
         // Convert search results to prioritized entries
@@ -76,7 +76,7 @@ impl ContextAssembler {
     /// Focused intents (Debug, Edit) should produce fewer but more precise
     /// results, so they use a smaller fraction of the total budget.
     /// Broad intents (Explain, DataFlow) need full context.
-    fn intent_budget_fraction(intent: &QueryIntent) -> f32 {
+    fn intent_budget_fraction(intent: QueryIntent) -> f32 {
         match intent {
             QueryIntent::Debug => 0.60,
             QueryIntent::Edit => 0.60,
@@ -449,7 +449,7 @@ mod tests {
 
     #[test]
     fn test_intent_budget_debug_is_reduced() {
-        let fraction = ContextAssembler::intent_budget_fraction(&QueryIntent::Debug);
+        let fraction = ContextAssembler::intent_budget_fraction(QueryIntent::Debug);
         assert!(
             (fraction - 0.60).abs() < 1e-6,
             "debug should use 60% budget"
@@ -458,7 +458,7 @@ mod tests {
 
     #[test]
     fn test_intent_budget_explain_is_full() {
-        let fraction = ContextAssembler::intent_budget_fraction(&QueryIntent::Explain);
+        let fraction = ContextAssembler::intent_budget_fraction(QueryIntent::Explain);
         assert!(
             (fraction - 1.0).abs() < 1e-6,
             "explain should use 100% budget"
@@ -467,7 +467,7 @@ mod tests {
 
     #[test]
     fn test_intent_budget_refactor_is_moderate() {
-        let fraction = ContextAssembler::intent_budget_fraction(&QueryIntent::Refactor);
+        let fraction = ContextAssembler::intent_budget_fraction(QueryIntent::Refactor);
         assert!(
             (fraction - 0.80).abs() < 1e-6,
             "refactor should use 80% budget"

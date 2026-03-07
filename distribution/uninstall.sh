@@ -33,8 +33,8 @@ else
 fi
 
 step()  { printf "${BOLD}${CYAN}  [%s]${RESET} %s\n" "$1" "$2"; }
-ok()    { printf "${GREEN}  [+]${RESET} %s\n" "$*"; }
-info()  { printf "${BLUE}  [-]${RESET} %s\n" "$*"; }
+ok()    { printf "${GREEN}  [v]${RESET} %s\n" "$*"; }
+info()  { printf "${BLUE}  [»]${RESET} %s\n" "$*"; }
 warn()  { printf "${YELLOW}  [!]${RESET} %s\n" "$*"; }
 err()   { printf "${RED}  [x]${RESET} %s\n" "$*"; }
 hr()    { printf "${DIM}%s${RESET}\n" "──────────────────────────────────────────────────────"; }
@@ -94,6 +94,29 @@ for proc in omnicontext-daemon omnicontext-mcp omnicontext; do
     fi
 done
 [ "$STOPPED" -eq 0 ] && info "No active OmniContext processes found"
+
+# Check for .cargo/bin conflicts
+CARGO_BIN_DIR="${HOME}/.cargo/bin"
+CONFLICTS=()
+for b in omnicontext omnicontext-mcp omnicontext-daemon; do
+    [ -f "${CARGO_BIN_DIR}/${b}" ] && CONFLICTS+=("${b}")
+done
+
+if [ "${#CONFLICTS[@]}" -gt 0 ]; then
+    blank
+    warn "Detected conflicting binaries in .cargo/bin:"
+    for c in "${CONFLICTS[@]}"; do info "  ${c}"; done
+    if [ "$SILENT" = false ]; then
+        read -r -p "  Remove these conflicts too? [y/N] " response
+        if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+            for c in "${CONFLICTS[@]}"; do
+                rm -f "${CARGO_BIN_DIR}/${c}"
+                ok "Removed conflict: ${c}"
+            done
+        fi
+    fi
+fi
+
 sleep 0.3
 
 # ---------------------------------------------------------------------------

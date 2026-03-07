@@ -11,7 +11,7 @@ REPO_OWNER="steeltroops-ai"
 REPO_NAME="omnicontext"
 BIN_DIR="${HOME}/.local/bin"
 DATA_DIR="${HOME}/.omnicontext"
-MODEL_PATH="${DATA_DIR}/models/jina-embeddings-v2-base-code.onnx"
+MODEL_PATH="${DATA_DIR}/models/jina-embeddings-v2-base-code/model.onnx"
 
 # ---------------------------------------------------------------------------
 # color helpers (degrade gracefully when no tty)
@@ -26,8 +26,8 @@ else
 fi
 
 step()    { printf "${BOLD}${CYAN}  [%s]${RESET} %s\n" "$1" "$2"; }
-ok()      { printf "${GREEN}  [+]${RESET} %s\n" "$*"; }
-info()    { printf "${BLUE}  [-]${RESET} %s\n" "$*"; }
+ok()      { printf "${GREEN}  [v]${RESET} %s\n" "$*"; }
+info()    { printf "${BLUE}  [»]${RESET} %s\n" "$*"; }
 warn()    { printf "${YELLOW}  [!]${RESET} %s\n" "$*"; }
 err()     { printf "${RED}  [x]${RESET} %s\n" "$*"; }
 hr()      { printf "${DIM}%s${RESET}\n" "──────────────────────────────────────────────────────"; }
@@ -231,28 +231,60 @@ if ! grep -qF "$PATH_LINE" "$SHELL_RC" 2>/dev/null; then
 fi
 
 # ---------------------------------------------------------------------------
-# step 6 - download embedding model
+# step 6 - embedding model setup
 # ---------------------------------------------------------------------------
 blank
-step "6/7" "Embedding model  ${DIM}(jina-embeddings-v2-base-code, ~550 MB)${RESET}"
+step "6/7" "Embedding model setup"
 
-if [ -f "$MODEL_PATH" ]; then
-    MODEL_SIZE=$(du -sh "$MODEL_PATH" 2>/dev/null | cut -f1 || echo "?")
-    ok "Model already cached  ${DIM}${MODEL_SIZE}${RESET}"
-else
-    info "Triggering download via  ${DIM}omnicontext index${RESET}"
-    info "This may take several minutes on a slow connection..."
-    blank
-    INIT_TMP="$(mktemp -d)"
-    echo "fn main() {}" > "${INIT_TMP}/dummy.rs"
-    (cd "$INIT_TMP" && "${BIN_DIR}/omnicontext" index . 2>&1) || true
-    rm -rf "$INIT_TMP"
+HAS_SETUP=false
+if "${BIN_DIR}/omnicontext" --help 2>&1 | grep -q "setup"; then
+    HAS_SETUP=true
+fi
 
-    if [ -f "$MODEL_PATH" ]; then
-        MODEL_SIZE=$(du -sh "$MODEL_PATH" 2>/dev/null | cut -f1 || echo "?")
-        ok "Model downloaded  ${DIM}${MODEL_SIZE}${RESET}"
+if [ "$HAS_SETUP" = "true" ]; then
+    # Phase 1: Query Current Status
+    MODEL_READY="false"
+    MODEL_NAME="jina-embeddings-v2-base-code"
+    MODEL_SIZE="?"
+
+    if status_json=$("${BIN_DIR}/omnicontext" setup model-status --json 2>/dev/null); then
+        MODEL_READY=$(echo "$status_json" | grep -o '"model_ready": [a-z]*' | cut -d' ' -f2)
+        MODEL_NAME=$(echo "$status_json" | grep -o '"model_name": "[^"]*"' | cut -d'"' -f4)
+        MODEL_BYTES=$(echo "$status_json" | grep -o '"model_size_bytes": [0-9]*' | cut -d' ' -f2)
+        if [ "$MODEL_BYTES" -gt 0 ] 2>/dev/null; then
+            MODEL_SIZE="$((MODEL_BYTES / 1024 / 1024)) MB"
+        fi
+    fi
+
+    if [ "$MODEL_READY" = "true" ]; then
+        ok "Model ready: ${BOLD}${MODEL_NAME}${RESET} ${DIM}(${MODEL_SIZE})${RESET}"
     else
-        warn "Model not found - will auto-download on first  ${DIM}omnicontext index${RESET}"
+        info "Establishing model: ${BOLD}${MODEL_NAME}${RESET}"
+        info "Source: HuggingFace (~550 MB)"
+        blank
+        
+        printf "  ${DIM}────────────────────────────────────────${RESET}\n"
+        "${BIN_DIR}/omnicontext" setup model-download || true
+        printf "  ${DIM}────────────────────────────────────────${RESET}\n"
+
+        # Final check
+        if status_json=$("${BIN_DIR}/omnicontext" setup model-status --json 2>/dev/null); then
+            MODEL_READY=$(echo "$status_json" | grep -o '"model_ready": [a-z]*' | cut -d' ' -f2)
+            if [ "$MODEL_READY" = "true" ]; then
+                ok "Model setup successful"
+            else
+                warn "Model setup finished but verification is pending."
+                info "Run: ${DIM}omnicontext setup model-download${RESET}"
+            fi
+        fi
+    fi
+else
+    # Fallback for older versions (v0.7.1)
+    if [ -f "$HOME/.omnicontext/models/jina-embeddings-v2-base-code/model.onnx" ]; then
+        ok "Model ready (cached)"
+    else
+        warn "Model download trigger deferred (legacy binary detected)."
+        info "Use 'omnicontext index .' to initialize the model after setup."
     fi
 fi
 
