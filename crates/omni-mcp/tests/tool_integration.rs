@@ -20,6 +20,7 @@ static INIT: Once = Once::new();
 fn init() {
     INIT.call_once(|| {
         std::env::set_var("OMNI_SKIP_MODEL_DOWNLOAD", "1");
+        std::env::set_var("OMNI_DISABLE_RERANKER", "1");
     });
 }
 

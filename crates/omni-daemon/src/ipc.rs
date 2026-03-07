@@ -843,6 +843,8 @@ mod tests {
 
     /// Helper to create a test engine with minimal setup
     fn create_test_engine() -> Engine {
+        std::env::set_var("OMNI_SKIP_MODEL_DOWNLOAD", "1");
+        std::env::set_var("OMNI_DISABLE_RERANKER", "1");
         let temp_dir = std::env::temp_dir().join(format!(
             "omni-test-{}-{}",
             std::process::id(),

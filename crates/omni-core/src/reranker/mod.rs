@@ -51,7 +51,9 @@ impl Reranker {
     /// - Model download fails
     /// - ONNX session creation fails
     pub fn new(config: &crate::config::RerankerConfig) -> OmniResult<Self> {
-        if std::env::var("OMNI_DISABLE_RERANKER").is_ok() {
+        if std::env::var("OMNI_DISABLE_RERANKER").is_ok()
+            || std::env::var("OMNI_SKIP_MODEL_DOWNLOAD").is_ok()
+        {
             return Ok(Self::disabled(config));
         }
 

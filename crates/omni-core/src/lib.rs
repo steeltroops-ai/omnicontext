@@ -83,12 +83,12 @@ pub mod search;
 pub mod vector;
 pub mod watcher;
 
-// Pro features (Phase 7)
+// Extended Capabilities
 pub mod commits;
 pub mod patterns;
 pub mod workspace;
 
-// Enterprise features (Phase 8)
+// Service Layer
 pub mod server;
 
 pub use config::Config;
