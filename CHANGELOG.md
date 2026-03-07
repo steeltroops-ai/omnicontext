@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.0] - 2026-03-07
+
+## What's Changed
+
+### Features
+
+- core mcp and daemon optimizations (f4f4450)
+
 ## [0.9.4] - 2026-03-07
 
 ## What's Changed
