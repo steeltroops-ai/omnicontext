@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.9.4] - 2026-03-07
+
+## What's Changed
+
+### Bug Fixes
+
+- generate separate scoped changelog for vscode extension (1f29da2)
+
+### Maintenance
+
+- clean up unused markdown link references in vscode changelog (f608990)
+- restructure vscode changelog to correctly group 0.9.x features under 0.9.2 and restore Unreleased header (ea23b10)
+
 ## [0.9.2] - 2026-03-07
 
 ### Added
