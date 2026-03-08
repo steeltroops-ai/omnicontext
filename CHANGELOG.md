@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.14.0] - 2026-03-08
+
+## What's Changed
+
+### Features
+
+- implement branch-aware diff indexing and sota performance optimizations (464ab1f)
+
 ## [0.13.1] - 2026-03-08
 
 ## What's Changed
