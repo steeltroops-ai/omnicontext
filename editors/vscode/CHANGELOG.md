@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.13.0] - 2026-03-08
+
+## What's Changed
+
+### Features
+
+- implement batch embedding and backpressure for indexing (ea880bf)
+
 ## [0.12.0] - 2026-03-07
 
 ## What's Changed
