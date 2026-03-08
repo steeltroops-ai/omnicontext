@@ -229,6 +229,18 @@ impl VectorIndex {
         self.dimensions
     }
 
+    /// Estimate heap memory usage in bytes for stored vectors.
+    ///
+    /// Does not include HashMap overhead or index structures (IVF/HNSW),
+    /// only the raw vector data.
+    pub fn memory_usage_bytes(&self) -> usize {
+        // Each vector: dimensions * sizeof(f32) + Vec overhead (~24 bytes on 64-bit)
+        // HashMap entry overhead: ~64 bytes per entry (key + hash + pointers)
+        let per_vector = self.dimensions * std::mem::size_of::<f32>() + 24;
+        let per_entry = per_vector + 64;
+        self.vectors.len() * per_entry
+    }
+
     /// Persist the index to disk atomically.
     ///
     /// Writes to a temporary file first, then renames to the target path.

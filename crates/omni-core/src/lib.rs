@@ -95,4 +95,4 @@ pub use config::normalize_repo_hash;
 pub use config::Config;
 pub use error::OmniError;
 /// Re-export the primary engine interface.
-pub use pipeline::{Engine, RetryEmbeddingResult};
+pub use pipeline::{Engine, FileProcessStats, RetryEmbeddingResult};

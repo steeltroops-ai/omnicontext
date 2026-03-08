@@ -33,6 +33,10 @@ pub struct SearchCodeParams {
     pub query: String,
     /// Maximum number of results to return (default: 10).
     pub limit: Option<usize>,
+    /// Minimum cross-encoder reranker score threshold (0.0-1.0). Chunks below
+    /// this threshold are demoted. Higher values produce fewer, more precise
+    /// results. Default: no threshold (all results returned).
+    pub min_rerank_score: Option<f32>,
 }
 
 /// Parameters for `get_symbol` tool.
@@ -78,6 +82,10 @@ pub struct ContextWindowParams {
     pub limit: Option<usize>,
     /// Token budget for the context window (default: engine config).
     pub token_budget: Option<u32>,
+    /// Minimum cross-encoder reranker score threshold (0.0-1.0). Chunks below
+    /// this threshold are demoted. Higher values produce fewer, more precise
+    /// results. Default: no threshold.
+    pub min_rerank_score: Option<f32>,
 }
 
 /// Parameters for `get_module_map` tool.
@@ -106,6 +114,35 @@ pub struct SetWorkspaceParams {
     pub path: String,
     /// Whether to auto-index the new workspace if no index exists (default: true).
     pub auto_index: Option<bool>,
+}
+
+/// Parameters for `get_blast_radius` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetBlastRadiusParams {
+    /// Fully qualified symbol name to analyze impact for.
+    pub symbol: String,
+    /// Maximum depth for transitive impact analysis (default: 5).
+    pub max_depth: Option<usize>,
+}
+
+/// Parameters for `get_recent_changes` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetRecentChangesParams {
+    /// Number of recent commits to analyze (default: 10).
+    pub commit_count: Option<usize>,
+    /// Whether to include the actual diff content (default: false).
+    pub include_diff: Option<bool>,
+}
+
+/// Parameters for `get_call_graph` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetCallGraphParams {
+    /// Fully qualified symbol name to get the call graph for.
+    pub symbol: String,
+    /// Maximum depth for upstream/downstream traversal (default: 2).
+    pub depth: Option<usize>,
+    /// Whether to output as Mermaid diagram (default: false).
+    pub mermaid: Option<bool>,
 }
 
 // -----------------------------------------------------------------------
@@ -145,7 +182,7 @@ impl OmniContextServer {
         let query = &params.0.query;
         let engine = self.engine.lock().await;
 
-        match engine.search(query, limit) {
+        match engine.search_with_rerank_threshold(query, limit, params.0.min_rerank_score) {
             Ok(results) => {
                 if results.is_empty() {
                     return Ok(CallToolResult::success(vec![Content::text(
@@ -193,7 +230,12 @@ impl OmniContextServer {
         let query = &params.0.query;
         let engine = self.engine.lock().await;
 
-        match engine.search_context_window(query, limit, params.0.token_budget) {
+        match engine.search_context_window_with_rerank_threshold(
+            query,
+            limit,
+            params.0.token_budget,
+            params.0.min_rerank_score,
+        ) {
             Ok(ctx) => {
                 if ctx.is_empty() {
                     return Ok(CallToolResult::success(vec![Content::text(
@@ -268,9 +310,19 @@ impl OmniContextServer {
 
         match index.get_symbol_by_fqn(name) {
             Ok(Some(symbol)) => {
+                // Resolve file path from file_id
+                let file_path_str = index
+                    .get_all_files()
+                    .ok()
+                    .and_then(|files| files.into_iter().find(|f| f.id == symbol.file_id))
+                    .map_or_else(
+                        || format!("file#{}", symbol.file_id),
+                        |f| f.path.display().to_string(),
+                    );
+
                 let mut output = format!(
-                    "## {} ({:?})\n**File ID**: {}\n**Line**: {}\n",
-                    symbol.fqn, symbol.kind, symbol.file_id, symbol.line
+                    "## {} ({:?})\n**File**: {}\n**Line**: {}\n",
+                    symbol.fqn, symbol.kind, file_path_str, symbol.line
                 );
 
                 if let Some(chunk_id) = symbol.chunk_id {
@@ -428,14 +480,23 @@ impl OmniContextServer {
         description = "Get the current status of the OmniContext engine: indexed files, chunks, symbols, vectors, and search mode."
     )]
     async fn get_status(&self) -> Result<CallToolResult, McpError> {
+        use std::fmt::Write;
+
         let engine = self.engine.lock().await;
         match engine.status() {
             Ok(s) => {
+                #[allow(clippy::cast_precision_loss)]
+                let memory_mb = s.vector_memory_bytes as f64 / (1024.0 * 1024.0);
                 let mut output = format!(
                     "## OmniContext Status\n\n\
                      - **Repository**: {}\n- **Data dir**: {}\n- **Search mode**: {}\n\n\
                      ### Index Statistics\n\n\
-                     - Files: {}\n- Chunks: {}\n- Symbols: {}\n- Vectors: {}\n\n\
+                     | Metric | Value |\n|--------|-------|\n\
+                     | Files | {} |\n| Chunks | {} |\n\
+                     | Symbols | {} |\n| Vectors | {} |\n\
+                     | Embedding coverage | {:.1}% |\n\
+                     | Vector memory | {:.2} MB |\n\
+                     | ANN strategy | {} |\n\n\
                      ### Dependency Graph\n\n\
                      - Edges (persisted): {}\n- Graph nodes: {}\n- Graph edges: {}\n",
                     s.repo_path,
@@ -445,10 +506,22 @@ impl OmniContextServer {
                     s.chunks_indexed,
                     s.symbols_indexed,
                     s.vectors_indexed,
+                    s.embedding_coverage_percent,
+                    memory_mb,
+                    s.active_search_strategy,
                     s.dep_edges,
                     s.graph_nodes,
                     s.graph_edges,
                 );
+
+                // Language distribution
+                if !s.language_distribution.is_empty() {
+                    writeln!(output, "\n### Language Distribution\n").ok();
+                    for (lang, count) in &s.language_distribution {
+                        writeln!(output, "- **{lang}**: {count} files").ok();
+                    }
+                }
+
                 if s.has_cycles {
                     output.push_str(
                         "\n> **Warning**: Circular dependencies detected in the graph.\n",
@@ -485,7 +558,7 @@ impl OmniContextServer {
             Ok(None) => {
                 // Try prefix search
                 match index.search_symbols_by_name(symbol_name, 1) {
-                    Ok(mut syms) if !syms.is_empty() => syms.pop().ok_or_else(|| {
+                    Ok(syms) if !syms.is_empty() => syms.into_iter().next().ok_or_else(|| {
                         McpError::internal_error("symbol list unexpectedly empty".to_string(), None)
                     })?,
                     _ => {
@@ -659,36 +732,65 @@ impl OmniContextServer {
         description = "Get a high-level overview of the codebase architecture: file structure, module relationships, and technology stack."
     )]
     async fn get_architecture(&self) -> Result<CallToolResult, McpError> {
+        use std::fmt::Write;
+
         let engine = self.engine.lock().await;
-        match engine.status() {
-            Ok(s) => {
-                let output = format!(
-                    "## Codebase Architecture\n\n\
-                     **Repository**: {}\n**Files**: {}\n**Symbols**: {}\n**Search mode**: {}\n\n\
-                     ### Indexed Content\n\n\
-                     - {} files indexed\n- {} code chunks searchable\n\
-                     - {} symbols (functions, classes, traits, etc.)\n- {} vector embeddings\n\n\
-                     ### Recommendations\n\n\
-                     - Use `search_code` to explore specific functionality\n\
-                     - Use `get_symbol` to look up functions or classes\n\
-                     - Use `get_file_summary` for file structure\n\
-                     - Use `find_patterns` to discover recurring patterns\n",
-                    s.repo_path,
-                    s.files_indexed,
-                    s.symbols_indexed,
-                    s.search_mode,
-                    s.files_indexed,
-                    s.chunks_indexed,
-                    s.symbols_indexed,
-                    s.vectors_indexed,
-                );
-                Ok(CallToolResult::success(vec![Content::text(output)]))
+        let status = engine
+            .status()
+            .map_err(|e| McpError::internal_error(format!("architecture failed: {e}"), None))?;
+        let index = engine.metadata_index();
+
+        let mut output = format!(
+            "## Codebase Architecture\n\n\
+             **Repository**: {}\n**Search mode**: {}\n\n\
+             ### Index Statistics\n\n\
+             | Metric | Count |\n|--------|-------|\n\
+             | Files | {} |\n| Chunks | {} |\n\
+             | Symbols | {} |\n| Vectors | {} |\n\n",
+            status.repo_path,
+            status.search_mode,
+            status.files_indexed,
+            status.chunks_indexed,
+            status.symbols_indexed,
+            status.vectors_indexed,
+        );
+
+        // Language breakdown
+        if let Ok(files) = index.get_all_files() {
+            let mut lang_counts: std::collections::BTreeMap<String, usize> =
+                std::collections::BTreeMap::new();
+            for f in &files {
+                *lang_counts
+                    .entry(f.language.as_str().to_string())
+                    .or_default() += 1;
             }
-            Err(e) => Err(McpError::internal_error(
-                format!("architecture failed: {e}"),
-                None,
-            )),
+            if !lang_counts.is_empty() {
+                writeln!(output, "### Language Distribution\n").ok();
+                writeln!(output, "| Language | Files |").ok();
+                writeln!(output, "|----------|-------|").ok();
+                for (lang, count) in &lang_counts {
+                    writeln!(output, "| {lang} | {count} |").ok();
+                }
+                output.push('\n');
+            }
         }
+
+        // Dependency graph summary
+        let graph = engine.dep_graph();
+        writeln!(
+            output,
+            "### Dependency Graph\n\n- Nodes: {}\n- Edges: {}\n- Cycles: {}\n",
+            graph.node_count(),
+            graph.edge_count(),
+            if status.has_cycles {
+                "detected"
+            } else {
+                "none"
+            },
+        )
+        .ok();
+
+        Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 
     #[tool(
@@ -696,33 +798,104 @@ impl OmniContextServer {
         description = "Get a comprehensive explanation of the codebase: tech stack, entry points, structure. Good for onboarding to a new project."
     )]
     async fn explain_codebase(&self) -> Result<CallToolResult, McpError> {
+        use std::fmt::Write;
+
         let engine = self.engine.lock().await;
-        match engine.status() {
-            Ok(s) => {
-                let output = format!(
-                    "## Codebase Overview\n\n**Root**: {}\n\n\
-                     ### Statistics\n\n\
-                     | Metric | Count |\n|--------|-------|\n\
-                     | Files | {} |\n| Code Chunks | {} |\n\
-                     | Symbols | {} |\n| Embeddings | {} |\n\n\
-                     ### How to Explore\n\n\
-                     1. **Find entry points**: `search_code \"main function\"`\n\
-                     2. **Understand a module**: `get_file_summary \"path/to/file.rs\"`\n\
-                     3. **Look up definitions**: `get_symbol \"ClassName\"`\n\
-                     4. **Find patterns**: `find_patterns \"error handling\"`\n",
-                    s.repo_path,
-                    s.files_indexed,
-                    s.chunks_indexed,
-                    s.symbols_indexed,
-                    s.vectors_indexed,
-                );
-                Ok(CallToolResult::success(vec![Content::text(output)]))
+        let status = engine
+            .status()
+            .map_err(|e| McpError::internal_error(format!("explain failed: {e}"), None))?;
+        let index = engine.metadata_index();
+
+        let mut output = format!(
+            "## Codebase Overview\n\n**Root**: {}\n\n\
+             ### Statistics\n\n\
+             | Metric | Count |\n|--------|-------|\n\
+             | Files | {} |\n| Code Chunks | {} |\n\
+             | Symbols | {} |\n| Embeddings | {} |\n\n",
+            status.repo_path,
+            status.files_indexed,
+            status.chunks_indexed,
+            status.symbols_indexed,
+            status.vectors_indexed,
+        );
+
+        // Language distribution
+        if let Ok(files) = index.get_all_files() {
+            let mut lang_counts: std::collections::BTreeMap<String, usize> =
+                std::collections::BTreeMap::new();
+            for f in &files {
+                *lang_counts
+                    .entry(f.language.as_str().to_string())
+                    .or_default() += 1;
             }
-            Err(e) => Err(McpError::internal_error(
-                format!("explain failed: {e}"),
-                None,
-            )),
+            if !lang_counts.is_empty() {
+                writeln!(output, "### Languages\n").ok();
+                for (lang, count) in &lang_counts {
+                    writeln!(output, "- **{lang}**: {count} files").ok();
+                }
+                output.push('\n');
+            }
+
+            // Top-level directory structure (first 2 levels)
+            let mut dirs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+            for f in &files {
+                let path_str = f.path.to_string_lossy();
+                let parts: Vec<&str> = path_str.split(['/', '\\']).collect();
+                if parts.len() > 1 {
+                    dirs.insert(parts[0].to_string());
+                }
+            }
+            if !dirs.is_empty() {
+                writeln!(output, "### Top-Level Structure\n").ok();
+                for dir in &dirs {
+                    writeln!(output, "- `{dir}/`").ok();
+                }
+                output.push('\n');
+            }
         }
+
+        writeln!(output, "### Available Tools\n").ok();
+        writeln!(
+            output,
+            "- `search_code` -- hybrid full-text + semantic search"
+        )
+        .ok();
+        writeln!(
+            output,
+            "- `context_window` -- token-budget-aware context assembly"
+        )
+        .ok();
+        writeln!(
+            output,
+            "- `get_symbol` -- exact symbol lookup with source code"
+        )
+        .ok();
+        writeln!(output, "- `get_file_summary` -- file structure breakdown").ok();
+        writeln!(output, "- `get_module_map` -- project module hierarchy").ok();
+        writeln!(output, "- `get_dependencies` -- symbol dependency analysis").ok();
+        writeln!(output, "- `get_blast_radius` -- change impact analysis").ok();
+        writeln!(
+            output,
+            "- `get_call_graph` -- dependency graph visualization"
+        )
+        .ok();
+        writeln!(
+            output,
+            "- `get_recent_changes` -- git history and uncommitted diffs"
+        )
+        .ok();
+        writeln!(
+            output,
+            "- `search_by_intent` -- NL search with query expansion"
+        )
+        .ok();
+        writeln!(
+            output,
+            "- `find_patterns` -- discover recurring code patterns"
+        )
+        .ok();
+
+        Ok(CallToolResult::success(vec![Content::text(output)]))
     }
 
     #[tool(
@@ -731,10 +904,11 @@ impl OmniContextServer {
     )]
     async fn get_module_map(
         &self,
-        #[allow(unused)] params: Parameters<GetModuleMapParams>,
+        params: Parameters<GetModuleMapParams>,
     ) -> Result<CallToolResult, McpError> {
         use std::fmt::Write;
 
+        let max_depth = params.0.max_depth;
         let engine = self.engine.lock().await;
         let index = engine.metadata_index();
 
@@ -754,6 +928,14 @@ impl OmniContextServer {
         for file in &files {
             let path_str = file.path.display().to_string();
             let parts: Vec<&str> = path_str.split(['/', '\\']).collect();
+
+            // Apply max_depth filter: skip files deeper than max_depth directories
+            if let Some(depth) = max_depth {
+                if parts.len() > depth + 1 {
+                    continue;
+                }
+            }
+
             let module_key = if parts.len() > 1 {
                 parts[..parts.len() - 1].join("/")
             } else {
@@ -789,10 +971,13 @@ impl OmniContextServer {
         }
 
         let mut output = format!(
-            "## Module Map ({} modules, {} files)\n\n",
+            "## Module Map ({} modules, {} files)\\n\\n",
             modules.len(),
             files.len()
         );
+        if let Some(depth) = max_depth {
+            writeln!(output, "_Filtered to depth {depth}_\n").ok();
+        }
         for (module, entries) in &modules {
             writeln!(output, "### {module}").ok();
             for entry in entries {
@@ -949,6 +1134,334 @@ impl OmniContextServer {
             files,
         ))]))
     }
+
+    #[tool(
+        name = "get_blast_radius",
+        description = "Analyze the impact of changing a symbol. Returns all code that would be transitively affected if the given symbol is modified -- answers 'what breaks if I change this?'. Results are sorted by proximity (closest affected first)."
+    )]
+    async fn get_blast_radius(
+        &self,
+        params: Parameters<GetBlastRadiusParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use std::fmt::Write;
+
+        let symbol_name = &params.0.symbol;
+        let max_depth = params.0.max_depth.unwrap_or(5);
+        let engine = self.engine.lock().await;
+        let index = engine.metadata_index();
+        let graph = engine.dep_graph();
+
+        // Resolve symbol name to ID
+        let symbol = match index.get_symbol_by_fqn(symbol_name) {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                // Try prefix search fallback
+                match index.search_symbols_by_name(symbol_name, 1) {
+                    Ok(syms) if !syms.is_empty() => syms.into_iter().next().ok_or_else(|| {
+                        McpError::internal_error("symbol list unexpectedly empty".to_string(), None)
+                    })?,
+                    _ => {
+                        return Ok(CallToolResult::success(vec![Content::text(format!(
+                            "Symbol not found: '{symbol_name}'"
+                        ))]));
+                    }
+                }
+            }
+            Err(e) => {
+                return Err(McpError::internal_error(
+                    format!("symbol lookup failed: {e}"),
+                    None,
+                ));
+            }
+        };
+
+        // Compute blast radius
+        let affected = graph
+            .blast_radius(symbol.id, max_depth)
+            .map_err(|e| McpError::internal_error(format!("blast radius failed: {e}"), None))?;
+
+        if affected.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(format!(
+                "## Blast Radius: {}\nNo downstream dependents found. This symbol can be safely modified in isolation.",
+                symbol.fqn
+            ))]));
+        }
+
+        let mut output = format!(
+            "## Blast Radius: {}\n**{} symbols affected** (max depth: {})\n\n",
+            symbol.fqn,
+            affected.len(),
+            max_depth
+        );
+
+        // Resolve affected symbol IDs to names and group by distance
+        let mut current_depth = 0;
+        for (sym_id, distance) in &affected {
+            if *distance != current_depth {
+                current_depth = *distance;
+                writeln!(
+                    output,
+                    "\n### Depth {current_depth} ({} hop{} away)",
+                    current_depth,
+                    if current_depth == 1 { "" } else { "s" }
+                )
+                .ok();
+            }
+
+            if let Ok(Some(sym)) = index.get_symbol_by_id(*sym_id) {
+                // Get the file path for context
+                if let Some(chunk_id) = sym.chunk_id {
+                    if let Ok(chunks) = index.get_chunks_for_file(sym.file_id) {
+                        if let Some(chunk) = chunks.iter().find(|c| c.id == chunk_id) {
+                            writeln!(
+                                output,
+                                "- **{}** ({:?}) -- lines {}-{}",
+                                sym.fqn, sym.kind, chunk.line_start, chunk.line_end,
+                            )
+                            .ok();
+                            continue;
+                        }
+                    }
+                }
+                writeln!(output, "- **{}** ({:?})", sym.fqn, sym.kind).ok();
+            }
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
+
+    #[tool(
+        name = "get_recent_changes",
+        description = "Get recently changed files in the repository using git history. Shows which files were modified, added, or deleted in recent commits. Use this to understand what code is actively being worked on."
+    )]
+    async fn get_recent_changes(
+        &self,
+        params: Parameters<GetRecentChangesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use std::fmt::Write;
+
+        let commit_count = params.0.commit_count.unwrap_or(10);
+        let include_diff = params.0.include_diff.unwrap_or(false);
+        let engine = self.engine.lock().await;
+        let repo_path = engine.repo_path();
+
+        // Execute git log to get recent changes
+        let diff_flag = if include_diff { "-p" } else { "--stat" };
+        let git_output = std::process::Command::new("git")
+            .args([
+                "log",
+                &format!("-{commit_count}"),
+                "--pretty=format:%H|%ae|%ar|%s",
+                diff_flag,
+                "--no-color",
+            ])
+            .current_dir(repo_path)
+            .output();
+
+        match git_output {
+            Ok(output) if output.status.success() => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+
+                if stdout.is_empty() {
+                    return Ok(CallToolResult::success(vec![Content::text(
+                        "No git history found. This may not be a git repository."
+                    )]));
+                }
+
+                let mut result = format!(
+                    "## Recent Changes ({} commits)\n**Repository**: {}\n\n",
+                    commit_count,
+                    repo_path.display()
+                );
+
+                // Parse and format git log output
+                let mut current_commit = String::new();
+                for line in stdout.lines() {
+                    if line.contains('|') && line.len() > 40 {
+                        let parts: Vec<&str> = line.splitn(4, '|').collect();
+                        if parts.len() == 4 {
+                            if !current_commit.is_empty() {
+                                result.push('\n');
+                            }
+                            let hash = &parts[0][..8.min(parts[0].len())];
+                            current_commit = hash.to_string();
+                            writeln!(
+                                result,
+                                "### `{}` ({}) -- {}\n> {}",
+                                hash, parts[2], parts[1], parts[3]
+                            ).ok();
+                        }
+                    } else if !line.trim().is_empty() {
+                        writeln!(result, "{line}").ok();
+                    }
+                }
+
+                // Also get uncommitted changes (working tree)
+                let status_output = std::process::Command::new("git")
+                    .args(["status", "--short"])
+                    .current_dir(repo_path)
+                    .output();
+
+                if let Ok(status) = status_output {
+                    if status.status.success() {
+                        let status_str = String::from_utf8_lossy(&status.stdout);
+                        if !status_str.is_empty() {
+                            writeln!(result, "\n### Uncommitted Changes\n```\n{status_str}```").ok();
+                        }
+                    }
+                }
+
+                Ok(CallToolResult::success(vec![Content::text(result)]))
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                Ok(CallToolResult::success(vec![Content::text(format!(
+                    "Git command failed: {stderr}"
+                ))]))
+            }
+            Err(e) => {
+                Ok(CallToolResult::success(vec![Content::text(format!(
+                    "Failed to execute git: {e}. Make sure git is installed and this is a git repository."
+                ))]))
+            }
+        }
+    }
+
+    #[tool(
+        name = "get_call_graph",
+        description = "Get the call graph for a symbol -- shows what it calls (upstream) and what calls it (downstream), with typed edges (Calls, Imports, Extends, Implements). Optionally outputs as a Mermaid diagram for visualization."
+    )]
+    async fn get_call_graph(
+        &self,
+        params: Parameters<GetCallGraphParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use std::fmt::Write;
+
+        let symbol_name = &params.0.symbol;
+        let depth = params.0.depth.unwrap_or(2);
+        let as_mermaid = params.0.mermaid.unwrap_or(false);
+        let engine = self.engine.lock().await;
+        let index = engine.metadata_index();
+        let graph = engine.dep_graph();
+
+        // Resolve symbol
+        let symbol = match index.get_symbol_by_fqn(symbol_name) {
+            Ok(Some(s)) => s,
+            Ok(None) => match index.search_symbols_by_name(symbol_name, 1) {
+                Ok(syms) if !syms.is_empty() => syms.into_iter().next().ok_or_else(|| {
+                    McpError::internal_error("symbol list unexpectedly empty".to_string(), None)
+                })?,
+                _ => {
+                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                        "Symbol not found: '{symbol_name}'"
+                    ))]));
+                }
+            },
+            Err(e) => {
+                return Err(McpError::internal_error(
+                    format!("symbol lookup failed: {e}"),
+                    None,
+                ));
+            }
+        };
+
+        // Get edges for this symbol
+        let edges = graph
+            .get_edges_for_symbol(symbol.id)
+            .map_err(|e| McpError::internal_error(format!("call graph failed: {e}"), None))?;
+
+        // Get upstream and downstream with depth
+        let upstream = graph.upstream(symbol.id, depth).unwrap_or_default();
+        let downstream = graph.downstream(symbol.id, depth).unwrap_or_default();
+
+        if as_mermaid {
+            // Generate Mermaid diagram
+            let mut mermaid = String::from("```mermaid\ngraph TD\n");
+
+            // Sanitize node ID for mermaid
+            let sanitize = |s: &str| -> String { s.replace("::", "_").replace(['.', '-'], "_") };
+
+            let center_id = sanitize(&symbol.fqn);
+            writeln!(mermaid, "  {center_id}[\"{}\"]\n", symbol.fqn).ok();
+
+            // Style the center node
+            writeln!(
+                mermaid,
+                "  style {center_id} fill:#ff9800,stroke:#e65100,stroke-width:3px"
+            )
+            .ok();
+
+            // Add upstream nodes (what this symbol depends on)
+            for sym_id in &upstream {
+                if let Ok(Some(sym)) = index.get_symbol_by_id(*sym_id) {
+                    let node_id = sanitize(&sym.fqn);
+                    writeln!(mermaid, "  {node_id}[\"{}\"]", sym.fqn).ok();
+                    writeln!(mermaid, "  {center_id} --> {node_id}").ok();
+                }
+            }
+
+            // Add downstream nodes (what depends on this symbol)
+            for sym_id in &downstream {
+                if let Ok(Some(sym)) = index.get_symbol_by_id(*sym_id) {
+                    let node_id = sanitize(&sym.fqn);
+                    writeln!(mermaid, "  {node_id}[\"{}\"]", sym.fqn).ok();
+                    writeln!(mermaid, "  {node_id} --> {center_id}").ok();
+                }
+            }
+
+            mermaid.push_str("```\n");
+            Ok(CallToolResult::success(vec![Content::text(mermaid)]))
+        } else {
+            // Text output
+            let mut output = format!(
+                "## Call Graph: {}\n**In-degree**: {} | **Edges**: {} | **Upstream**: {} | **Downstream**: {}\n\n",
+                symbol.fqn,
+                graph.in_degree(symbol.id),
+                edges.len(),
+                upstream.len(),
+                downstream.len(),
+            );
+
+            if !edges.is_empty() {
+                writeln!(output, "### Direct Edges\n").ok();
+                for (target_id, kind, direction) in &edges {
+                    if let Ok(Some(sym)) = index.get_symbol_by_id(*target_id) {
+                        let arrow = if *direction == "outgoing" {
+                            "-->"
+                        } else {
+                            "<--"
+                        };
+                        writeln!(
+                            output,
+                            "- {} {arrow} **{}** ({:?})",
+                            symbol.fqn, sym.fqn, kind
+                        )
+                        .ok();
+                    }
+                }
+            }
+
+            if !upstream.is_empty() {
+                writeln!(output, "\n### Upstream (Dependencies, depth {depth})\n").ok();
+                for sym_id in &upstream {
+                    if let Ok(Some(sym)) = index.get_symbol_by_id(*sym_id) {
+                        writeln!(output, "- **{}** ({:?})", sym.fqn, sym.kind).ok();
+                    }
+                }
+            }
+
+            if !downstream.is_empty() {
+                writeln!(output, "\n### Downstream (Dependents, depth {depth})\n").ok();
+                for sym_id in &downstream {
+                    if let Ok(Some(sym)) = index.get_symbol_by_id(*sym_id) {
+                        writeln!(output, "- **{}** ({:?})", sym.fqn, sym.kind).ok();
+                    }
+                }
+            }
+
+            Ok(CallToolResult::success(vec![Content::text(output)]))
+        }
+    }
 }
 
 #[tool_handler]
@@ -958,10 +1471,12 @@ impl ServerHandler for OmniContextServer {
             instructions: Some(
                 "OmniContext provides deep code intelligence for AI coding agents. \
                  It indexes source code into searchable chunks with full-text and semantic search. \
-                 Use search_code for general queries, get_symbol for specific lookups, \
-                 get_file_summary for file structure, get_module_map for architecture overview, \
-                 search_by_intent for natural language queries with automatic expansion, \
-                 and set_workspace to switch the active repository at runtime."
+                 Use search_code for general queries, context_window for token-budget-aware context, \
+                 get_symbol for specific lookups, get_file_summary for file structure, \
+                 get_module_map for architecture overview, get_dependencies for symbol relationships, \
+                 get_blast_radius for impact analysis, get_call_graph for dependency visualization, \
+                 get_recent_changes for git history, search_by_intent for NL queries, \
+                 and set_workspace to switch the active repository."
                     .into(),
             ),
             capabilities: ServerCapabilities::builder().enable_tools().build(),

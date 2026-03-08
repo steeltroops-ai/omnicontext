@@ -156,6 +156,35 @@ impl PrefetchCache {
         self.misses.store(0, Ordering::Relaxed);
     }
 
+    /// Invalidate all cache entries associated with a given file.
+    ///
+    /// Removes the file-level entry and any symbol/function entries scoped
+    /// to that file. Called by the daemon when a file is re-indexed.
+    pub fn invalidate_file(&self, file: &PathBuf) {
+        let mut cache = self.cache.lock();
+
+        // Collect keys to remove (can't mutate while iterating)
+        let keys_to_remove: Vec<CacheKey> = cache
+            .iter()
+            .filter_map(|(key, _)| {
+                let matches = match key {
+                    CacheKey::File(f)
+                    | CacheKey::Symbol { file: f, .. }
+                    | CacheKey::Function { file: f, .. } => f == file,
+                };
+                if matches {
+                    Some(key.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for key in keys_to_remove {
+            let _ = cache.pop(&key);
+        }
+    }
+
     /// Update cache configuration dynamically.
     ///
     /// # Arguments

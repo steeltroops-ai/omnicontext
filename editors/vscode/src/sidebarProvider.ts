@@ -207,22 +207,6 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
       },
     });
 
-    // Send system status update
-    if (systemStatus) {
-      this._view.webview.postMessage({
-        type: "updateSystemStatus",
-        status: systemStatus,
-      });
-    }
-
-    // Send performance metrics update
-    if (performanceMetrics) {
-      this._view.webview.postMessage({
-        type: "updatePerformanceMetrics",
-        metrics: performanceMetrics,
-      });
-    }
-
     // Send repository info
     let currentRepoPath = "";
 
@@ -250,6 +234,37 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
       this._view.webview.postMessage({
         type: "updateRepositoryInfo",
         repoPath: currentRepoPath,
+      });
+    }
+
+    // Send system status update and auto-repair registry properties if connected
+    if (systemStatus) {
+      this._view.webview.postMessage({
+        type: "updateSystemStatus",
+        status: systemStatus,
+      });
+
+      // If we are connected and indexing has occurred, self-heal the registry
+      if (
+        systemStatus.connection_health === "connected" &&
+        systemStatus.files_indexed > 0
+      ) {
+        if (currentRepoPath) {
+          // registerRepo will update files_indexed, chunks_indexed, and last_indexed_at
+          registerRepo(
+            currentRepoPath,
+            systemStatus.files_indexed,
+            systemStatus.chunks_indexed,
+          );
+        }
+      }
+    }
+
+    // Send performance metrics update
+    if (performanceMetrics) {
+      this._view.webview.postMessage({
+        type: "updatePerformanceMetrics",
+        metrics: performanceMetrics,
       });
     }
 
@@ -1039,9 +1054,18 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
             font-weight: 500;
         }
         
+        .repo-item.active {
+            opacity: 1;
+            border-left: 3px solid #4ade80;
+            background: rgba(74, 222, 128, 0.05);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+        
         .repo-item-badge.active {
             background: rgba(74, 222, 128, 0.15);
             color: #4ade80;
+            font-weight: bold;
+            border: 1px solid rgba(74, 222, 128, 0.3);
         }
         
         .repo-item-badge.stale {
@@ -1117,7 +1141,9 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
     <div class="section">
         <div class="section-title">
             <span><i class="codicon codicon-database"></i> Indexed Repositories</span>
-            <button class="refresh-btn" onclick="refreshStatus()" title="Refresh"><i class="codicon codicon-sync"></i></button>
+            <button class="refresh-btn" onclick="refreshStatus()" title="Refresh Registry" style="display: flex; align-items: center; gap: 4px; padding: 2px 6px; border-radius: 4px; background: rgba(96, 165, 250, 0.1); color: #60a5fa; border: 1px solid rgba(96, 165, 250, 0.2); font-size: 10px; font-weight: bold; cursor: pointer; transition: all 0.2s;">
+                <i class="codicon codicon-sync"></i> Refresh
+            </button>
         </div>
         
         <div id="indexed-repos-list" style="max-height: 220px; overflow-y: auto;">

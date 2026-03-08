@@ -228,6 +228,94 @@ impl DependencyGraph {
             .unwrap_or(0)
     }
 
+    /// Compute the blast radius for a given symbol.
+    ///
+    /// Returns all symbol IDs that would be transitively affected if the given
+    /// symbol changes. This is the full downstream transitive closure -- it
+    /// answers "what breaks if I modify this?"
+    ///
+    /// The result is sorted by distance from the source (closest first).
+    /// Each entry is `(symbol_id, distance)`.
+    pub fn blast_radius(&self, symbol_id: i64, max_depth: usize) -> OmniResult<Vec<(i64, usize)>> {
+        let inner = self
+            .inner
+            .read()
+            .map_err(|e| crate::error::OmniError::Internal(format!("graph lock poisoned: {e}")))?;
+
+        let Some(&node) = inner.symbol_to_node.get(&symbol_id) else {
+            return Ok(Vec::new());
+        };
+
+        // BFS along incoming edges (what depends on this symbol) with depth tracking
+        use std::collections::VecDeque;
+        let mut visited: HashMap<NodeIndex, usize> = HashMap::new();
+        let mut queue = VecDeque::new();
+        visited.insert(node, 0);
+        queue.push_back((node, 0usize));
+
+        let mut results = Vec::new();
+
+        while let Some((current, dist)) = queue.pop_front() {
+            if dist >= max_depth {
+                continue;
+            }
+            let next_dist = dist + 1;
+            for neighbor in inner.graph.neighbors_directed(current, Direction::Incoming) {
+                if !visited.contains_key(&neighbor) {
+                    visited.insert(neighbor, next_dist);
+                    let sym_id = inner.graph[neighbor];
+                    results.push((sym_id, next_dist));
+                    queue.push_back((neighbor, next_dist));
+                }
+            }
+        }
+
+        // Sort by distance ascending (closest affected first)
+        results.sort_by_key(|&(_, d)| d);
+        Ok(results)
+    }
+
+    /// Get all typed edges for a specific symbol.
+    ///
+    /// Returns `(target_symbol_id, edge_kind, direction_label)` tuples.
+    /// direction_label is "outgoing" or "incoming".
+    /// Used by the call graph MCP tool.
+    pub fn get_edges_for_symbol(
+        &self,
+        symbol_id: i64,
+    ) -> OmniResult<Vec<(i64, DependencyKind, &'static str)>> {
+        let inner = self
+            .inner
+            .read()
+            .map_err(|e| crate::error::OmniError::Internal(format!("graph lock poisoned: {e}")))?;
+
+        let Some(&node) = inner.symbol_to_node.get(&symbol_id) else {
+            return Ok(Vec::new());
+        };
+
+        let mut edges = Vec::new();
+
+        // Outgoing edges (what this symbol depends on / calls)
+        for neighbor in inner.graph.neighbors_directed(node, Direction::Outgoing) {
+            if let Some(edge_idx) = inner.graph.find_edge(node, neighbor) {
+                let kind = inner.graph[edge_idx];
+                let target_id = inner.graph[neighbor];
+                edges.push((target_id, kind, "outgoing"));
+            }
+        }
+
+        // Incoming edges (what depends on / calls this symbol)
+        for neighbor in inner.graph.neighbors_directed(node, Direction::Incoming) {
+            if let Some(edge_idx) = inner.graph.find_edge(neighbor, node) {
+                let kind = inner.graph[edge_idx];
+                let source_id = inner.graph[neighbor];
+                edges.push((source_id, kind, "incoming"));
+            }
+        }
+
+        Ok(edges)
+    }
+
     /// Resolve an import statement to a target symbol ID.
     ///
     /// Multi-strategy resolution:
@@ -605,5 +693,93 @@ mod tests {
         assert_eq!(graph.distance(1, 3).expect("dist"), Some(2));
         assert_eq!(graph.distance(1, 2).expect("dist"), Some(1));
         assert_eq!(graph.distance(1, 99).expect("dist"), None);
+    }
+
+    #[test]
+    fn test_blast_radius() {
+        // Build: 1 -> 2 -> 3, and 4 -> 2
+        // Blast radius of 2 = {1, 4} at depth 1
+        // Blast radius of 3 = {2} at depth 1, {1, 4} at depth 2
+        let graph = DependencyGraph::new();
+        graph
+            .add_edge(&DependencyEdge {
+                source_id: 1,
+                target_id: 2,
+                kind: DependencyKind::Calls,
+            })
+            .expect("edge");
+        graph
+            .add_edge(&DependencyEdge {
+                source_id: 2,
+                target_id: 3,
+                kind: DependencyKind::Calls,
+            })
+            .expect("edge");
+        graph
+            .add_edge(&DependencyEdge {
+                source_id: 4,
+                target_id: 2,
+                kind: DependencyKind::Imports,
+            })
+            .expect("edge");
+
+        let radius = graph.blast_radius(2, 5).expect("blast radius");
+        assert_eq!(radius.len(), 2);
+        let ids: Vec<i64> = radius.iter().map(|(id, _)| *id).collect();
+        assert!(ids.contains(&1));
+        assert!(ids.contains(&4));
+        // All at depth 1
+        assert!(radius.iter().all(|(_, d)| *d == 1));
+
+        // Blast radius of 3 (depth 2 should reach 1 and 4)
+        let radius3 = graph.blast_radius(3, 5).expect("blast radius");
+        assert_eq!(radius3.len(), 3); // 2 at depth 1, then 1 and 4 at depth 2
+        assert_eq!(radius3[0].1, 1); // First result at depth 1
+
+        // Blast radius with max_depth=1 should only get depth 1
+        let radius_shallow = graph.blast_radius(3, 1).expect("shallow blast");
+        assert_eq!(radius_shallow.len(), 1);
+        assert_eq!(radius_shallow[0].0, 2);
+    }
+
+    #[test]
+    fn test_get_edges_for_symbol() {
+        let graph = DependencyGraph::new();
+        graph
+            .add_edge(&DependencyEdge {
+                source_id: 1,
+                target_id: 2,
+                kind: DependencyKind::Calls,
+            })
+            .expect("edge");
+        graph
+            .add_edge(&DependencyEdge {
+                source_id: 3,
+                target_id: 1,
+                kind: DependencyKind::Imports,
+            })
+            .expect("edge");
+
+        let edges = graph.get_edges_for_symbol(1).expect("edges");
+        assert_eq!(edges.len(), 2);
+
+        // Should have one outgoing (1->2) and one incoming (3->1)
+        let outgoing: Vec<_> = edges.iter().filter(|(_, _, d)| *d == "outgoing").collect();
+        let incoming: Vec<_> = edges.iter().filter(|(_, _, d)| *d == "incoming").collect();
+        assert_eq!(outgoing.len(), 1);
+        assert_eq!(incoming.len(), 1);
+        assert_eq!(outgoing[0].0, 2); // calls symbol 2
+        assert_eq!(incoming[0].0, 3); // symbol 3 imports us
+    }
+
+    #[test]
+    fn test_blast_radius_empty() {
+        let graph = DependencyGraph::new();
+        graph.add_symbol(1).expect("add");
+        let radius = graph.blast_radius(1, 5).expect("blast radius");
+        assert!(radius.is_empty());
+
+        let radius_unknown = graph.blast_radius(999, 5).expect("blast radius");
+        assert!(radius_unknown.is_empty());
     }
 }

@@ -232,7 +232,7 @@ export function discoverReposFromDisk(knownPaths?: string[]): void {
       hash: dirName,
       filesIndexed: 0, // unknown -- will be populated on next index
       chunksIndexed: 0,
-      lastIndexedAt: stat.mtimeMs,
+      lastIndexedAt: Math.floor(stat.mtimeMs),
     };
     mutated = true;
   }
@@ -248,13 +248,29 @@ export function discoverReposFromDisk(knownPaths?: string[]): void {
 export function getIndexedRepos(): IndexedRepo[] {
   const registry = loadRegistry();
   const repos: IndexedRepo[] = [];
+  let mutated = false;
 
   for (const entry of Object.values(registry.repos)) {
+    // Check if the actual index.db database still exists
+    const existsDb = fs.existsSync(
+      path.join(getOmniReposDir(), entry.hash, "index.db"),
+    );
+    if (!existsDb) {
+      // The index was deleted on disk (e.g. by cleanup or it was a temporary test repo)
+      delete registry.repos[entry.hash];
+      mutated = true;
+      continue;
+    }
+
     const exists = entry.repoPath ? fs.existsSync(entry.repoPath) : false;
     repos.push({
       ...entry,
       exists,
     });
+  }
+
+  if (mutated) {
+    saveRegistry(registry);
   }
 
   // Sort: most recently indexed first

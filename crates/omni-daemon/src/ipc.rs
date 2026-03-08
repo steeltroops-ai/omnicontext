@@ -782,6 +782,7 @@ async fn handle_index(engine: Arc<Mutex<Engine>>) -> Result<serde_json::Value, (
 ///
 /// Spawns background tasks to pre-compute context for the given file/symbol
 /// and stores results in the prefetch cache. Returns immediately to the client.
+/// On `text_edited` events, also triggers incremental re-indexing of the changed file.
 #[allow(clippy::unused_async)]
 async fn handle_ide_event(
     engine: Arc<Mutex<Engine>>,
@@ -819,6 +820,34 @@ async fn handle_ide_event(
             let cache = prefetch_cache.clone();
             let file_path = params.file_path.clone();
             tokio::spawn(async move {
+                // Phase 2: Real-time incremental re-indexing
+                // Re-index the changed file, then invalidate the cache
+                let abs_path = std::path::PathBuf::from(&file_path);
+                {
+                    let mut engine_guard = eng.lock().await;
+                    match engine_guard.reindex_single_file(&abs_path) {
+                        Ok((stats, changed)) => {
+                            if changed {
+                                // Invalidate cached context for this file
+                                let cache_key = std::path::PathBuf::from(&file_path);
+                                cache.invalidate_file(&cache_key);
+                                tracing::debug!(
+                                    file = %file_path,
+                                    chunks = stats.chunks,
+                                    "reindexed changed file, cache invalidated"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                file = %file_path,
+                                error = %e,
+                                "real-time reindex failed, falling back to prefetch"
+                            );
+                        }
+                    }
+                }
+                // Also pre-fetch fresh context for the file
                 prefetch_file_context(eng, cache, &file_path).await;
             });
         }

@@ -184,34 +184,50 @@ impl Engine {
         // Create file watcher for scanning
         let watcher = FileWatcher::new(&repo_path, &self.config.watcher, &self.config.indexing);
 
-        // Full directory scan
-        let file_count = watcher.full_scan(&tx)?;
-        tracing::info!(files = file_count, "scan complete, processing files");
+        // Full directory scan in a background thread to allow backpressure
+        // without blocking the async receiver loop or panicking Tokio
+        let scan_tx = tx.clone();
+        let scan_watcher = watcher.clone();
+        let _scan_handle = tokio::task::spawn_blocking(move || {
+            let count = scan_watcher.full_scan(&scan_tx).unwrap_or(0);
+            count
+        });
 
-        // Close the sender side so the receiver will drain
+        // Close our sender side so the receiver will drain when the scanner finishes
         drop(tx);
 
         let mut result = IndexResult::default();
+        let mut pending_embeddings = Vec::with_capacity(512);
 
         // Process each event
         while let Some(event) = rx.recv().await {
             match event {
-                PipelineEvent::FileChanged { path } => match self.process_file(&path) {
-                    Ok(stats) => {
-                        result.files_processed += 1;
-                        result.chunks_created += stats.chunks;
-                        result.symbols_extracted += stats.symbols;
-                        result.embeddings_generated += stats.embeddings;
+                PipelineEvent::FileChanged { path } => {
+                    match self.process_file(&path, &mut pending_embeddings) {
+                        Ok(stats) => {
+                            result.files_processed += 1;
+                            result.chunks_created += stats.chunks;
+                            result.symbols_extracted += stats.symbols;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                path = %path.display(),
+                                error = %e,
+                                "failed to process file"
+                            );
+                            result.files_failed += 1;
+                        }
                     }
-                    Err(e) => {
-                        tracing::warn!(
-                            path = %path.display(),
-                            error = %e,
-                            "failed to process file"
-                        );
-                        result.files_failed += 1;
+
+                    if pending_embeddings.len() >= 256 {
+                        if let Err(e) = self.flush_pending_embeddings(
+                            &mut pending_embeddings,
+                            &mut result.embeddings_generated,
+                        ) {
+                            tracing::error!(error = %e, "batch embedding flush failed");
+                        }
                     }
-                },
+                }
                 PipelineEvent::FileDeleted { path } => {
                     if let Err(e) = self.index.delete_file(&path) {
                         tracing::warn!(
@@ -228,6 +244,13 @@ impl Engine {
                     break;
                 }
             }
+        }
+
+        // Flush remaining at the end
+        if let Err(e) =
+            self.flush_pending_embeddings(&mut pending_embeddings, &mut result.embeddings_generated)
+        {
+            tracing::error!(error = %e, "final embedding flush failed");
         }
 
         // Persist vector index to disk
@@ -272,7 +295,11 @@ impl Engine {
     /// Process a single file through the pipeline.
     ///
     /// Parse -> Chunk -> Embed -> Store.
-    fn process_file(&mut self, path: &Path) -> OmniResult<FileProcessStats> {
+    fn process_file(
+        &mut self,
+        path: &Path,
+        pending_embeddings: &mut Vec<(i64, String)>,
+    ) -> OmniResult<FileProcessStats> {
         let mut stats = FileProcessStats::default();
 
         // Read file content
@@ -371,37 +398,17 @@ impl Engine {
         // Atomic reindex: delete old chunks/symbols, insert new
         let (_fid, chunk_ids) = self.index.reindex_file(&file_info, &chunks, &symbols)?;
 
-        // Generate embeddings and store in vector index
+        // Stage for batch embedding
         if self.embedder.is_available() && !chunks.is_empty() {
-            let texts: Vec<String> = chunks
-                .iter()
-                .map(|c| {
-                    crate::embedder::format_chunk_for_embedding(
+            for (i, c) in chunks.iter().enumerate() {
+                if i < chunk_ids.len() {
+                    let text = crate::embedder::format_chunk_for_embedding(
                         language.as_str(),
                         &c.symbol_path,
                         &format!("{:?}", c.kind),
                         &c.content,
-                    )
-                })
-                .collect();
-            let text_refs: Vec<&str> = texts.iter().map(String::as_str).collect();
-
-            let embeddings = self.embedder.embed_batch(&text_refs);
-            for (i, maybe_embedding) in embeddings.into_iter().enumerate() {
-                if let Some(embedding) = maybe_embedding {
-                    if i < chunk_ids.len() {
-                        if let Ok(vector_id) = u64::try_from(chunk_ids[i]) {
-                            if let Err(e) = self.vector_index.add(vector_id, &embedding) {
-                                tracing::warn!(error = %e, "failed to add vector");
-                                continue;
-                            }
-                            if let Err(e) = self.index.set_chunk_vector_id(chunk_ids[i], vector_id)
-                            {
-                                tracing::warn!(error = %e, "failed to set vector_id");
-                            }
-                            stats.embeddings += 1;
-                        }
-                    }
+                    );
+                    pending_embeddings.push((chunk_ids[i], text));
                 }
             }
         }
@@ -557,6 +564,29 @@ impl Engine {
 
     /// Execute a search query.
     pub fn search(&self, query: &str, limit: usize) -> OmniResult<Vec<SearchResult>> {
+        self.search_with_rerank_threshold(query, limit, None)
+    }
+
+    /// Execute a search query with an optional reranker minimum threshold.
+    ///
+    /// When `min_rerank_score` is provided, the cross-encoder reranker uses it
+    /// as an early termination threshold -- candidates scoring below this value
+    /// are aggressively demoted. Higher values produce fewer, more precise results.
+    pub fn search_with_rerank_threshold(
+        &self,
+        query: &str,
+        limit: usize,
+        min_rerank_score: Option<f32>,
+    ) -> OmniResult<Vec<SearchResult>> {
+        let reranker_config = if let Some(threshold) = min_rerank_score {
+            let mut cfg = self.config.search.reranker.clone();
+            // Use the threshold as a minimum score floor
+            // Items below this get demoted via unranked_demotion
+            cfg.unranked_demotion = threshold as f64;
+            Some(cfg)
+        } else {
+            Some(self.config.search.reranker.clone())
+        };
         self.search_engine.search(
             query,
             limit,
@@ -565,7 +595,7 @@ impl Engine {
             &self.embedder,
             Some(&self.dep_graph),
             Some(&self.reranker),
-            Some(&self.config.search.reranker),
+            reranker_config.as_ref(),
         )
     }
 
@@ -582,7 +612,18 @@ impl Engine {
         limit: usize,
         token_budget: Option<u32>,
     ) -> OmniResult<crate::types::ContextWindow> {
-        let results = self.search(query, limit)?;
+        self.search_context_window_with_rerank_threshold(query, limit, token_budget, None)
+    }
+
+    /// Execute a search and assemble a context window with optional reranker threshold.
+    pub fn search_context_window_with_rerank_threshold(
+        &self,
+        query: &str,
+        limit: usize,
+        token_budget: Option<u32>,
+        min_rerank_score: Option<f32>,
+    ) -> OmniResult<crate::types::ContextWindow> {
+        let results = self.search_with_rerank_threshold(query, limit, min_rerank_score)?;
         let budget = token_budget.unwrap_or(self.config.search.token_budget);
         let ctx = self.search_engine.assemble_context_window(
             &results,
@@ -614,6 +655,8 @@ impl Engine {
             chunks_indexed,
             symbols_indexed: stats.symbol_count,
             vectors_indexed,
+            vector_memory_bytes: self.vector_index.memory_usage_bytes(),
+            active_search_strategy: self.vector_index.active_strategy().to_string(),
             embedding_coverage_percent,
             dep_edges,
             graph_nodes: self.dep_graph.node_count(),
@@ -776,7 +819,93 @@ impl Engine {
         Ok(())
     }
 
-    /// Shut down the engine gracefully, persisting data to disk.
+    /// Re-index a single file incrementally (Phase 2: real-time indexing).
+    ///
+    /// Called by the daemon when a `text_edited` IDE event arrives. Unlike
+    /// `process_file` which checks the content hash and skips unchanged files,
+    /// this method always re-processes the file because the caller knows it
+    /// has been edited.
+    ///
+    /// Returns the file processing stats and a bool indicating whether the
+    /// file content actually changed (useful for cache invalidation).
+    pub fn reindex_single_file(&mut self, abs_path: &Path) -> OmniResult<(FileProcessStats, bool)> {
+        let start = std::time::Instant::now();
+
+        // Check file exists
+        if !abs_path.exists() {
+            // File was deleted -- remove from index
+            let rel_path = abs_path
+                .strip_prefix(&self.config.repo_path)
+                .unwrap_or(abs_path);
+            if let Err(e) = self.index.delete_file(rel_path) {
+                tracing::warn!(error = %e, "failed to delete file from index");
+            }
+            return Ok((FileProcessStats::default(), true));
+        }
+
+        // Force reprocess by temporarily ignoring the hash check
+        let mut pending = Vec::with_capacity(32);
+        let mut stats = self.process_file(abs_path, &mut pending)?;
+
+        // Immediately flush for single file indexing
+        let mut embeddings_generated = 0;
+        self.flush_pending_embeddings(&mut pending, &mut embeddings_generated)?;
+        stats.embeddings = embeddings_generated;
+
+        #[allow(clippy::cast_possible_truncation)]
+        let elapsed_ms = start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+        let changed = stats.chunks > 0;
+
+        tracing::info!(
+            path = %abs_path.display(),
+            chunks = stats.chunks,
+            symbols = stats.symbols,
+            embeddings = stats.embeddings,
+            elapsed_ms = elapsed_ms,
+            changed = changed,
+            "single file reindex complete"
+        );
+
+        Ok((stats, changed))
+    }
+
+    /// Flush a batch of pending embeddings to the vector index.
+    fn flush_pending_embeddings(
+        &mut self,
+        pending: &mut Vec<(i64, String)>,
+        embeddings_count: &mut usize,
+    ) -> OmniResult<()> {
+        if pending.is_empty() || !self.embedder.is_available() {
+            pending.clear();
+            return Ok(());
+        }
+
+        let texts: Vec<&str> = pending.iter().map(|(_, t)| t.as_str()).collect();
+
+        // Use parallel embedding for batches
+        let embeddings = self.embedder.embed_batch_parallel(&texts);
+
+        for (i, maybe_embedding) in embeddings.into_iter().enumerate() {
+            if let Some(embedding) = maybe_embedding {
+                let chunk_id = pending[i].0;
+                if let Ok(vector_id) = u64::try_from(chunk_id) {
+                    if let Err(e) = self.vector_index.add(vector_id, &embedding) {
+                        tracing::warn!(error = %e, "failed to add vector to HNSW");
+                        continue;
+                    }
+                    if let Err(e) = self.index.set_chunk_vector_id(chunk_id, vector_id) {
+                        tracing::warn!(error = %e, "failed to update SQL vector pointer");
+                    }
+                    *embeddings_count += 1;
+                }
+            }
+        }
+
+        pending.clear();
+        Ok(())
+    }
+
+    /// Persist vector index to disk.
     pub fn shutdown(&mut self) -> OmniResult<()> {
         self.vector_index.save()?;
         tracing::info!("engine shut down");
@@ -825,6 +954,10 @@ pub struct EngineStatus {
     pub symbols_indexed: usize,
     /// Number of vectors in the index.
     pub vectors_indexed: usize,
+    /// Estimated heap memory used by vector storage (bytes).
+    pub vector_memory_bytes: usize,
+    /// Active ANN search strategy (flat, ivf, hnsw).
+    pub active_search_strategy: String,
     /// Embedding coverage percentage (vectors / chunks * 100).
     pub embedding_coverage_percent: f64,
     /// Number of dependency edges in the SQLite store.
@@ -843,11 +976,15 @@ pub struct EngineStatus {
 
 /// Stats from processing a single file.
 #[derive(Debug, Default)]
-struct FileProcessStats {
-    chunks: usize,
-    symbols: usize,
-    embeddings: usize,
-    call_edges: usize,
+pub struct FileProcessStats {
+    /// Number of chunks created.
+    pub chunks: usize,
+    /// Number of symbols extracted.
+    pub symbols: usize,
+    /// Number of embeddings generated.
+    pub embeddings: usize,
+    /// Number of call edges discovered.
+    pub call_edges: usize,
 }
 
 /// Compute a SHA-256 hash of file content for change detection.

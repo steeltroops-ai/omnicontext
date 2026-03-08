@@ -139,70 +139,166 @@ impl ContextAssembler {
         self.pack_with_budget_limit(entries, strategy, self.token_budget)
     }
 
-    /// Pack entries within an explicit token budget, applying compression as needed.
+    /// Pack entries within an explicit token budget using 0/1 knapsack optimization.
     ///
     /// The budget may be less than `self.token_budget` when the query intent
     /// requests a tighter context window (e.g., Debug queries use 60%).
+    ///
+    /// For small-to-medium inputs (N <= 300 items, budget <= 200k tokens), uses
+    /// dynamic programming to find the mathematically optimal subset. For larger
+    /// inputs, falls back to the greedy priority-sorted approach.
     fn pack_with_budget_limit(
         &self,
         entries: Vec<ContextEntry>,
         strategy: &ContextStrategy,
         budget: u32,
     ) -> ContextWindow {
-        let mut packed_entries = Vec::new();
-        let mut total_tokens: u32 = 0;
+        if entries.is_empty() {
+            return ContextWindow {
+                entries: Vec::new(),
+                total_tokens: 0,
+                token_budget: self.token_budget,
+            };
+        }
 
+        // Prepare items: apply compression to non-critical entries that exceed budget
+        let mut items: Vec<ContextEntry> = Vec::with_capacity(entries.len());
         for mut entry in entries {
             let priority = entry.priority.unwrap_or(ChunkPriority::Low);
-            let mut chunk_tokens = entry.chunk.token_count;
 
-            // Try to fit without compression first
-            if total_tokens + chunk_tokens <= budget {
-                total_tokens += chunk_tokens;
+            // Try compressed form if chunk is too large
+            if entry.chunk.token_count > budget / 2 && priority != ChunkPriority::Critical {
+                entry.chunk = self.compress_chunk(&entry.chunk, priority);
+            }
+
+            // Skip items that alone exceed the entire budget
+            if entry.chunk.token_count <= budget {
+                items.push(entry);
+            }
+        }
+
+        // For high-level strategies, filter out low-priority items early
+        if strategy.prioritize_high_level {
+            items.retain(|e| e.priority.unwrap_or(ChunkPriority::Low) != ChunkPriority::Low);
+        }
+
+        let n = items.len();
+
+        // Decide: knapsack vs greedy fallback
+        // Knapsack DP is O(N * B). For N=300, B=200000 -> 60M cells at 1 byte = 60MB.
+        // We use a scaled budget (tokens / 4) to reduce table size.
+        let scale_factor: u32 = if budget > 50_000 { 4 } else { 1 };
+        let scaled_budget = (budget / scale_factor) as usize;
+
+        if n > 300 || scaled_budget > 200_000 {
+            // Greedy fallback for very large inputs
+            return self.pack_greedy(items, budget);
+        }
+
+        // --- 0/1 Knapsack Dynamic Programming ---
+        // value[i] = score * priority_weight (higher priority = higher value multiplier)
+        // weight[i] = token_count (scaled)
+        let values: Vec<f64> = items
+            .iter()
+            .map(|e| {
+                let priority_mult = match e.priority.unwrap_or(ChunkPriority::Low) {
+                    ChunkPriority::Critical => 4.0,
+                    ChunkPriority::High => 2.0,
+                    ChunkPriority::Medium => 1.0,
+                    ChunkPriority::Low => 0.5,
+                };
+                e.score * priority_mult
+            })
+            .collect();
+
+        let weights: Vec<usize> = items
+            .iter()
+            .map(|e| (e.chunk.token_count / scale_factor).max(1) as usize)
+            .collect();
+
+        // DP table: dp[j] = max value achievable with capacity j
+        let cap = scaled_budget;
+        let mut dp = vec![0.0_f64; cap + 1];
+        // Track which items are selected: keep[i][j] = true if item i is included at capacity j
+        let mut keep = vec![vec![false; cap + 1]; n];
+
+        for i in 0..n {
+            let w = weights[i];
+            let v = values[i];
+            // Iterate capacity backwards to avoid using item i twice
+            for j in (w..=cap).rev() {
+                let with_item = dp[j - w] + v;
+                if with_item > dp[j] {
+                    dp[j] = with_item;
+                    keep[i][j] = true;
+                }
+            }
+        }
+
+        // Trace back to find selected items
+        let mut selected = vec![false; n];
+        let mut remaining = cap;
+        for i in (0..n).rev() {
+            if keep[i][remaining] {
+                selected[i] = true;
+                remaining -= weights[i];
+            }
+        }
+
+        // Build result preserving original priority order (highest first)
+        let mut packed_entries = Vec::new();
+        let mut total_tokens: u32 = 0;
+        for (i, entry) in items.into_iter().enumerate() {
+            if selected[i] {
+                total_tokens += entry.chunk.token_count;
                 packed_entries.push(entry);
-                continue;
             }
-
-            // If critical priority, try compression
-            if priority == ChunkPriority::Critical {
-                let compressed = self.compress_chunk(&entry.chunk, priority);
-                chunk_tokens = compressed.token_count;
-
-                if total_tokens + chunk_tokens <= budget {
-                    entry.chunk = compressed;
-                    total_tokens += chunk_tokens;
-                    packed_entries.push(entry);
-                }
-                continue;
-            }
-
-            // For non-critical, try compression if we have room
-            let compression_factor = priority.compression_factor();
-            if compression_factor > 0.0 {
-                let compressed = self.compress_chunk(&entry.chunk, priority);
-                chunk_tokens = compressed.token_count;
-
-                if total_tokens + chunk_tokens <= budget {
-                    entry.chunk = compressed;
-                    total_tokens += chunk_tokens;
-                    packed_entries.push(entry);
-                    continue;
-                }
-            }
-
-            // If we're prioritizing high-level and this is a detail, skip
-            if strategy.prioritize_high_level && priority == ChunkPriority::Low {
-                continue;
-            }
-
-            // Otherwise, we're out of budget
-            break;
         }
 
         ContextWindow {
             entries: packed_entries,
             total_tokens,
             token_budget: self.token_budget,
+        }
+    }
+
+    /// Greedy fallback packer for large inputs where DP is too expensive.
+    fn pack_greedy(&self, entries: Vec<ContextEntry>, budget: u32) -> ContextWindow {
+        let mut packed_entries = Vec::new();
+        let mut total_tokens: u32 = 0;
+
+        for mut entry in entries {
+            let priority = entry.priority.unwrap_or(ChunkPriority::Low);
+            let chunk_tokens = entry.chunk.token_count;
+
+            if total_tokens + chunk_tokens <= budget {
+                total_tokens += chunk_tokens;
+                packed_entries.push(entry);
+                continue;
+            }
+
+            // Try compression
+            let compression_factor = priority.compression_factor();
+            if compression_factor > 0.0 {
+                let compressed = self.compress_chunk(&entry.chunk, priority);
+                if total_tokens + compressed.token_count <= budget {
+                    total_tokens += compressed.token_count;
+                    entry.chunk = compressed;
+                    packed_entries.push(entry);
+                    continue;
+                }
+            }
+
+            // Out of budget
+            if total_tokens > budget / 2 {
+                break;
+            }
+        }
+
+        ContextWindow {
+            entries: packed_entries,
+            total_tokens,
+            token_budget: budget,
         }
     }
 
@@ -493,6 +589,60 @@ mod tests {
             "debug ({}) should use <= tokens than full ({})",
             debug_ctx.total_tokens,
             full_ctx.total_tokens
+        );
+    }
+
+    #[test]
+    fn test_knapsack_beats_greedy() {
+        // Scenario: budget = 250 tokens
+        // Option A (greedy picks first): 1 chunk with 200 tokens, score 0.9
+        // Option B (knapsack optimal):   3 chunks with 80 tokens each, score 0.85
+        // Greedy picks A (200 tokens) then cannot fit any B (200+80=280 > 250).
+        // Knapsack picks all 3 B items (240 tokens, total value = 3*0.85*2.0 = 5.1)
+        // which beats A alone (1*0.9*2.0 = 1.8).
+        let assembler = ContextAssembler::new(250);
+
+        let big_chunk = make_test_chunk(
+            "fn big() {\n  // lots of code\n  a();\n  b();\n  c();\n}",
+            200,
+        );
+        let small1 = Chunk {
+            id: 2,
+            symbol_path: "test::small1".to_string(),
+            ..make_test_chunk("fn small1() { }", 80)
+        };
+        let small2 = Chunk {
+            id: 3,
+            symbol_path: "test::small2".to_string(),
+            ..make_test_chunk("fn small2() { }", 80)
+        };
+        let small3 = Chunk {
+            id: 4,
+            symbol_path: "test::small3".to_string(),
+            ..make_test_chunk("fn small3() { }", 80)
+        };
+
+        let results = vec![
+            make_test_result(big_chunk, 0.9), // High priority (score > 0.8)
+            make_test_result(small1, 0.85),
+            make_test_result(small2, 0.85),
+            make_test_result(small3, 0.85),
+        ];
+
+        // "f_0 f_1" is Unknown intent -> 100% budget = 250
+        let context = assembler.assemble("f_0 f_1", results, None);
+
+        // Knapsack should pick 3 small chunks (240 tokens) over 1 big (200 tokens)
+        // because total value is higher (3 * 0.85 * priority_mult > 1 * 0.9 * priority_mult)
+        assert!(
+            context.entries.len() >= 3,
+            "knapsack should pick 3 small chunks, got {}",
+            context.entries.len()
+        );
+        assert!(
+            context.total_tokens <= 250,
+            "should stay within budget, got {}",
+            context.total_tokens
         );
     }
 }

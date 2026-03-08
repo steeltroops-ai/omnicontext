@@ -23,6 +23,7 @@ use crate::error::{OmniError, OmniResult};
 use crate::types::{Language, PipelineEvent};
 
 /// File system watcher that emits pipeline events.
+#[derive(Clone)]
 pub struct FileWatcher {
     watcher_config: WatcherConfig,
     indexing_config: IndexingConfig,
@@ -111,10 +112,11 @@ impl FileWatcher {
                     }
                 }
 
-                // Emit event (best-effort, don't block on full channel)
+                // Emit event using blocking send to apply backpressure instead of dropping
                 let event = PipelineEvent::FileChanged { path };
-                if tx.try_send(event).is_err() {
-                    tracing::warn!("pipeline channel full, dropping event");
+                if tx.blocking_send(event).is_err() {
+                    tracing::warn!("pipeline channel closed, stopping scan");
+                    break;
                 }
                 *count += 1;
             } else if file_type.is_symlink() && self.indexing_config.follow_symlinks {
@@ -124,8 +126,9 @@ impl FileWatcher {
                         self.walk_dir(&resolved, tx, count)?;
                     } else if resolved.is_file() && is_source_file_static(&resolved) {
                         let event = PipelineEvent::FileChanged { path: resolved };
-                        if tx.try_send(event).is_err() {
-                            tracing::warn!("pipeline channel full, dropping event");
+                        if tx.blocking_send(event).is_err() {
+                            tracing::warn!("pipeline channel closed, stopping scan");
+                            break;
                         }
                         *count += 1;
                     }
@@ -199,14 +202,14 @@ impl FileWatcher {
                                 }
 
                                 let event = PipelineEvent::FileChanged { path };
-                                if tx.try_send(event).is_err() {
-                                    tracing::warn!("pipeline channel full");
+                                if tx.blocking_send(event).is_err() {
+                                    tracing::warn!("pipeline channel closed");
                                 }
                             } else if !path.exists() {
                                 // File was deleted
                                 let event = PipelineEvent::FileDeleted { path };
-                                if tx.try_send(event).is_err() {
-                                    tracing::warn!("pipeline channel full");
+                                if tx.blocking_send(event).is_err() {
+                                    tracing::warn!("pipeline channel closed");
                                 }
                             }
                         }
