@@ -199,7 +199,10 @@ impl Embedder {
     /// 1. If config.model_path points to an existing file, use it directly (manual override)
     /// 2. If model is already cached, use the cached version
     /// 3. If OMNI_SKIP_MODEL_DOWNLOAD is set, skip download (CI/testing/offline)
-    /// 4. Otherwise, download the model from HuggingFace
+    /// 4. Otherwise, download the Jina model from HuggingFace with retry
+    ///
+    /// No fallback models. Jina is the only embedding model.
+    /// If download fails, retries with exponential backoff (3 attempts).
     fn resolve_model_files(
         config: &EmbeddingConfig,
     ) -> OmniResult<(std::path::PathBuf, std::path::PathBuf)> {
@@ -224,7 +227,6 @@ impl Embedder {
         }
 
         // Skip download if explicitly disabled via env var.
-        // This env var is also set by CI, integration tests, and offline environments.
         if std::env::var("OMNI_SKIP_MODEL_DOWNLOAD").is_ok() {
             tracing::info!("OMNI_SKIP_MODEL_DOWNLOAD set, operating in keyword-only mode");
             return Ok((
@@ -243,22 +245,80 @@ impl Embedder {
             ));
         }
 
-        // Production path: auto-download the model
+        // Production path: download the Jina model with retry + exponential backoff.
+        // No fallback to secondary models. Jina is the canonical embedding model.
         #[cfg(not(test))]
         {
-            match model_manager::ensure_model(spec) {
-                Ok((model, tokenizer)) => Ok((model, tokenizer)),
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        "model auto-download failed, will operate in keyword-only mode"
-                    );
-                    Ok((
-                        model_manager::model_path(spec),
-                        model_manager::tokenizer_path(spec),
-                    ))
+            const MAX_RETRIES: u32 = 3;
+            let mut last_error = None;
+
+            for attempt in 1..=MAX_RETRIES {
+                tracing::info!(
+                    attempt,
+                    max_retries = MAX_RETRIES,
+                    model = spec.name,
+                    "attempting model download"
+                );
+
+                match model_manager::ensure_model(spec) {
+                    Ok((model, tokenizer)) => {
+                        if attempt > 1 {
+                            tracing::info!(
+                                attempt,
+                                model = spec.name,
+                                "model download succeeded after retry"
+                            );
+                        }
+                        return Ok((model, tokenizer));
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            attempt,
+                            max_retries = MAX_RETRIES,
+                            error = %e,
+                            model = spec.name,
+                            "model download failed"
+                        );
+                        last_error = Some(e);
+
+                        if attempt < MAX_RETRIES {
+                            // Exponential backoff: 2s, 4s
+                            let delay = std::time::Duration::from_secs(2u64.pow(attempt));
+                            tracing::info!(
+                                delay_secs = delay.as_secs(),
+                                "retrying model download after backoff"
+                            );
+                            std::thread::sleep(delay);
+
+                            // Clean up any partial downloads before retry
+                            let model_path = model_manager::model_path(spec);
+                            let partial = model_path.with_extension("downloading");
+                            if partial.exists() {
+                                let _ = std::fs::remove_file(&partial);
+                            }
+                        }
+                    }
                 }
             }
+
+            // All retries exhausted -- log critical error but do not crash
+            if let Some(e) = last_error {
+                tracing::error!(
+                    error = %e,
+                    model = spec.name,
+                    retries = MAX_RETRIES,
+                    "CRITICAL: All download attempts exhausted for {}. \
+                     Semantic search is DISABLED until model is available.\n\
+                     Fix: Run 'omnicontext setup model-download' manually,\n\
+                     or set OMNI_MODEL_PATH to a local ONNX model file.",
+                    spec.name
+                );
+            }
+
+            Ok((
+                model_manager::model_path(spec),
+                model_manager::tokenizer_path(spec),
+            ))
         }
     }
 

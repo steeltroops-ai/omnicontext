@@ -136,6 +136,7 @@ export class EventTracker {
 
   /**
    * Handle cursor moved event (debounced).
+   * Uses LSP-enhanced symbol extraction for rich context.
    */
   private async handleCursorMoved(
     event: vscode.TextEditorSelectionChangeEvent,
@@ -154,8 +155,8 @@ export class EventTracker {
     const position = event.selections[0]?.active;
     if (!position) return;
 
-    // Extract symbol at cursor
-    const symbol = await this.symbolExtractor.getSymbolAtPosition(
+    // Extract rich symbol info via LSP-enhanced extractor
+    const symbolInfo = await this.symbolExtractor.getSymbolInfoAtPosition(
       document,
       position,
     );
@@ -164,7 +165,12 @@ export class EventTracker {
       event_type: "cursor_moved",
       file_path: document.uri.fsPath,
       cursor_line: position.line + 1, // Convert to 1-based
-      symbol: symbol,
+      symbol: symbolInfo?.name,
+      symbol_fqn: symbolInfo?.fqn,
+      symbol_kind: symbolInfo?.kind,
+      type_signature: symbolInfo?.type_signature,
+      definition_file: symbolInfo?.definition_file,
+      definition_line: symbolInfo?.definition_line,
     };
 
     this.enqueueEvent(ideEvent);

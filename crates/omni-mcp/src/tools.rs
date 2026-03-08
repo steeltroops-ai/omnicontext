@@ -145,6 +145,13 @@ pub struct GetCallGraphParams {
     pub mermaid: Option<bool>,
 }
 
+/// Parameters for `get_branch_context` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetBranchContextParams {
+    /// Whether to include diff hunks in the output (default: false).
+    pub include_diffs: Option<bool>,
+}
+
 // -----------------------------------------------------------------------
 // MCP Server
 // -----------------------------------------------------------------------
@@ -185,9 +192,19 @@ impl OmniContextServer {
         match engine.search_with_rerank_threshold(query, limit, params.0.min_rerank_score) {
             Ok(results) => {
                 if results.is_empty() {
-                    return Ok(CallToolResult::success(vec![Content::text(
+                    let hint = if let Ok(status) = engine.status() {
+                        if status.files_indexed == 0 {
+                            "Repository not indexed. Run `omnicontext index .` first."
+                        } else if status.embedding_coverage_percent < 0.1 {
+                            "No results. Embedding coverage is 0% -- semantic search unavailable.\n\
+                             Run `omnicontext setup model-download` then `omnicontext index . --force`."
+                        } else {
+                            "No results found for this query."
+                        }
+                    } else {
                         "No results found. Make sure the repository has been indexed with `omnicontext index .`"
-                    )]));
+                    };
+                    return Ok(CallToolResult::success(vec![Content::text(hint)]));
                 }
 
                 let mut output = String::new();
@@ -312,9 +329,9 @@ impl OmniContextServer {
             Ok(Some(symbol)) => {
                 // Resolve file path from file_id
                 let file_path_str = index
-                    .get_all_files()
+                    .get_file_by_id(symbol.file_id)
                     .ok()
-                    .and_then(|files| files.into_iter().find(|f| f.id == symbol.file_id))
+                    .flatten()
                     .map_or_else(
                         || format!("file#{}", symbol.file_id),
                         |f| f.path.display().to_string(),
@@ -435,6 +452,20 @@ impl OmniContextServer {
             }
         }
 
+        // Final fallback: normalize separators and do a suffix search.
+        // The index stores relative paths with forward slashes, but
+        // Windows callers may pass backslashes.
+        if file_info.is_none() {
+            let normalized = path_str.replace('\\', "/");
+            // Try the normalized relative path directly
+            let norm_path = std::path::Path::new(&normalized);
+            if let Ok(Some(info)) = index.get_file_by_path(norm_path) {
+                file_info = Some(info);
+            } else if let Ok(Some(info)) = index.search_file_by_path_suffix(&normalized) {
+                file_info = Some(info);
+            }
+        }
+
         match file_info {
             Some(info) => {
                 let mut output = format!(
@@ -520,6 +551,18 @@ impl OmniContextServer {
                     for (lang, count) in &s.language_distribution {
                         writeln!(output, "- **{lang}**: {count} files").ok();
                     }
+                }
+
+                // Diagnostic hints for embedding coverage
+                if s.embedding_coverage_percent < 0.1 && s.chunks_indexed > 0 {
+                    output.push_str(
+                        "\n> **CRITICAL**: Embedding coverage is 0%. Semantic search is DISABLED.\n\
+                         > Run `omnicontext setup model-download` then `omnicontext index . --force`.\n",
+                    );
+                } else if s.embedding_coverage_percent < 50.0 && s.chunks_indexed > 0 {
+                    output.push_str(
+                        "\n> **Warning**: Low embedding coverage. Run `omnicontext embed --retry-failed` to fill gaps.\n",
+                    );
                 }
 
                 if s.has_cycles {
@@ -1478,6 +1521,96 @@ impl OmniContextServer {
             Ok(CallToolResult::success(vec![Content::text(output)]))
         }
     }
+
+    #[tool(
+        name = "get_branch_context",
+        description = "Get current git branch status with uncommitted/unpushed changes, diff hunks, and branch-relative file lists. Use this to understand what the developer is working on and provide branch-aware suggestions."
+    )]
+    async fn get_branch_context(
+        &self,
+        params: Parameters<GetBranchContextParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use std::fmt::Write;
+
+        let include_diffs = params.0.include_diffs.unwrap_or(false);
+        let mut engine = self.engine.lock().await;
+
+        let tracker = engine.branch_tracker();
+
+        let diff = match tracker.get_branch_diff() {
+            Ok(d) => d.clone(),
+            Err(e) => {
+                return Ok(CallToolResult::success(vec![Content::text(format!(
+                    "Branch tracking unavailable: {e}\n\n\
+                     This may be because the workspace is not a git repository.",
+                ))]));
+            }
+        };
+
+        let mut output = format!(
+            "## Branch Context\n\n\
+             - **Current branch**: {}\n\
+             - **Base branch**: {}\n\
+             - **Uncommitted files**: {}\n\
+             - **Unpushed files**: {}\n\
+             - **Total lines changed**: {}\n\n",
+            diff.branch,
+            diff.base_branch,
+            diff.uncommitted_files.len(),
+            diff.unpushed_files.len(),
+            diff.total_lines_changed,
+        );
+
+        if !diff.uncommitted_files.is_empty() {
+            writeln!(output, "### Uncommitted Files\n").ok();
+            for f in &diff.uncommitted_files {
+                writeln!(output, "- `{f}`").ok();
+            }
+            output.push('\n');
+        }
+
+        if !diff.unpushed_files.is_empty() {
+            writeln!(output, "### Unpushed Files\n").ok();
+            for f in &diff.unpushed_files {
+                writeln!(output, "- `{f}`").ok();
+            }
+            output.push('\n');
+        }
+
+        if include_diffs && !diff.uncommitted_hunks.is_empty() {
+            writeln!(output, "### Diff Hunks\n").ok();
+            for hunk in &diff.uncommitted_hunks {
+                writeln!(
+                    output,
+                    "**{}** (L{}, {} lines, {:?})\n```\n{}\n```\n",
+                    hunk.file_path,
+                    hunk.start_line,
+                    hunk.line_count,
+                    hunk.change_type,
+                    hunk.content,
+                )
+                .ok();
+            }
+        }
+
+        // Branch-relative changed files (all commits since merge-base)
+        match tracker.get_branch_changed_files() {
+            Ok(files) if !files.is_empty() => {
+                writeln!(
+                    output,
+                    "### Files changed on this branch (vs {})\n",
+                    diff.base_branch
+                )
+                .ok();
+                for f in &files {
+                    writeln!(output, "- `{f}`").ok();
+                }
+            }
+            _ => {}
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
 }
 
 #[tool_handler]
@@ -1492,6 +1625,7 @@ impl ServerHandler for OmniContextServer {
                  get_module_map for architecture overview, get_dependencies for symbol relationships, \
                  get_blast_radius for impact analysis, get_call_graph for dependency visualization, \
                  get_recent_changes for git history, search_by_intent for NL queries, \
+                 get_branch_context for per-branch diff awareness, \
                  and set_workspace to switch the active repository."
                     .into(),
             ),

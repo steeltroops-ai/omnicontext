@@ -814,6 +814,18 @@ async fn handle_ide_event(
                     prefetch_symbol_context(eng, cache, &file_path, &symbol).await;
                 });
             }
+            // Cross-file pre-fetch: if LSP resolved the definition to a different file,
+            // pre-fetch that file's context too (Blast Radius pre-warming)
+            if let Some(ref def_file) = params.definition_file {
+                if def_file != &params.file_path {
+                    let eng = engine.clone();
+                    let cache = prefetch_cache.clone();
+                    let def_file = def_file.clone();
+                    tokio::spawn(async move {
+                        prefetch_file_context(eng, cache, &def_file).await;
+                    });
+                }
+            }
         }
         "text_edited" => {
             let eng = engine.clone();

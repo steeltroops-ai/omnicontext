@@ -29,6 +29,7 @@ use std::path::Path;
 
 use tokio::sync::mpsc;
 
+use crate::branch_diff::BranchTracker;
 use crate::chunker;
 use crate::config::Config;
 use crate::embedder::Embedder;
@@ -61,6 +62,8 @@ pub struct Engine {
     reranker: Reranker,
     /// Cross-file dependency graph.
     dep_graph: DependencyGraph,
+    /// Per-branch diff tracker for branch-aware context.
+    branch_tracker: BranchTracker,
     /// Token counter: uses the embedding tokenizer when available,
     /// falls back to the heuristic estimator.
     token_counter: Box<dyn chunker::token_counter::TokenCounter>,
@@ -87,12 +90,12 @@ impl Engine {
         let db_path = data_dir.join("index.db");
         let index = MetadataIndex::open(&db_path)?;
 
-        // Initialize vector index (auto-loads from disk if file exists)
+        // Initialize embedder (degrades gracefully if model download fails after retries)
+        let embedder = Embedder::new(&config.embedding)?;
+
+        // Initialize vector index -- dimensions always match Jina (768) from config
         let vector_path = data_dir.join("vectors.bin");
         let vector_index = VectorIndex::open(&vector_path, config.embedding.dimensions)?;
-
-        // Initialize embedder (degrades gracefully if model missing)
-        let embedder = Embedder::new(&config.embedding)?;
 
         // Initialize search engine
         let search_engine = SearchEngine::new(config.search.rrf_k, config.search.token_budget);
@@ -120,6 +123,8 @@ impl Engine {
             "engine initialized"
         );
 
+        let branch_tracker = BranchTracker::new(&config.repo_path);
+
         let mut engine = Self {
             config,
             index,
@@ -128,6 +133,7 @@ impl Engine {
             search_engine,
             reranker,
             dep_graph,
+            branch_tracker,
             token_counter,
         };
 
@@ -219,7 +225,7 @@ impl Engine {
                         }
                     }
 
-                    if pending_embeddings.len() >= 256 {
+                    if pending_embeddings.len() >= 1024 {
                         if let Err(e) = self.flush_pending_embeddings(
                             &mut pending_embeddings,
                             &mut result.embeddings_generated,
@@ -715,26 +721,23 @@ impl Engine {
             let mut chunk_ids = Vec::new();
 
             for chunk in batch {
-                if let Ok(Some(file)) = self.index.get_file_by_path(&std::path::PathBuf::from("")) {
-                    let formatted = crate::embedder::format_chunk_for_embedding(
-                        file.language.as_str(),
-                        &chunk.symbol_path,
-                        &format!("{:?}", chunk.kind),
-                        &chunk.content,
-                    );
-                    texts.push(formatted);
-                    chunk_ids.push(chunk.id);
-                } else {
-                    // Fallback: use generic formatting
-                    let formatted = crate::embedder::format_chunk_for_embedding(
-                        "unknown",
-                        &chunk.symbol_path,
-                        &format!("{:?}", chunk.kind),
-                        &chunk.content,
-                    );
-                    texts.push(formatted);
-                    chunk_ids.push(chunk.id);
-                }
+                // Look up the parent file using the chunk's file_id
+                let lang_str = self
+                    .index
+                    .get_file_by_id(chunk.file_id)
+                    .ok()
+                    .flatten()
+                    .map(|f| f.language.as_str().to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
+
+                let formatted = crate::embedder::format_chunk_for_embedding(
+                    &lang_str,
+                    &chunk.symbol_path,
+                    &format!("{:?}", chunk.kind),
+                    &chunk.content,
+                );
+                texts.push(formatted);
+                chunk_ids.push(chunk.id);
             }
 
             let text_refs: Vec<&str> = texts.iter().map(String::as_str).collect();
@@ -799,6 +802,11 @@ impl Engine {
     /// Get a reference to the dependency graph.
     pub fn dep_graph(&self) -> &DependencyGraph {
         &self.dep_graph
+    }
+
+    /// Get a mutable reference to the branch tracker.
+    pub fn branch_tracker(&mut self) -> &mut BranchTracker {
+        &mut self.branch_tracker
     }
 
     /// Clear the index (metadata, vectors, and graph).

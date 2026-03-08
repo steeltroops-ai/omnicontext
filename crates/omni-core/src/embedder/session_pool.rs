@@ -89,38 +89,51 @@ impl SessionPool {
         let mut sessions = Vec::with_capacity(effective_size);
 
         for i in 0..effective_size {
-            match Session::builder() {
-                Ok(mut builder) => match builder.commit_from_file(model_path) {
-                    Ok(session) => {
-                        sessions.push(session);
-                        tracing::debug!(
-                            session_idx = i,
-                            model = %model_path.display(),
-                            "loaded ONNX session for pool"
-                        );
-                    }
-                    Err(e) => {
-                        if i == 0 {
-                            // If the first session fails, the model is bad
-                            tracing::error!(
-                                error = %e,
-                                "failed to load first ONNX session, pool creation aborted"
-                            );
-                            return Ok(None);
-                        }
-                        tracing::warn!(
-                            session_idx = i,
-                            error = %e,
-                            "failed to load additional session, pool will be smaller"
-                        );
-                        break;
-                    }
-                },
+            let num_cpus = std::thread::available_parallelism()
+                .map(|p| p.get())
+                .unwrap_or(4);
+
+            let build_session = || -> ort::Result<Session> {
+                let mut builder = Session::builder()?;
+                builder = builder.with_optimization_level(
+                    ort::session::builder::GraphOptimizationLevel::Level1,
+                )?;
+                builder = builder.with_intra_threads(num_cpus.max(2) - 1)?;
+
+                builder = builder.with_execution_providers([
+                    ort::execution_providers::TensorRTExecutionProvider::default().build(),
+                    ort::execution_providers::CUDAExecutionProvider::default().build(),
+                    ort::execution_providers::DirectMLExecutionProvider::default().build(),
+                    ort::execution_providers::CoreMLExecutionProvider::default().build(),
+                    ort::execution_providers::CPUExecutionProvider::default().build(),
+                ])?;
+
+                builder.commit_from_file(model_path)
+            };
+
+            match build_session() {
+                Ok(session) => {
+                    sessions.push(session);
+                    tracing::debug!(
+                        session_idx = i,
+                        model = %model_path.display(),
+                        "loaded ONNX session for pool"
+                    );
+                }
                 Err(e) => {
                     if i == 0 {
-                        tracing::error!(error = %e, "ONNX builder failed");
+                        // If the first session fails, the model is bad
+                        tracing::error!(
+                            error = %e,
+                            "failed to load first ONNX session, pool creation aborted"
+                        );
                         return Ok(None);
                     }
+                    tracing::warn!(
+                        session_idx = i,
+                        error = %e,
+                        "failed to load additional session, pool will be smaller"
+                    );
                     break;
                 }
             }

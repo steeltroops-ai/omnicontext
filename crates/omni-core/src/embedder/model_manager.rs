@@ -327,20 +327,23 @@ fn download_file(
     Ok(())
 }
 
-/// Get the recommended model spec based on user preference or environment.
+/// Resolve the embedding model spec.
 ///
-/// Checks `OMNI_EMBEDDING_MODEL` env var for overrides.
-/// - "default" or "jina-code" -> DEFAULT_MODEL (jina-embeddings-v2-base-code)
-/// - "small" or "bge-small" -> FALLBACK_MODEL (bge-small-en-v1.5)
-/// - Anything else -> DEFAULT_MODEL
+/// Always returns the Jina Code v2 model. This is the canonical and only
+/// embedding model for OmniContext. No fallback models are supported.
+///
+/// The `OMNI_EMBEDDING_MODEL` env var is accepted for forward-compatibility
+/// but currently only "default" / "jina-code" are recognized (both map to Jina).
 pub fn resolve_model_spec() -> &'static ModelSpec {
     if let Ok(model_name) = std::env::var("OMNI_EMBEDDING_MODEL") {
         match model_name.to_lowercase().as_str() {
-            "small" | "bge-small" | "bge-small-en" | "lite" => {
-                tracing::info!("using lightweight embedding model (bge-small-en-v1.5)");
-                return &FALLBACK_MODEL;
+            "default" | "jina" | "jina-code" | "" => {}
+            other => {
+                tracing::warn!(
+                    requested = other,
+                    "unrecognized OMNI_EMBEDDING_MODEL value, using Jina Code v2"
+                );
             }
-            _ => {} // fall through to default
         }
     }
 
@@ -381,9 +384,19 @@ mod tests {
 
     #[test]
     fn test_resolve_model_default() {
-        // Without env var, should return default
+        // Without env var, should return default (Jina)
         let spec = resolve_model_spec();
         assert_eq!(spec.dimensions, 768);
+        assert_eq!(spec.name, "jina-embeddings-v2-base-code");
+    }
+
+    #[test]
+    fn test_resolve_model_always_jina() {
+        // Even with "small" env var, should still return Jina -- no fallback
+        std::env::set_var("OMNI_EMBEDDING_MODEL", "small");
+        let spec = resolve_model_spec();
+        assert_eq!(spec.dimensions, 768, "must always use Jina, no fallback");
+        std::env::remove_var("OMNI_EMBEDDING_MODEL");
     }
 
     #[test]

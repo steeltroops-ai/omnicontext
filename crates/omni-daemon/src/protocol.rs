@@ -153,6 +153,7 @@ pub struct PreflightResponse {
 }
 
 /// Parameters for IDE event notifications (for pre-fetch).
+/// Enhanced with LSP-resolved symbol metadata for precise context pre-loading.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IdeEventParams {
     /// Event type: `file_opened`, `cursor_moved`, `text_edited`.
@@ -163,6 +164,16 @@ pub struct IdeEventParams {
     pub cursor_line: Option<u32>,
     /// Symbol at cursor (if available).
     pub symbol: Option<String>,
+    /// Fully qualified symbol name from LSP.
+    pub symbol_fqn: Option<String>,
+    /// Symbol kind (Function, Class, Method, etc.).
+    pub symbol_kind: Option<String>,
+    /// Type signature from LSP hover.
+    pub type_signature: Option<String>,
+    /// File where symbol is defined (for cross-file pre-fetch).
+    pub definition_file: Option<String>,
+    /// Line where symbol is defined.
+    pub definition_line: Option<u32>,
 }
 
 /// Pre-fetch cache statistics response.

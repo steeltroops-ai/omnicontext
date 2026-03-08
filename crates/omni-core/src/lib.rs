@@ -84,6 +84,7 @@ pub mod vector;
 pub mod watcher;
 
 // Extended Capabilities
+pub mod branch_diff;
 pub mod commits;
 pub mod patterns;
 pub mod workspace;

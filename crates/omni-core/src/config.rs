@@ -299,7 +299,7 @@ impl EmbeddingConfig {
         768
     } // jina-code v2 output dimensions
     fn default_batch_size() -> usize {
-        32
+        128
     }
     fn default_max_seq_length() -> usize {
         512

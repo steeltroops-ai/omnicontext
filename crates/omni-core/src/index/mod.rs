@@ -179,6 +179,28 @@ impl MetadataIndex {
         Ok(result)
     }
 
+    /// Get a file record by its database ID.
+    pub fn get_file_by_id(&self, id: i64) -> OmniResult<Option<FileInfo>> {
+        let result = self
+            .conn
+            .query_row(
+                "SELECT id, path, language, hash, size_bytes FROM files WHERE id = ?1",
+                params![id],
+                |row| {
+                    Ok(FileInfo {
+                        id: row.get(0)?,
+                        path: std::path::PathBuf::from(row.get::<_, String>(1)?),
+                        language: Language::from_extension(&row.get::<_, String>(2)?),
+                        content_hash: row.get(3)?,
+                        size_bytes: row.get(4)?,
+                    })
+                },
+            )
+            .optional()?;
+
+        Ok(result)
+    }
+
     /// Get the hash of an indexed file (for change detection).
     pub fn get_file_hash(&self, path: &Path) -> OmniResult<Option<String>> {
         let hash = self
@@ -732,14 +754,17 @@ impl MetadataIndex {
         tx.execute("DELETE FROM symbols WHERE file_id = ?1", params![file_id])?;
         tx.execute("DELETE FROM chunks WHERE file_id = ?1", params![file_id])?;
 
-        // Insert new chunks
+        // Insert new chunks using a prepared, cached statement for SOTA speed
         let mut chunk_ids = Vec::with_capacity(chunks.len());
-        for chunk in chunks {
-            tx.execute(
+        {
+            let mut chunk_stmt = tx.prepare_cached(
                 "INSERT INTO chunks (file_id, symbol_path, kind, visibility, line_start,
-                 line_end, content, doc_comment, token_count, weight, vector_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-                params![
+             line_end, content, doc_comment, token_count, weight, vector_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            )?;
+
+            for chunk in chunks {
+                chunk_stmt.execute(params![
                     file_id,
                     chunk.symbol_path,
                     chunk.kind.as_str(),
@@ -751,25 +776,28 @@ impl MetadataIndex {
                     chunk.token_count,
                     chunk.weight,
                     chunk.vector_id.map(|v| v as i64),
-                ],
-            )?;
-            chunk_ids.push(tx.last_insert_rowid());
+                ])?;
+                chunk_ids.push(tx.last_insert_rowid());
+            }
         }
 
-        // Insert new symbols
-        for symbol in symbols {
-            tx.execute(
+        // Insert new symbols using a prepared, cached statement
+        {
+            let mut symbol_stmt = tx.prepare_cached(
                 "INSERT OR REPLACE INTO symbols (name, fqn, kind, file_id, line, chunk_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            )?;
+
+            for symbol in symbols {
+                symbol_stmt.execute(params![
                     symbol.name,
                     symbol.fqn,
                     symbol.kind.as_str(),
                     file_id,
                     symbol.line,
                     symbol.chunk_id,
-                ],
-            )?;
+                ])?;
+            }
         }
 
         tx.commit()?;
@@ -810,6 +838,33 @@ impl MetadataIndex {
             dist.push(r?);
         }
         Ok(dist)
+    }
+
+    /// Search for a file by path suffix (fuzzy match).
+    ///
+    /// Useful when the caller provides a partial path or uses different
+    /// separators (backslash vs forward slash). Returns the first match.
+    pub fn search_file_by_path_suffix(&self, suffix: &str) -> OmniResult<Option<FileInfo>> {
+        let normalized = suffix.replace('\\', "/");
+        let like_pattern = format!("%{normalized}");
+        let result = self
+            .conn
+            .query_row(
+                "SELECT id, path, language, hash, size_bytes FROM files WHERE path LIKE ?1 LIMIT 1",
+                params![like_pattern],
+                |row| {
+                    Ok(FileInfo {
+                        id: row.get(0)?,
+                        path: std::path::PathBuf::from(row.get::<_, String>(1)?),
+                        language: Language::from_extension(&row.get::<_, String>(2)?),
+                        content_hash: row.get(3)?,
+                        size_bytes: row.get(4)?,
+                    })
+                },
+            )
+            .optional()?;
+
+        Ok(result)
     }
 
     /// Get the raw connection for advanced queries.
