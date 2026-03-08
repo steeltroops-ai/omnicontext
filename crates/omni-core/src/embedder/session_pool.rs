@@ -90,7 +90,7 @@ impl SessionPool {
 
         for i in 0..effective_size {
             match Session::builder() {
-                Ok(builder) => match builder.commit_from_file(model_path) {
+                Ok(mut builder) => match builder.commit_from_file(model_path) {
                     Ok(session) => {
                         sessions.push(session);
                         tracing::debug!(

@@ -137,6 +137,23 @@ if (-not $latestVersion) {
     if (-not $latestVersion) { Exit-Err "No published releases with binary assets found." }
 }
 
+# ---------------------------------------------------------------------------
+# Version Resolution (Dynamic)
+# ---------------------------------------------------------------------------
+
+function Get-LatestOnnxVersion {
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/microsoft/onnxruntime/releases/latest" -UseBasicParsing
+        return $release.tag_name.TrimStart('v')
+    } catch {
+        return "1.24.3" # 2026 Fallback
+    }
+}
+
+$OnnxVersion = Get-LatestOnnxVersion
+$dllPath     = Join-Path $BinDir "onnxruntime.dll"
+
 # version comparison
 if ($currentVersion -eq $latestVersion -and -not $Force) {
     blank

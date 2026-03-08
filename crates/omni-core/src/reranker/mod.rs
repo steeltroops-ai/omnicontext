@@ -76,7 +76,7 @@ impl Reranker {
 
         let session = if model_path.exists() {
             match Session::builder() {
-                Ok(builder) => match builder.commit_from_file(&model_path) {
+                Ok(mut builder) => match builder.commit_from_file(&model_path) {
                     Ok(session) => {
                         tracing::info!(model = model_spec.name, "cross-encoder reranker loaded");
                         Some(Mutex::new(session))

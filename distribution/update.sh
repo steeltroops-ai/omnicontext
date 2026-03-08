@@ -124,6 +124,25 @@ if [ -z "$LATEST_VERSION" ]; then
     [ -n "$LATEST_VERSION" ] || die "Could not resolve latest version."
 fi
 
+# ---------------------------------------------------------------------------
+# Version Resolution (Dynamic)
+# ---------------------------------------------------------------------------
+
+get_latest_onnx_version() {
+    local version=""
+    local api="https://api.github.com/repos/microsoft/onnxruntime/releases/latest"
+    if res=$(curl -sSLf "$api" 2>/dev/null); then
+        version=$(echo "$res" | grep '"tag_name":' | head -n1 | sed -E 's/.*"v?([^"]+)".*/\1/' || echo "")
+    fi
+    if [ -z "$version" ]; then
+        echo "1.24.3" # 2026 Fallback
+    else
+        echo "$version"
+    fi
+}
+
+ONNX_VERSION=$(get_latest_onnx_version)
+
 # Compare
 if [ "$CURRENT_VERSION" = "$LATEST_VERSION" ] && [ "$FORCE" = false ]; then
     blank
