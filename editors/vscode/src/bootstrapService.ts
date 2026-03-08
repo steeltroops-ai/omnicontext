@@ -528,22 +528,15 @@ export async function bootstrap(
   }
 
   // Step 2: Auto-download from GitHub Releases
+  const version = context.extension.packageJSON.version;
+  let tag = `v${version}`;
+
   onStatus({
     phase: "checking",
-    message: "Resolving latest release version...",
+    message: `Resolving engine version ${tag}...`,
   });
 
-  let tag: string;
-  try {
-    tag = await fetchLatestReleaseTag();
-  } catch (err: any) {
-    onStatus({
-      phase: "failed",
-      message: `Cannot reach GitHub to download engine: ${err.message}. Install manually: https://github.com/${REPO_OWNER}/${REPO_NAME}/releases`,
-    });
-    throw err;
-  }
-
+  // Attempt to build URL; if it doesn't work, we'll catch during download
   const downloadUrl = buildAssetUrl(tag);
   const ext = process.platform === "win32" ? ".zip" : ".tar.gz";
   const archiveName = `omnicontext-${tag}${ext}`;

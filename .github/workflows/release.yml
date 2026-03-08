@@ -363,7 +363,7 @@ jobs:
   # Step 4: Publish VS Code Extension
   publish-extension:
     name: Publish VS Code Extension
-    needs: [analyze, bump-and-tag]
+    needs: [analyze, bump-and-tag, build]
     if: needs.analyze.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     steps:
