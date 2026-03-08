@@ -298,13 +298,49 @@ async function extractArchive(
 
 // ---------------------------------------------------------------------------
 // ONNX Runtime download: Windows (.dll), Linux (.so), macOS (.dylib)
-// Pinned to 1.23.0 to match the 'ort' crate version used by the engine.
+// Dynamically fetches the latest stable version from GitHub.
 // ---------------------------------------------------------------------------
-const ONNX_RUNTIME_VERSION = "1.23.0";
 
-function buildOnnxUrl(): { url: string; libName: string } {
+async function fetchLatestOnnxRuntimeVersion(): Promise<string> {
+  return new Promise((resolve) => {
+    const url =
+      "https://api.github.com/repos/microsoft/onnxruntime/releases/latest";
+    const req = https.get(
+      url,
+      {
+        headers: {
+          "User-Agent": "omnicontext-vscode",
+          Accept: "application/vnd.github+json",
+        },
+      },
+      (res) => {
+        let data = "";
+        res.on("data", (chunk) => (data += chunk));
+        res.on("end", () => {
+          try {
+            const release = JSON.parse(data);
+            if (release && release.tag_name) {
+              resolve(release.tag_name.replace(/^v/, ""));
+            } else {
+              resolve("1.24.3"); // 2026 Stable Fallback
+            }
+          } catch {
+            resolve("1.24.3");
+          }
+        });
+      },
+    );
+    req.on("error", () => resolve("1.24.3"));
+    req.setTimeout(5000, () => {
+      req.destroy();
+      resolve("1.24.3");
+    });
+  });
+}
+
+function buildOnnxUrl(version: string): { url: string; libName: string } {
   const arch = process.arch === "arm64" ? "arm64" : "x64";
-  const ver = ONNX_RUNTIME_VERSION;
+  const ver = version;
   switch (process.platform) {
     case "win32":
       return {
@@ -328,7 +364,8 @@ async function downloadOnnxRuntime(
   destDir: string,
   onStatus: StatusCallback,
 ): Promise<boolean> {
-  const { url, libName } = buildOnnxUrl();
+  const latestVersion = await fetchLatestOnnxRuntimeVersion();
+  const { url, libName } = buildOnnxUrl(latestVersion);
   const tmpDir = path.join(destDir, "_onnx_tmp");
   const ext = url.endsWith(".zip") ? ".zip" : ".tgz";
   const archivePath = path.join(tmpDir, `onnxruntime${ext}`);
@@ -337,7 +374,7 @@ async function downloadOnnxRuntime(
 
   onStatus({
     phase: "downloading",
-    message: `Downloading ONNX Runtime ${ONNX_RUNTIME_VERSION} from Microsoft...`,
+    message: `Downloading ONNX Runtime ${latestVersion} from Microsoft...`,
     progressPercent: 0,
   });
 
@@ -345,7 +382,7 @@ async function downloadOnnxRuntime(
     await downloadFile(url, archivePath, (pct) => {
       onStatus({
         phase: "downloading",
-        message: `Downloading ONNX Runtime ${ONNX_RUNTIME_VERSION}... ${pct}%`,
+        message: `Downloading ONNX Runtime ${latestVersion}... ${pct}%`,
         progressPercent: pct,
       });
     });

@@ -212,7 +212,21 @@ info "omnicontext-mcp      ${DIM}${BIN_MCP_SIZE}${RESET}"
 # ONNX Runtime shared library -- required for the embedding model.
 # The engine links ort dynamically; the library must be co-located with the binary.
 # ---------------------------------------------------------------------------
-ONNX_VERSION="1.23.0"   # Must match the 'ort' crate version in Cargo.toml
+
+get_latest_onnx_version() {
+    local version=""
+    local api="https://api.github.com/repos/microsoft/onnxruntime/releases/latest"
+    if res=$(curl -sSLf "$api" 2>/dev/null); then
+        version=$(echo "$res" | grep '"tag_name":' | head -n1 | sed -E 's/.*"v?([^"]+)".*/\1/' || echo "")
+    fi
+    if [ -z "$version" ]; then
+        echo "1.24.3" # 2026 Fallback
+    else
+        echo "$version"
+    fi
+}
+
+ONNX_VERSION=$(get_latest_onnx_version)
 
 install_onnx_runtime() {
     local dest_dir="$1"
@@ -247,11 +261,9 @@ install_onnx_runtime() {
 
     tar -xzf "${onnx_tmp}/onnxruntime.tgz" -C "$onnx_tmp"
 
-    # Find the shared library recursively (handles nested dirs)
     local lib_src
     lib_src=$(find "$onnx_tmp" -name "$lib_name" -type f | head -n1)
     if [ -z "$lib_src" ]; then
-        # Fallback: find any .so or .dylib
         lib_src=$(find "$onnx_tmp" -name "libonnxruntime*" -type f | head -n1)
     fi
 
@@ -261,7 +273,6 @@ install_onnx_runtime() {
     fi
 
     cp "$lib_src" "${dest_dir}/$(basename "$lib_src")"
-    # Create an unversioned symlink so the engine can load it by simple name
     ln -sf "$(basename "$lib_src")" "${dest_dir}/${lib_link}" 2>/dev/null || true
     return 0
 }
@@ -273,16 +284,23 @@ else
     ONNX_LIB="${BIN_DIR}/libonnxruntime.so"
 fi
 
-if [ -f "$ONNX_LIB" ] || ls "${BIN_DIR}"/libonnxruntime* 2>/dev/null | grep -q .; then
+# Check if we already have the correct major version
+HAS_CORRECT_ONNX=false
+if [ -f "$ONNX_LIB" ]; then
+    MAJOR="${ONNX_VERSION%%.*}"
+    if ls "${BIN_DIR}"/libonnxruntime* | grep -q "${MAJOR}"; then
+        HAS_CORRECT_ONNX=true
+    fi
+fi
+
+if [ "$HAS_CORRECT_ONNX" = "true" ]; then
     ok "ONNX Runtime already present  ${DIM}${BIN_DIR}${RESET}"
 else
-    info "ONNX Runtime library missing -- fetching from Microsoft..."
+    info "ONNX Runtime library missing or old -- fetching from Microsoft..."
     if install_onnx_runtime "$BIN_DIR" "$ONNX_VERSION"; then
-        ok "ONNX Runtime installed"
+        ok "ONNX Runtime installed (${ONNX_VERSION})"
     else
         warn "ONNX Runtime auto-install failed."
-        warn "Re-run this script when the network is available."
-        warn "Or run 'OmniContext: Repair Environment' from the VS Code sidebar."
     fi
 fi
 
@@ -373,7 +391,12 @@ blank
 step "7/7" "Auto-configuring MCP for AI clients"
 
 MCP_BIN="${BIN_DIR}/omnicontext-mcp"
-MCP_ENTRY="{\"command\":\"${MCP_BIN}\",\"args\":[\"--repo\",\".\"],\"disabled\":false}"
+# Install creates disabled placeholder entries. The VS Code extension auto-sync
+# will overwrite these with correct absolute paths when the user opens a project.
+# Using --repo "." is DANGEROUS: AI agent launchers spawn MCP from their own
+# install directory, causing "." to resolve to the wrong path silently.
+MCP_PLACEHOLDER="REPLACE_WITH_YOUR_REPO_PATH"
+MCP_ENTRY="{\"command\":\"${MCP_BIN}\",\"args\":[\"--repo\",\"${MCP_PLACEHOLDER}\"],\"disabled\":true}"
 
 _write_mcp_config() {
     local config_path="$1"
@@ -383,11 +406,11 @@ _write_mcp_config() {
     [ -d "$config_dir" ] || return 1
 
     if command -v python3 >/dev/null 2>&1; then
-        python3 - "$config_path" "$use_powers" "$MCP_BIN" <<'PYEOF' 2>/dev/null && return 0
+        python3 - "$config_path" "$use_powers" "$MCP_BIN" "$MCP_PLACEHOLDER" <<'PYEOF' 2>/dev/null && return 0
 import json, sys, os
 
-path, use_powers, mcp_bin = sys.argv[1], sys.argv[2] == "true", sys.argv[3]
-entry = {"command": mcp_bin, "args": ["--repo", "."], "disabled": False}
+path, use_powers, mcp_bin, placeholder = sys.argv[1], sys.argv[2] == "true", sys.argv[3], sys.argv[4]
+entry = {"command": mcp_bin, "args": ["--repo", placeholder], "disabled": True}
 
 cfg = {}
 if os.path.exists(path):
@@ -395,10 +418,36 @@ if os.path.exists(path):
         with open(path) as f: cfg = json.load(f)
     except: cfg = {}
 
+# Determine which servers dict to work with
 if use_powers:
-    cfg.setdefault("powers", {}).setdefault("mcpServers", {})["omnicontext"] = entry
+    servers = cfg.get("powers", {}).get("mcpServers", {})
 else:
-    cfg.setdefault("mcpServers", {})["omnicontext"] = entry
+    servers = cfg.get("mcpServers", {})
+
+# Clean up legacy broken entries with --repo "." and no --cwd / env
+existing = servers.get("omnicontext", {})
+existing_args = existing.get("args", [])
+if "--repo" in existing_args:
+    repo_idx = existing_args.index("--repo")
+    has_cwd = "--cwd" in existing_args
+    has_env = existing.get("env", {}).get("OMNICONTEXT_REPO", "")
+    if repo_idx + 1 < len(existing_args) and existing_args[repo_idx + 1] == "." and not has_cwd and not has_env:
+        del servers["omnicontext"]
+
+# Only write placeholder if no existing entry with real absolute paths
+has_good = False
+if "omnicontext" in servers:
+    ea = servers["omnicontext"].get("args", [])
+    if "--repo" in ea:
+        ri = ea.index("--repo")
+        if ri + 1 < len(ea) and ea[ri + 1] not in (".", placeholder):
+            has_good = True
+
+if not has_good:
+    if use_powers:
+        cfg.setdefault("powers", {}).setdefault("mcpServers", {})["omnicontext"] = entry
+    else:
+        cfg.setdefault("mcpServers", {})["omnicontext"] = entry
 
 os.makedirs(os.path.dirname(path), exist_ok=True)
 with open(path, "w") as f:
@@ -475,8 +524,9 @@ printf "  omnicontext search \"error handling\"\n"
 blank
 
 if [ -n "$MCP_CONFIGURED" ]; then
-    printf "${BOLD}  MCP${RESET}  ${DIM}auto-configured for: ${MCP_CONFIGURED}${RESET}\n"
-    printf "  Default --repo is '.' (cwd). Edit config files for project-specific paths.\n"
+    printf "${BOLD}  MCP${RESET}  ${DIM}placeholder added for: ${MCP_CONFIGURED}${RESET}\n"
+    printf "  Install the VS Code extension for automatic project detection.\n"
+    printf "  Or set --repo to your project path in each client's config.\n"
 else
     printf "${BOLD}  MCP manual config${RESET}\n"
     printf "  command: %s\n" "$MCP_BIN"

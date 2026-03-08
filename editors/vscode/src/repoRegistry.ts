@@ -223,6 +223,13 @@ export function discoverReposFromDisk(knownPaths?: string[]): void {
       }
     }
 
+    if (!resolvedPath) {
+      // If we cannot resolve the workspace path, it's an orphaned index
+      // directory. Do not inject it into the registry. It will be cleaned
+      // up automatically by the next purgeOrphanedIndexes() run.
+      continue;
+    }
+
     // Get file stats for a rough "last indexed" timestamp
     const stat = fs.statSync(dbPath);
 
@@ -255,14 +262,16 @@ export function getIndexedRepos(): IndexedRepo[] {
     const existsDb = fs.existsSync(
       path.join(getOmniReposDir(), entry.hash, "index.db"),
     );
-    if (!existsDb) {
-      // The index was deleted on disk (e.g. by cleanup or it was a temporary test repo)
+
+    // If the index was deleted from disk, or if it's a corrupted/orphaned
+    // registry entry with an empty repoPath, remove it from the registry.
+    if (!existsDb || !entry.repoPath) {
       delete registry.repos[entry.hash];
       mutated = true;
       continue;
     }
 
-    const exists = entry.repoPath ? fs.existsSync(entry.repoPath) : false;
+    const exists = fs.existsSync(entry.repoPath);
     repos.push({
       ...entry,
       exists,

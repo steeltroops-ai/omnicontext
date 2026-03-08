@@ -226,12 +226,26 @@ export function activate(context: vscode.ExtensionContext) {
     },
   );
 
-  // Poll for status updates for sidebar. With event-based tab-switch refresh
-  // now in place, we only need this for daemon status changes (connect/disconnect).
-  // 30s is sufficient and much lighter on CPU than the old 10s interval.
+  // Poll for status updates for sidebar.
   sidebarRefreshInterval = setInterval(() => {
     sidebarProvider.refresh();
   }, 30000);
+
+  // Auto-sync MCP on workspace/editor changes (throttled).
+  // This automatically "auto-corrects" the MCP path when switching repositories.
+  let syncTimer: NodeJS.Timeout | null = null;
+  const scheduleSync = () => {
+    if (syncTimer) return;
+    syncTimer = setTimeout(async () => {
+      syncTimer = null;
+      await syncMcpSilent();
+    }, 5000); // 5s debounce for quiet disk I/O
+  };
+
+  context.subscriptions.push(
+    vscode.window.onDidChangeActiveTextEditor(scheduleSync),
+    vscode.workspace.onDidChangeWorkspaceFolders(scheduleSync),
+  );
 }
 
 export function deactivate() {
@@ -281,21 +295,44 @@ async function syncMcpSilent(): Promise<void> {
 /**
  * Core MCP sync logic. Discovers all installed AI clients and writes
  * OmniContext MCP server config to each.
+ *
+ * It syncs:
+ *   1. The currently active workspace to the "omnicontext" primary key (auto-correction).
+ *   2. ALL indexed repositories to their unique "omnicontext-<hash>" keys.
+ *
+ * Path safety: validates all paths are absolute before writing. Relative
+ * paths like "." silently resolve to the AI launcher's install directory.
  */
 async function syncMcpToClients(): Promise<{
   synced: number;
   syncedClients: string[];
 }> {
-  const root = getWorkspaceRoot();
-  if (!root) return { synced: 0, syncedClients: [] };
-
   const binary = getBinaryPath();
   if (!binary) return { synced: 0, syncedClients: [] };
 
   const mcpBinary = deriveMcpBinaryPath(binary);
-  const entry = buildMcpServerEntry(mcpBinary, root);
-  const entryKey = deriveMcpEntryKey(root);
+  const activeRoot = getWorkspaceRoot();
   const clients = getKnownMcpClients();
+
+  // Load indexed repos from registry
+  const { getIndexedRepos } = await import("./repoRegistry");
+  const indexedRepos = getIndexedRepos();
+
+  // Validate active workspace root: must be absolute and exist on disk.
+  // Relative paths like "." are the root cause of the "wrong repo" bug.
+  const isValidRoot =
+    activeRoot && path.isAbsolute(activeRoot) && fs.existsSync(activeRoot);
+
+  // Also validate indexed repo paths
+  const validIndexedRepos = indexedRepos.filter((repo) => {
+    if (!repo.repoPath || !path.isAbsolute(repo.repoPath)) {
+      outputChannel.appendLine(
+        `[mcp-sync] skipping repo with non-absolute path: ${repo.repoPath}`,
+      );
+      return false;
+    }
+    return true;
+  });
 
   let synced = 0;
   const syncedClients: string[] = [];
@@ -311,12 +348,50 @@ async function syncMcpToClients(): Promise<{
         ? fs.readFileSync(client.configPath, "utf-8")
         : null;
 
-      const merged = mergeMcpConfig(existingJson, client, entry, entryKey);
-      fs.writeFileSync(
-        client.configPath,
-        JSON.stringify(merged, null, 2),
-        "utf-8",
-      );
+      let merged: any = null;
+
+      // 1. Always sync the active workspace to the "omnicontext" primary key.
+      // This is the "auto-correction" path: when a user opens a new project,
+      // the primary entry is updated to point to that project.
+      if (isValidRoot) {
+        const primaryEntry = buildMcpServerEntry(mcpBinary, activeRoot);
+        merged = mergeMcpConfig(
+          existingJson,
+          client,
+          primaryEntry,
+          "omnicontext",
+        );
+      }
+
+      // 2. Sync ALL indexed repositories using unique workspace keys.
+      // This ensures all repos are available simultaneously in agents that support it.
+      for (const repo of validIndexedRepos) {
+        const entry = buildMcpServerEntry(mcpBinary, repo.repoPath);
+        const entryKey = deriveMcpEntryKey(repo.repoPath);
+        merged = mergeMcpConfig(
+          merged ? JSON.stringify(merged) : existingJson,
+          client,
+          entry,
+          entryKey,
+        );
+      }
+
+      if (merged) {
+        const configStr = JSON.stringify(merged, null, 2);
+        fs.writeFileSync(client.configPath, configStr, "utf-8");
+
+        // Verify the write succeeded by reading back
+        try {
+          const readBack = fs.readFileSync(client.configPath, "utf-8");
+          JSON.parse(readBack); // validate JSON
+        } catch (verifyErr: any) {
+          outputChannel.appendLine(
+            `[mcp-sync] WARNING: ${client.name} config verification failed: ${verifyErr.message}`,
+          );
+          // Retry write once
+          fs.writeFileSync(client.configPath, configStr, "utf-8");
+        }
+      }
 
       synced++;
       syncedClients.push(client.name);

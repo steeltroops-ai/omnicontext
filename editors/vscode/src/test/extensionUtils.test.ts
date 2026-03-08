@@ -623,5 +623,90 @@ suite("extensionUtils", () => {
         OMNICONTEXT_REPO: "/new/repo",
       });
     });
+
+    test("should remove legacy --repo '.' entries without --cwd or env", () => {
+      // Simulate a config created by the old install script
+      const existing = JSON.stringify({
+        mcpServers: {
+          omnicontext: {
+            command: "/bin/mcp",
+            args: ["--repo", "."],
+            disabled: false,
+          },
+        },
+      });
+      const target: McpClientTarget = {
+        name: "Test",
+        configPath: "/tmp/test.json",
+        serversKey: "mcpServers",
+        usesPowersNamespace: false,
+      };
+      const entry = buildMcpServerEntry("/bin/mcp", "/correct/repo");
+      const merged = mergeMcpConfig(existing, target, entry);
+
+      // The broken entry should be replaced with the correct one
+      assert.strictEqual(merged.mcpServers.omnicontext.command, "/bin/mcp");
+      assert.deepStrictEqual(merged.mcpServers.omnicontext.args, [
+        "--repo",
+        "/correct/repo",
+        "--cwd",
+        "/correct/repo",
+      ]);
+    });
+
+    test("should NOT remove entries with --repo '.' if they have --cwd", () => {
+      // A properly configured entry with --cwd should be preserved
+      const existing = JSON.stringify({
+        mcpServers: {
+          omnicontext: {
+            command: "/bin/mcp",
+            args: ["--repo", ".", "--cwd", "/proper/project"],
+            disabled: false,
+          },
+        },
+      });
+      const target: McpClientTarget = {
+        name: "Test",
+        configPath: "/tmp/test.json",
+        serversKey: "mcpServers",
+        usesPowersNamespace: false,
+      };
+      const entry = buildMcpServerEntry("/bin/mcp", "/new/repo");
+      const merged = mergeMcpConfig(existing, target, entry);
+
+      // Should be overwritten by the new entry (normal merge behavior)
+      assert.strictEqual(merged.mcpServers.omnicontext.command, "/bin/mcp");
+    });
+
+    test("should clean legacy entries in powers namespace (Kiro)", () => {
+      const existing = JSON.stringify({
+        powers: {
+          mcpServers: {
+            omnicontext: {
+              command: "/bin/mcp",
+              args: ["--repo", "."],
+              disabled: false,
+            },
+          },
+        },
+      });
+      const target: McpClientTarget = {
+        name: "Kiro",
+        configPath: "/tmp/kiro.json",
+        serversKey: "mcpServers",
+        usesPowersNamespace: true,
+      };
+      const entry = buildMcpServerEntry("/bin/mcp", "/correct/repo");
+      const merged = mergeMcpConfig(existing, target, entry);
+
+      // The broken entry should be cleaned and replaced
+      assert.ok(merged.powers.mcpServers.omnicontext);
+      assert.deepStrictEqual(merged.powers.mcpServers.omnicontext.args, [
+        "--repo",
+        "/correct/repo",
+        "--cwd",
+        "/correct/repo",
+      ]);
+    });
   });
 });

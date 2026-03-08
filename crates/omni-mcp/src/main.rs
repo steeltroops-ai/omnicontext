@@ -64,6 +64,7 @@ struct Args {
     no_auto_index: bool,
 }
 
+#[allow(clippy::too_many_lines)]
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
@@ -102,8 +103,67 @@ async fn main() -> Result<()> {
         .canonicalize()
         .unwrap_or_else(|_| std::path::PathBuf::from(&repo_str));
 
+    // Fail fast on the installer placeholder -- the user hasn't configured a real path.
+    if repo_str == "REPLACE_WITH_YOUR_REPO_PATH" {
+        anyhow::bail!(
+            "repository path is still the install placeholder. \
+             Set --repo to your actual project path, or install the VS Code extension \
+             which auto-configures this for you."
+        );
+    }
+
     if !repo_path.exists() {
         anyhow::bail!("repository path does not exist: {repo_str}");
+    }
+
+    // Defensive check: refuse to start if the resolved path is clearly NOT
+    // a source code repository. This catches the case where an AI agent
+    // launcher spawns the MCP process with its own install dir as the cwd,
+    // causing --repo "." to resolve to a non-project directory.
+    let repo_str_lower = repo_path.to_string_lossy().to_lowercase();
+    let suspicious = repo_str_lower.contains("program files")
+        || repo_str_lower.contains("appdata")
+        || repo_str_lower.contains("programs\\antigravity")
+        || repo_str_lower.contains("programs/antigravity")
+        || repo_str_lower.contains(".vscode")
+        || repo_str_lower.contains(".gemini");
+
+    if suspicious {
+        anyhow::bail!(
+            "resolved repository path looks like an application directory, not a source \
+             code project: {}. The MCP server was likely launched with --repo \".\" from \
+             the wrong working directory. Pass --repo <path> explicitly or set the \
+             OMNICONTEXT_REPO environment variable.",
+            repo_path.display()
+        );
+    }
+
+    // Heuristic: check if the path has any common project markers.
+    // Only warn (don't bail) since the directory might be a valid but new project.
+    let has_git = repo_path.join(".git").exists();
+    let has_cargo = repo_path.join("Cargo.toml").exists();
+    let has_package = repo_path.join("package.json").exists();
+    let has_pyproject = repo_path.join("pyproject.toml").exists();
+    let has_go_mod = repo_path.join("go.mod").exists();
+    let has_makefile = repo_path.join("Makefile").exists();
+    let has_readme = repo_path.join("README.md").exists();
+    let has_src = repo_path.join("src").exists();
+    let looks_like_project = has_git
+        || has_cargo
+        || has_package
+        || has_pyproject
+        || has_go_mod
+        || has_makefile
+        || has_readme
+        || has_src;
+
+    if !looks_like_project {
+        tracing::warn!(
+            resolved_path = %repo_path.display(),
+            original_arg = %repo_str,
+            "resolved repository path has no recognizable project markers (.git, Cargo.toml, \
+             package.json, etc.). If you see unexpected results, pass --repo <path> explicitly."
+        );
     }
 
     tracing::info!(

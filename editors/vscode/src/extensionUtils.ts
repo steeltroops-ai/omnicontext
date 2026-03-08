@@ -303,6 +303,14 @@ export function getKnownMcpClients(): McpClientTarget[] {
     usesPowersNamespace: false,
   });
 
+  // Antigravity (Assistant)
+  targets.push({
+    name: "Antigravity",
+    configPath: joinPath(home, ".gemini", "antigravity", "mcp_config.json"),
+    serversKey: "mcpServers",
+    usesPowersNamespace: false,
+  });
+
   return targets;
 }
 
@@ -317,11 +325,35 @@ export function getKnownMcpClients(): McpClientTarget[] {
  *   1. --repo <path>           (primary)
  *   2. --cwd  <path>           (fallback if --repo is swallowed)
  *   3. OMNICONTEXT_REPO env    (fallback if args are not forwarded)
+ *
+ * @throws if repoRoot is relative, empty, or a placeholder -- this prevents
+ * writing broken MCP configs that silently resolve to the wrong directory.
  */
 export function buildMcpServerEntry(
   mcpBinaryPath: string,
   repoRoot: string,
 ): McpServerEntry {
+  // Guard: relative paths like "." silently resolve to the AI launcher's
+  // install directory, which is the root cause of the wrong-repo bug.
+  if (
+    !repoRoot ||
+    repoRoot === "." ||
+    repoRoot === "REPLACE_WITH_YOUR_REPO_PATH"
+  ) {
+    throw new Error(
+      `buildMcpServerEntry: repoRoot must be an absolute path, got "${repoRoot}"`,
+    );
+  }
+  // On Windows, absolute paths start with a drive letter (e.g., C:\).
+  // On Unix, they start with /.
+  const looksAbsolute =
+    repoRoot.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(repoRoot);
+  if (!looksAbsolute) {
+    throw new Error(
+      `buildMcpServerEntry: repoRoot must be an absolute path, got "${repoRoot}"`,
+    );
+  }
+
   return {
     command: mcpBinaryPath,
     args: ["--repo", repoRoot, "--cwd", repoRoot],
@@ -349,6 +381,9 @@ export function deriveMcpEntryKey(repoRoot: string): string {
  * Merge an OmniContext MCP entry into a client's config JSON.
  * Returns the updated config object. Does NOT write to disk.
  * Uses workspace-specific keys to avoid overwriting configs from other workspaces.
+ *
+ * Also cleans up any legacy bare "omnicontext" entries that use `--repo "."` without
+ * a `--cwd` fallback, as these resolve to the AI launcher's install directory.
  */
 export function mergeMcpConfig(
   existingJson: string | null,
@@ -363,6 +398,29 @@ export function mergeMcpConfig(
       config = JSON.parse(existingJson);
     } catch {
       config = {};
+    }
+  }
+
+  const getServers = (): any => {
+    if (target.usesPowersNamespace) {
+      return config.powers?.[target.serversKey];
+    }
+    return config[target.serversKey];
+  };
+
+  // Cleanup: remove legacy bare "omnicontext" entries that use --repo "." without --cwd.
+  // These entries cause the MCP server to resolve "." against the agent launcher's install
+  // directory (e.g., Antigravity's Program Files dir) instead of the user's project.
+  const servers = getServers();
+  if (servers?.["omnicontext"]) {
+    const bareEntry = servers["omnicontext"];
+    const args: string[] = bareEntry.args || [];
+    const repoIdx = args.indexOf("--repo");
+    const cwdIdx = args.indexOf("--cwd");
+    const hasEnv = bareEntry.env?.OMNICONTEXT_REPO;
+    // If it has --repo "." but no --cwd and no OMNICONTEXT_REPO env, it's a broken legacy entry
+    if (repoIdx >= 0 && args[repoIdx + 1] === "." && cwdIdx === -1 && !hasEnv) {
+      delete servers["omnicontext"];
     }
   }
 

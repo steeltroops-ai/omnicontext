@@ -1078,6 +1078,22 @@ impl OmniContextServer {
             ))]));
         }
 
+        // Reject known non-project directories to prevent silent misbehavior.
+        let path_lower = new_path.to_string_lossy().to_lowercase();
+        let suspicious = path_lower.contains("program files")
+            || path_lower.contains("appdata")
+            || path_lower.contains("programs\\antigravity")
+            || path_lower.contains("programs/antigravity")
+            || path_lower.contains(".vscode")
+            || path_lower.contains(".gemini");
+        if suspicious {
+            return Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: '{}' looks like an application directory, not a source code project. \
+                 Please provide an absolute path to a project repository.",
+                new_path.display()
+            ))]));
+        }
+
         // Reinitialize the engine with the new path
         let new_engine = match omni_core::Engine::new(&new_path) {
             Ok(e) => e,

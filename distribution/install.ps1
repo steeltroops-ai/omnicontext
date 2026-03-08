@@ -187,7 +187,18 @@ if (-not (Test-Path $OutMcpExe)) { Exit-Err "omnicontext-mcp.exe not found after
 # The engine binary links ort dynamically so the DLL must be co-located.
 # We download it automatically from Microsoft's official GitHub releases.
 # ---------------------------------------------------------------------------
-$OnnxVersion = "1.23.0"   # Must match the 'ort' crate version in Cargo.toml
+
+function Get-LatestOnnxVersion {
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/microsoft/onnxruntime/releases/latest" -UseBasicParsing
+        return $release.tag_name.TrimStart('v')
+    } catch {
+        return "1.24.3" # 2026 Fallback
+    }
+}
+
+$OnnxVersion = Get-LatestOnnxVersion 
 $dllPath     = Join-Path $OutDir "onnxruntime.dll"
 
 function Install-OnnxRuntime {
@@ -216,42 +227,43 @@ function Install-OnnxRuntime {
         return $false, "Extraction failed: $_"
     }
 
-    # Archive layout: onnxruntime-win-x64-1.23.0/lib/onnxruntime.dll
-    $dllSource = Get-ChildItem -Path $onnxStag -Recurse -Filter "onnxruntime.dll" `
-                 | Select-Object -First 1
+    $dllSource = Get-ChildItem -Path $onnxStag -Recurse -Filter "onnxruntime.dll" | Select-Object -First 1
     if (-not $dllSource) {
-        return $false, "onnxruntime.dll not found inside downloaded archive"
+        return $false, "onnxruntime.dll not found inside archive"
     }
 
     Copy-Item $dllSource.FullName -Destination (Join-Path $DestDir "onnxruntime.dll") -Force
 
-    # Some ort versions also require this companion DLL
-    $providerDll = Get-ChildItem -Path $onnxStag -Recurse `
-                   -Filter "onnxruntime_providers_shared.dll" `
-                   | Select-Object -First 1
+    $providerDll = Get-ChildItem -Path $onnxStag -Recurse -Filter "onnxruntime_providers_shared.dll" | Select-Object -First 1
     if ($providerDll) {
-        Copy-Item $providerDll.FullName `
-                  -Destination (Join-Path $DestDir "onnxruntime_providers_shared.dll") `
-                  -Force
+        Copy-Item $providerDll.FullName -Destination (Join-Path $DestDir "onnxruntime_providers_shared.dll") -Force
     }
 
     Remove-Item $onnxStag -Recurse -Force -EA SilentlyContinue
     return $true, ""
 }
 
+$needsOnnxUpdate = $true
 if (Test-Path $dllPath) {
-    $sizeMb = [math]::Round((Get-Item $dllPath).Length / 1MB, 1)
-    ok "onnxruntime.dll  $DIM($sizeMb MB -- already present)$RESET"
-} else {
-    info "onnxruntime.dll not in release archive -- fetching from Microsoft..."
+    try {
+        $existingVer = (Get-Item $dllPath).VersionInfo.ProductVersion
+        if ($existingVer -like "$($OnnxVersion.Split('.')[0]).*") {
+            $sizeMb = [math]::Round((Get-Item $dllPath).Length / 1MB, 1)
+            ok "onnxruntime.dll  $DIM($sizeMb MB -- $existingVer)$RESET"
+            $needsOnnxUpdate = $false
+        } else {
+            warn "Found old ONNX Runtime ($existingVer), upgrading to $OnnxVersion..."
+        }
+    } catch { }
+}
+
+if ($needsOnnxUpdate) {
     $onnxOk, $onnxErr = Install-OnnxRuntime -DestDir $OutDir -Version $OnnxVersion
     if ($onnxOk) {
         $sizeMb = [math]::Round((Get-Item $dllPath).Length / 1MB, 1)
         ok "onnxruntime.dll installed  $DIM($sizeMb MB)$RESET"
     } else {
         warn "ONNX Runtime auto-install failed: $onnxErr"
-        warn "Context injection will fail until this is resolved."
-        warn "Re-run this script when the network is available, or run 'OmniContext: Repair Environment' in VS Code."
     }
 }
 
@@ -348,10 +360,18 @@ if ($hasSetup) {
 blank
 step "7/7" "Auto-configuring MCP for AI clients"
 
+# Build MCP entry.
+# --repo MUST be an absolute project path. The install script does not know
+# which repo the user will use, so it creates a disabled placeholder.
+# The VS Code extension's auto-sync will overwrite this with the correct
+# absolute path when the user opens a project.
+# If the user invokes the MCP binary manually (e.g., from Claude Desktop),
+# they should replace "REPLACE_WITH_YOUR_REPO_PATH" with their actual path.
+$McpPlaceholderRepo = "REPLACE_WITH_YOUR_REPO_PATH"
 $McpEntry = [ordered]@{
     command  = $OutMcpExe
-    args     = @("--repo", ".")
-    disabled = $false
+    args     = @("--repo", $McpPlaceholderRepo)
+    disabled = $true
 }
 
 function Set-McpConfig {
@@ -365,14 +385,55 @@ function Set-McpConfig {
             if ($raw) { $cfg = $raw | ConvertFrom-Json -AsHashtable -EA SilentlyContinue }
             if (-not $cfg) { $cfg = @{} }
         }
+
+        # Clean up any existing broken "omnicontext" entries that use --repo "."
+        # These silently resolve to the AI launcher's install directory.
         if ($Powers) {
-            if (-not $cfg["powers"])                          { $cfg["powers"] = @{} }
-            if (-not $cfg["powers"]["mcpServers"])            { $cfg["powers"]["mcpServers"] = @{} }
-            $cfg["powers"]["mcpServers"]["omnicontext"] = $McpEntry
+            $servers = $cfg["powers"]
+            if ($servers) { $servers = $servers["mcpServers"] }
         } else {
-            if (-not $cfg["mcpServers"]) { $cfg["mcpServers"] = @{} }
-            $cfg["mcpServers"]["omnicontext"] = $McpEntry
+            $servers = $cfg["mcpServers"]
         }
+
+        if ($servers -and $servers["omnicontext"]) {
+            $existing = $servers["omnicontext"]
+            $existingArgs = $existing["args"]
+            if ($existingArgs -is [array]) {
+                $repoIdx = [array]::IndexOf($existingArgs, "--repo")
+                $cwdIdx  = [array]::IndexOf($existingArgs, "--cwd")
+                $hasEnv  = $existing["env"] -and $existing["env"]["OMNICONTEXT_REPO"]
+                # If it has --repo "." but no --cwd and no OMNICONTEXT_REPO, it's broken
+                if ($repoIdx -ge 0 -and ($repoIdx + 1) -lt $existingArgs.Count -and `
+                    $existingArgs[$repoIdx + 1] -eq "." -and $cwdIdx -eq -1 -and -not $hasEnv) {
+                    $servers.Remove("omnicontext")
+                }
+            }
+        }
+
+        # Only write placeholder if no existing omnicontext entry with real paths
+        $hasExistingGood = $false
+        if ($servers -and $servers["omnicontext"]) {
+            $ea = $servers["omnicontext"]["args"]
+            if ($ea -is [array]) {
+                $ri = [array]::IndexOf($ea, "--repo")
+                if ($ri -ge 0 -and ($ri + 1) -lt $ea.Count -and `
+                    $ea[$ri + 1] -ne "." -and $ea[$ri + 1] -ne $McpPlaceholderRepo) {
+                    $hasExistingGood = $true
+                }
+            }
+        }
+
+        if (-not $hasExistingGood) {
+            if ($Powers) {
+                if (-not $cfg["powers"])                          { $cfg["powers"] = @{} }
+                if (-not $cfg["powers"]["mcpServers"])            { $cfg["powers"]["mcpServers"] = @{} }
+                $cfg["powers"]["mcpServers"]["omnicontext"] = $McpEntry
+            } else {
+                if (-not $cfg["mcpServers"]) { $cfg["mcpServers"] = @{} }
+                $cfg["mcpServers"]["omnicontext"] = $McpEntry
+            }
+        }
+
         $cfg | ConvertTo-Json -Depth 10 | Set-Content $Path -Encoding UTF8
         return $true
     } catch { return $false }
@@ -421,8 +482,9 @@ Write-Host "  omnicontext index ."
 Write-Host '  omnicontext search "error handling"'
 blank
 if ($configured.Count -gt 0) {
-    Write-Host "$BOLD  MCP$RESET  $DIM auto-configured for: $($configured -join ', ')$RESET"
-    Write-Host "  Default --repo is '.' (cwd). Edit config files for project-specific paths."
+    Write-Host "$BOLD  MCP$RESET  $DIM placeholder added for: $($configured -join ', ')$RESET"
+    Write-Host "  Install the VS Code extension for automatic project detection."
+    Write-Host "  Or set --repo to your project path in each client's config."
 } else {
     Write-Host "$BOLD  MCP manual config$RESET"
     Write-Host "  command: $OutMcpExe"
