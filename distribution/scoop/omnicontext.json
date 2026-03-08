@@ -1,12 +1,12 @@
 {
-  "version": "0.13.0",
+  "version": "0.13.1",
   "description": "Universal code context engine for AI coding agents",
   "homepage": "https://github.com/steeltroops-ai/omnicontext",
   "license": "Apache-2.0",
   "architecture": {
     "64bit": {
-      "url": "https://github.com/steeltroops-ai/omnicontext/releases/download/v0.13.0/omnicontext-0.13.0-x86_64-pc-windows-msvc.zip",
-      "hash": "3680028612054223FB84967FA0EE10E1812AFF80E54AF58298471F43D8A66127"
+      "url": "https://github.com/steeltroops-ai/omnicontext/releases/download/v0.13.1/omnicontext-0.13.1-x86_64-pc-windows-msvc.zip",
+      "hash": "0245862CE7729F568E5D763FB70B8EDE09381B1438C80155D736FD3865A2A756"
     }
   },
   "bin": ["omnicontext.exe", "omnicontext-mcp.exe", "omnicontext-daemon.exe"],
