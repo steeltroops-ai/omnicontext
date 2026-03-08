@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.13.1] - 2026-03-08
+
+## What's Changed
+
+### Bug Fixes
+
+- harden path resolution to prevent silent wrong-dir indexing (38ad9a0)
+- resolve onnx runtime version mismatch dynamically (8943d04)
+
 ## [0.13.0] - 2026-03-08
 
 ## What's Changed
