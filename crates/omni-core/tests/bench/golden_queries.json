@@ -1,0 +1,250 @@
+{
+    "version": "1.0.0",
+    "description": "Golden query dataset for search quality benchmarking",
+    "metadata": {
+        "total_queries": 10,
+        "intents": {
+            "architectural": 3,
+            "implementation": 4,
+            "debugging": 2,
+            "documentation": 1
+        },
+        "coverage": {
+            "rust": 6,
+            "python": 2,
+            "typescript": 2
+        }
+    },
+    "queries": [
+        {
+            "id": "Q001",
+            "intent": "architectural",
+            "query": "how does the dependency graph work",
+            "expected_results": [
+                {
+                    "symbol_path": "omni_core::graph::dependencies::FileDependencyGraph",
+                    "relevance": 3,
+                    "reason": "Main dependency graph implementation"
+                },
+                {
+                    "symbol_path": "omni_core::graph::dependencies::FileDependencyGraph::add_edge",
+                    "relevance": 3,
+                    "reason": "Core method for building graph"
+                },
+                {
+                    "symbol_path": "omni_core::graph::dependencies::FileDependencyGraph::get_neighbors",
+                    "relevance": 3,
+                    "reason": "Core method for querying graph"
+                },
+                {
+                    "symbol_path": "omni_core::graph::dependencies::EdgeType",
+                    "relevance": 2,
+                    "reason": "Defines edge types in graph"
+                }
+            ]
+        },
+        {
+            "id": "Q002",
+            "intent": "implementation",
+            "query": "embedding generation code",
+            "expected_results": [
+                {
+                    "symbol_path": "omni_core::embedder::Embedder",
+                    "relevance": 3,
+                    "reason": "Main embedder struct"
+                },
+                {
+                    "symbol_path": "omni_core::embedder::Embedder::embed_batch",
+                    "relevance": 3,
+                    "reason": "Core embedding method"
+                },
+                {
+                    "symbol_path": "omni_core::embedder::Embedder::new",
+                    "relevance": 2,
+                    "reason": "Embedder initialization"
+                }
+            ]
+        },
+        {
+            "id": "Q003",
+            "intent": "implementation",
+            "query": "how to index a file",
+            "expected_results": [
+                {
+                    "symbol_path": "omni_core::index::MetadataIndex::upsert_file",
+                    "relevance": 3,
+                    "reason": "Main file indexing method"
+                },
+                {
+                    "symbol_path": "omni_core::index::MetadataIndex::reindex_file",
+                    "relevance": 3,
+                    "reason": "Reindexing method"
+                },
+                {
+                    "symbol_path": "omni_core::index::MetadataIndex::insert_chunk",
+                    "relevance": 2,
+                    "reason": "Chunk insertion method"
+                }
+            ]
+        },
+        {
+            "id": "Q004",
+            "intent": "architectural",
+            "query": "search engine architecture",
+            "expected_results": [
+                {
+                    "symbol_path": "omni_core::search::SearchEngine",
+                    "relevance": 3,
+                    "reason": "Main search engine struct"
+                },
+                {
+                    "symbol_path": "omni_core::search::SearchEngine::search",
+                    "relevance": 3,
+                    "reason": "Core search method"
+                },
+                {
+                    "symbol_path": "omni_core::search::SearchEngine::new",
+                    "relevance": 2,
+                    "reason": "Search engine initialization"
+                }
+            ]
+        },
+        {
+            "id": "Q005",
+            "intent": "implementation",
+            "query": "parse rust code",
+            "expected_results": [
+                {
+                    "symbol_path": "omni_core::parser::languages::rust::RustParser",
+                    "relevance": 3,
+                    "reason": "Rust parser implementation"
+                },
+                {
+                    "symbol_path": "omni_core::parser::languages::rust::RustParser::parse",
+                    "relevance": 3,
+                    "reason": "Main parsing method"
+                },
+                {
+                    "symbol_path": "omni_core::parser::LanguageParser",
+                    "relevance": 2,
+                    "reason": "Parser trait definition"
+                }
+            ]
+        },
+        {
+            "id": "Q006",
+            "intent": "debugging",
+            "query": "error handling in indexing",
+            "expected_results": [
+                {
+                    "symbol_path": "omni_core::error::OmniError",
+                    "relevance": 3,
+                    "reason": "Main error type"
+                },
+                {
+                    "symbol_path": "omni_core::pipeline::Engine::run_index",
+                    "relevance": 2,
+                    "reason": "Indexing pipeline with error handling"
+                },
+                {
+                    "symbol_path": "omni_core::index::MetadataIndex",
+                    "relevance": 2,
+                    "reason": "Index operations with error handling"
+                }
+            ]
+        },
+        {
+            "id": "Q007",
+            "intent": "implementation",
+            "query": "vector search implementation",
+            "expected_results": [
+                {
+                    "symbol_path": "omni_core::vector::VectorIndex",
+                    "relevance": 3,
+                    "reason": "Vector index implementation"
+                },
+                {
+                    "symbol_path": "omni_core::vector::VectorIndex::search",
+                    "relevance": 3,
+                    "reason": "Vector search method"
+                },
+                {
+                    "symbol_path": "omni_core::vector::VectorIndex::add",
+                    "relevance": 2,
+                    "reason": "Vector insertion method"
+                }
+            ]
+        },
+        {
+            "id": "Q008",
+            "intent": "architectural",
+            "query": "how does reranking work",
+            "expected_results": [
+                {
+                    "symbol_path": "omni_core::reranker::Reranker",
+                    "relevance": 3,
+                    "reason": "Main reranker struct"
+                },
+                {
+                    "symbol_path": "omni_core::reranker::Reranker::rerank",
+                    "relevance": 3,
+                    "reason": "Core reranking method"
+                },
+                {
+                    "symbol_path": "omni_core::reranker::Reranker::new",
+                    "relevance": 2,
+                    "reason": "Reranker initialization"
+                }
+            ]
+        },
+        {
+            "id": "Q009",
+            "intent": "debugging",
+            "query": "circuit breaker implementation",
+            "expected_results": [
+                {
+                    "symbol_path": "omni_core::resilience::circuit_breaker::CircuitBreaker",
+                    "relevance": 3,
+                    "reason": "Circuit breaker implementation"
+                },
+                {
+                    "symbol_path": "omni_core::resilience::circuit_breaker::CircuitBreaker::call",
+                    "relevance": 3,
+                    "reason": "Main circuit breaker method"
+                },
+                {
+                    "symbol_path": "omni_core::resilience::circuit_breaker::CircuitState",
+                    "relevance": 2,
+                    "reason": "Circuit breaker states"
+                }
+            ]
+        },
+        {
+            "id": "Q010",
+            "intent": "documentation",
+            "query": "configuration options",
+            "expected_results": [
+                {
+                    "symbol_path": "omni_core::config::Config",
+                    "relevance": 3,
+                    "reason": "Main configuration struct"
+                },
+                {
+                    "symbol_path": "omni_core::config::Config::load",
+                    "relevance": 3,
+                    "reason": "Configuration loading method"
+                },
+                {
+                    "symbol_path": "omni_core::config::EmbeddingConfig",
+                    "relevance": 2,
+                    "reason": "Embedding configuration"
+                },
+                {
+                    "symbol_path": "omni_core::config::RerankerConfig",
+                    "relevance": 2,
+                    "reason": "Reranker configuration"
+                }
+            ]
+        }
+    ]
+}
