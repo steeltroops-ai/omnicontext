@@ -256,11 +256,9 @@ export default function Home() {
         }
       `}</style>
       <div className="flex flex-col min-h-screen bg-[#09090B] selection:bg-primary/30">
-        <SiteNav transparent scrollTarget={null} />
+        <SiteNav transparent />
 
-        <main
-          className="flex-1 flex flex-col pt-0"
-        >
+        <main className="flex-1 flex flex-col pt-0">
           <section className="relative w-full flex items-center min-h-screen pt-14 pb-16 overflow-hidden">
             <DottedSurface className="absolute inset-0 z-0 opacity-50" />
 

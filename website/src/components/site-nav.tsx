@@ -11,11 +11,9 @@ interface SiteNavProps {
   /** If true, nav starts transparent and transitions on scroll (hero pages).
    *  If false, nav is always the frosted glass bar (inner pages). */
   transparent?: boolean;
-  /** Element ID to attach scroll listener to (default: window scroll) */
-  scrollTarget?: string;
 }
 
-export function SiteNav({ transparent = false, scrollTarget }: SiteNavProps) {
+export function SiteNav({ transparent = false }: SiteNavProps) {
   const pathname = usePathname();
   // Non-transparent nav is always in the "scrolled" (frosted) state
   const [scrolled, setScrolled] = useState(() => !transparent);
@@ -24,36 +22,24 @@ export function SiteNav({ transparent = false, scrollTarget }: SiteNavProps) {
   useEffect(() => {
     if (!transparent) return;
 
-    const target = scrollTarget ? document.getElementById(scrollTarget) : null;
+    const onScroll = () => setScrolled(window.scrollY > 20);
 
-    const onScroll = () =>
-      setScrolled((target?.scrollTop ?? window.scrollY) > 20);
-
-    if (target) {
-      target.addEventListener("scroll", onScroll);
-    } else {
-      window.addEventListener("scroll", onScroll);
-    }
+    window.addEventListener("scroll", onScroll);
 
     return () => {
-      if (target) {
-        target.removeEventListener("scroll", onScroll);
-      } else {
-        window.removeEventListener("scroll", onScroll);
-      }
+      window.removeEventListener("scroll", onScroll);
     };
-  }, [transparent, scrollTarget]);
+  }, [transparent]);
 
   const isActive = (href: string) =>
     pathname === href ? "text-zinc-100" : "text-zinc-400 hover:text-zinc-100";
 
   return (
     <nav
-      className={`fixed top-0 left-0 w-full h-14 flex items-center justify-center z-50 transition-all duration-500 px-6 sm:px-8 md:px-16 ${
-        scrolled
+      className={`fixed top-0 left-0 w-full h-14 flex items-center justify-center z-50 transition-all duration-500 px-6 sm:px-8 md:px-16 ${scrolled
           ? "border-b border-white/[0.07] bg-black/30 backdrop-blur-2xl shadow-[0_4px_30px_rgba(0,0,0,0.25)]"
           : "border-b border-transparent bg-transparent backdrop-blur-none"
-      }`}
+        }`}
     >
       <div className="flex items-center justify-between w-full max-w-[1400px]">
         <Link
@@ -128,11 +114,10 @@ export function SiteNav({ transparent = false, scrollTarget }: SiteNavProps) {
       {/* Mobile Menu - matches header transparency */}
       {mobileMenuOpen && (
         <div
-          className={`md:hidden absolute top-14 left-0 w-full transition-all duration-500 ${
-            scrolled
+          className={`md:hidden absolute top-14 left-0 w-full transition-all duration-500 ${scrolled
               ? "border-b border-white/[0.07] bg-black/30 backdrop-blur-2xl shadow-[0_4px_30px_rgba(0,0,0,0.25)]"
               : "border-b border-white/[0.07] bg-black/20 backdrop-blur-xl"
-          }`}
+            }`}
         >
           <div className="flex flex-col px-6 py-4 gap-3">
             <Link

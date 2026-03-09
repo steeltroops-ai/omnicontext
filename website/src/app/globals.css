@@ -39,31 +39,6 @@
     font-family: var(--font-sans);
   }
 
-  /* Apply custom scrollbar to body for full-page screenshots */
-  body::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
-  }
-
-  body::-webkit-scrollbar-track {
-    background: transparent;
-  }
-
-  body::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.1);
-    border-radius: 10px;
-  }
-
-  body::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.2);
-  }
-
-  /* Firefox Support */
-  body {
-    scrollbar-width: thin;
-    scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
-  }
-
   :root {
     --terminal-bg: #1a1b26;
     --terminal-bg-alt: #0d1117;
@@ -203,9 +178,28 @@ body {
   color-scheme: dark !important;
   margin: 0;
   padding: 0;
-  overflow: hidden;
-  /* Lock root to prevent double scrollbars and header overlap */
   height: 100%;
+}
+
+html.lenis,
+html.lenis body {
+  height: auto;
+}
+
+.lenis.lenis-smooth {
+  scroll-behavior: auto !important;
+}
+
+.lenis.lenis-smooth [data-lenis-prevent] {
+  overscroll-behavior: contain;
+}
+
+.lenis.lenis-stopped {
+  overflow: hidden;
+}
+
+.lenis.lenis-smooth iframe {
+  pointer-events: none;
 }
 
 /* --- DECOUPLED SCROLLBAR ENGINE --- */
