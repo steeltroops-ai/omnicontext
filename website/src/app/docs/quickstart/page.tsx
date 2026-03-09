@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { TOC } from "@/components/toc";
 
 export default function QuickstartPage() {
   const headings = [
@@ -109,26 +110,7 @@ export default function QuickstartPage() {
       </div>
 
       {/* Right TOC Sidebar */}
-      <aside
-        className="w-[240px] shrink-0 p-10 overflow-y-auto custom-scrollbar border-l border-white/5 hidden xl:block bg-[#09090B] xl:fixed xl:right-0 xl:top-14 xl:bottom-0"
-        data-lenis-prevent
-      >
-        <div className="text-[12px] font-semibold uppercase tracking-wider text-zinc-600 mb-6">
-          On this page
-        </div>
-        <nav className="flex flex-col gap-4 text-[13px] tracking-tight">
-          {headings.map((heading, idx) => (
-            <a
-              key={heading.id}
-              href={`#${heading.id}`}
-              className={`hover:text-zinc-300 transition-colors duration-200 ${idx === 0 ? "text-zinc-200 font-medium" : "text-zinc-500"
-                }`}
-            >
-              {heading.text}
-            </a>
-          ))}
-        </nav>
-      </aside>
+      <TOC headings={headings} />
     </div>
   );
 }

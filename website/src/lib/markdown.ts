@@ -37,7 +37,7 @@ export function getAllDocs(): DocMetadata[] {
 
             if (entry.isDirectory()) {
                 scanDirectory(fullPath, `${baseSlug}/${entry.name}`);
-            } else if (entry.name.endsWith('.md')) {
+            } else if (entry.name.endsWith('.md') && entry.name !== 'index.md') {
                 const fileContents = fs.readFileSync(fullPath, 'utf8');
                 const { data } = matter(fileContents);
 
