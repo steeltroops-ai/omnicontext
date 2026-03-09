@@ -274,4 +274,374 @@ pub mod error_codes {
     pub const INTERNAL_ERROR: i32 = -32603;
     /// Engine-specific error (indexing, search, etc.).
     pub const ENGINE_ERROR: i32 = -32000;
+    /// Server overloaded (503 Service Unavailable equivalent).
+    pub const SERVER_OVERLOADED: i32 = -32001;
+}
+
+/// Parameters for search intent classification.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SearchIntentParams {
+    /// The search query to classify.
+    pub query: String,
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2: Resilience Monitoring Types
+// ---------------------------------------------------------------------------
+
+/// Parameters for resilience status request (no parameters needed).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResilienceStatusParams {}
+
+/// Resilience status response with circuit breaker and health monitoring data.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResilienceStatusResponse {
+    /// Circuit breaker states by subsystem.
+    pub circuit_breakers: std::collections::HashMap<String, CircuitBreakerState>,
+    /// Health status by subsystem.
+    pub health_status: std::collections::HashMap<String, HealthStatus>,
+    /// Event deduplication statistics.
+    pub deduplication: DeduplicationMetrics,
+    /// Backpressure monitoring statistics.
+    pub backpressure: BackpressureMetrics,
+}
+
+/// Circuit breaker state for a subsystem.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CircuitBreakerState {
+    /// Current state: "closed", "open", "half_open".
+    pub state: String,
+    /// Number of consecutive failures.
+    pub failure_count: usize,
+    /// Timestamp of last failure (Unix timestamp in seconds).
+    pub last_failure_time: Option<u64>,
+    /// Timestamp when circuit will attempt recovery (Unix timestamp in seconds).
+    pub next_attempt_time: Option<u64>,
+}
+
+/// Health status for a subsystem.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthStatus {
+    /// Health state: "healthy", "degraded", "unhealthy".
+    pub status: String,
+    /// Last health check timestamp (Unix timestamp in seconds).
+    pub last_check_time: u64,
+    /// Error message if unhealthy.
+    pub error_message: Option<String>,
+}
+
+/// Event deduplication metrics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeduplicationMetrics {
+    /// Total events processed.
+    pub events_processed: u64,
+    /// Number of duplicate events skipped.
+    pub duplicates_skipped: u64,
+    /// Number of events currently in flight.
+    pub in_flight_count: usize,
+    /// Deduplication rate (0.0 to 1.0).
+    pub deduplication_rate: f64,
+}
+
+/// Backpressure monitoring metrics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackpressureMetrics {
+    /// Number of active requests.
+    pub active_requests: usize,
+    /// Current load percentage (0.0 to 100.0).
+    pub load_percent: f64,
+    /// Number of requests rejected due to backpressure.
+    pub requests_rejected: u64,
+    /// Peak load percentage since daemon start.
+    pub peak_load_percent: f64,
+}
+
+/// Parameters for resetting circuit breakers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResetCircuitBreakerParams {
+    /// Subsystem name to reset ("embedder", "reranker", "index", "vector", or "all").
+    pub subsystem: String,
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3: Historical Context Types
+// ---------------------------------------------------------------------------
+
+/// Parameters for commit context request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitContextParams {
+    /// File path to get commit history for.
+    pub file_path: String,
+    /// Maximum number of commits to return.
+    #[serde(default = "default_commit_limit")]
+    pub limit: usize,
+}
+
+fn default_commit_limit() -> usize {
+    10
+}
+
+/// Commit context response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitContextResponse {
+    /// File path.
+    pub file_path: String,
+    /// Total commits indexed.
+    pub commits_indexed: usize,
+    /// Recent commits for this file.
+    pub recent_commits: Vec<CommitSummary>,
+}
+
+/// Commit summary information.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitSummary {
+    /// Commit hash.
+    pub hash: String,
+    /// Commit message.
+    pub message: String,
+    /// Author name.
+    pub author: String,
+    /// Commit timestamp (Unix timestamp in seconds).
+    pub timestamp: i64,
+    /// Files changed in this commit.
+    pub files_changed: usize,
+    /// Lines added.
+    pub lines_added: usize,
+    /// Lines deleted.
+    pub lines_deleted: usize,
+}
+
+/// Parameters for co-change analysis.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoChangeParams {
+    /// File path to analyze.
+    pub file_path: String,
+    /// Minimum co-change frequency (0.0 to 1.0).
+    #[serde(default = "default_min_frequency")]
+    pub min_frequency: f64,
+    /// Maximum results to return.
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+}
+
+fn default_min_frequency() -> f64 {
+    0.1
+}
+
+/// Co-change analysis response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoChangeResponse {
+    /// Focal file path.
+    pub file_path: String,
+    /// Files that frequently change together.
+    pub co_changed_files: Vec<CoChangeFile>,
+}
+
+/// Co-change file information.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CoChangeFile {
+    /// File path.
+    pub path: String,
+    /// Co-change frequency (0.0 to 1.0).
+    pub frequency: f64,
+    /// Number of times changed together.
+    pub change_count: usize,
+}
+
+/// Parameters for bug-prone files request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BugProneFilesParams {
+    /// Maximum results to return.
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+}
+
+/// Bug-prone files response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BugProneFilesResponse {
+    /// Files with high bug frequency.
+    pub files: Vec<BugProneFile>,
+}
+
+/// Bug-prone file information.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BugProneFile {
+    /// File path.
+    pub path: String,
+    /// Number of bug-related commits.
+    pub bug_count: usize,
+    /// Last bug commit timestamp (Unix timestamp in seconds).
+    pub last_bug_date: Option<i64>,
+    /// Bug frequency (bugs per total commits).
+    pub bug_frequency: f64,
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4: Graph Visualization Types
+// ---------------------------------------------------------------------------
+
+/// Parameters for architectural context request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchitecturalContextParams {
+    /// File path to get context for.
+    pub file_path: String,
+    /// Maximum hops from focal file.
+    #[serde(default = "default_max_hops")]
+    pub max_hops: usize,
+}
+
+fn default_max_hops() -> usize {
+    2
+}
+
+/// Architectural context response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchitecturalContextResponse {
+    /// Focal file path.
+    pub focal_file: String,
+    /// Neighbor files with distances and edge types.
+    pub neighbors: Vec<NeighborFileInfo>,
+    /// Total files in graph.
+    pub total_files: usize,
+    /// Maximum hops used.
+    pub max_hops: usize,
+}
+
+/// Neighbor file information.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NeighborFileInfo {
+    /// File path.
+    pub path: String,
+    /// Distance in hops from focal file.
+    pub distance: usize,
+    /// Edge types connecting to focal file.
+    pub edge_types: Vec<String>,
+    /// Importance score.
+    pub importance: f32,
+}
+
+/// Cycle detection response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CyclesResponse {
+    /// Number of cycles found.
+    pub cycle_count: usize,
+    /// List of cycles (each cycle is a list of symbol IDs).
+    pub cycles: Vec<Vec<i64>>,
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5: Multi-Repository Support Types
+// ---------------------------------------------------------------------------
+
+/// Repository information.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepositoryInfo {
+    /// Repository path.
+    pub path: String,
+    /// Repository name (derived from path).
+    pub name: String,
+    /// Search priority (0.0 to 1.0).
+    pub priority: f32,
+    /// Number of files indexed.
+    pub files_indexed: usize,
+    /// Whether auto-indexing is enabled.
+    pub auto_index: bool,
+}
+
+/// Parameters for adding a repository.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AddRepoParams {
+    /// Repository path.
+    pub path: String,
+    /// Search priority (0.0 to 1.0).
+    #[serde(default = "default_priority")]
+    pub priority: f32,
+    /// Whether to auto-index on changes.
+    #[serde(default = "default_true")]
+    pub auto_index: bool,
+}
+
+fn default_priority() -> f32 {
+    0.5
+}
+
+/// Parameters for setting repository priority.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SetPriorityParams {
+    /// Repository path.
+    pub path: String,
+    /// New priority (0.0 to 1.0).
+    pub priority: f32,
+}
+
+/// Parameters for removing a repository.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoveRepoParams {
+    /// Repository path.
+    pub path: String,
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6: Performance Controls Types
+// ---------------------------------------------------------------------------
+
+/// Embedder metrics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EmbedderMetrics {
+    /// Quantization mode (fp32, fp16, int8).
+    pub quantization_mode: String,
+    /// Memory usage in MB.
+    pub memory_usage_mb: f64,
+    /// Memory savings percentage compared to fp32.
+    pub memory_savings_percent: f64,
+    /// Throughput in chunks per second.
+    pub throughput_chunks_per_sec: f64,
+    /// Batch fill rate (0.0 to 1.0).
+    pub batch_fill_rate: f64,
+    /// Current batch size.
+    pub batch_size: usize,
+    /// Batch timeout in milliseconds.
+    pub batch_timeout_ms: u64,
+}
+
+/// Parameters for configuring embedder.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConfigureEmbedderParams {
+    /// Quantization mode (fp32, fp16, int8).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quantization_mode: Option<String>,
+    /// Batch size.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub batch_size: Option<usize>,
+    /// Batch timeout in milliseconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub batch_timeout_ms: Option<u64>,
+}
+
+/// Index pool metrics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexPoolMetrics {
+    /// Number of active connections.
+    pub active_connections: usize,
+    /// Maximum pool size.
+    pub max_pool_size: usize,
+    /// Pool utilization percentage.
+    pub utilization_percent: f64,
+    /// Total queries executed.
+    pub total_queries: u64,
+    /// Average query time in milliseconds.
+    pub avg_query_time_ms: f64,
+}
+
+/// Compression statistics.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompressionStats {
+    /// Total bytes before compression.
+    pub bytes_before: u64,
+    /// Total bytes after compression.
+    pub bytes_after: u64,
+    /// Compression ratio.
+    pub compression_ratio: f64,
+    /// Compression savings percentage.
+    pub savings_percent: f64,
 }
