@@ -575,19 +575,20 @@ graph TB
 ## Competitive Advantages
 
 ```mermaid
-quadrantChart
-    title Code Search Solutions Comparison
-    x-axis Low Performance --> High Performance
-    y-axis Cloud Only --> Local First
-    quadrant-1 Ideal (Fast + Local)
-    quadrant-2 Fast but Cloud
-    quadrant-3 Slow + Cloud
-    quadrant-4 Slow but Local
-    OmniContext: [0.9, 0.9]
-    Sourcegraph: [0.7, 0.2]
-    GitHub Copilot: [0.6, 0.1]
-    grep/ripgrep: [0.5, 0.95]
-    OpenGrok: [0.4, 0.8]
+graph TD
+    subgraph "Code Search Solutions"
+        A[OmniContext<br/>Fast + Local]
+        B[Sourcegraph<br/>Fast + Cloud]
+        C[GitHub Copilot<br/>Cloud Only]
+        D[grep/ripgrep<br/>Local + Basic]
+        E[OpenGrok<br/>Local + Slow]
+    end
+    
+    style A fill:#10b981,stroke:#059669,color:#fff
+    style B fill:#3b82f6,stroke:#2563eb,color:#fff
+    style C fill:#6366f1,stroke:#4f46e5,color:#fff
+    style D fill:#8b5cf6,stroke:#7c3aed,color:#fff
+    style E fill:#ec4899,stroke:#db2777,color:#fff
 ```
 
 **Key Differentiators**:
