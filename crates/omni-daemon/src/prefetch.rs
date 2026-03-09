@@ -467,10 +467,7 @@ mod tests {
 
         // Add entries to verify new configuration
         for i in 1..=10 {
-            cache.put_file_context(
-                PathBuf::from(format!("file{}.rs", i)),
-                format!("context{}", i),
-            );
+            cache.put_file_context(PathBuf::from(format!("file{i}.rs")), format!("context{i}"));
         }
 
         // All 10 entries should fit in new capacity
@@ -492,10 +489,7 @@ mod tests {
 
         // Add 5 entries
         for i in 1..=5 {
-            cache.put_file_context(
-                PathBuf::from(format!("file{}.rs", i)),
-                format!("context{}", i),
-            );
+            cache.put_file_context(PathBuf::from(format!("file{i}.rs")), format!("context{i}"));
         }
 
         assert_eq!(cache.stats().size, 5);

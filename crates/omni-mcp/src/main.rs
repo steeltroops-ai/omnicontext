@@ -22,6 +22,18 @@
 //! omnicontext mcp --repo .
 //! ```
 
+// Suppress common test-helper lints that are intentional in unit tests
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::float_cmp,
+        clippy::field_reassign_with_default,
+        clippy::ignore_without_reason,
+    )
+)]
+
 mod tools;
 
 use anyhow::Result;

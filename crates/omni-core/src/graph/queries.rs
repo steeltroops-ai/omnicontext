@@ -332,7 +332,7 @@ mod tests {
 
         assert_eq!(context.focal_file, file_a);
         assert_eq!(context.max_hops, 2);
-        assert!(context.neighbors.len() >= 1);
+        assert!(!context.neighbors.is_empty());
     }
 
     #[test]
@@ -342,8 +342,7 @@ mod tests {
 
         let imports = engine.get_imports(&file_a).expect("get imports");
 
-        // file_a imports file_b
-        assert!(imports.len() >= 0);
+        assert!(!imports.is_empty());
     }
 
     #[test]
@@ -355,9 +354,8 @@ mod tests {
             .compute_blast_radius(&file_c, 3)
             .expect("compute blast radius");
 
-        // file_c is called by file_b, which is imported by file_a
         // So blast radius should include file_b (distance 1) and file_a (distance 2)
-        assert!(blast_radius.len() >= 0);
+        assert!(!blast_radius.is_empty());
     }
 
     #[test]

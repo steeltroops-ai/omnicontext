@@ -579,14 +579,14 @@ mod tests {
 
     #[test]
     fn test_ts_class() {
-        let src = r#"
+        let src = r"
 class UserService {
     constructor(private db: Database) {}
     getUser(id: string): User {
         return this.db.find(id);
     }
 }
-"#;
+";
         let elements = parse_ts(src);
         let class = elements.iter().find(|e| e.name == "UserService");
         assert!(class.is_some());
@@ -595,13 +595,13 @@ class UserService {
 
     #[test]
     fn test_ts_interface() {
-        let src = r#"
+        let src = r"
 interface User {
     id: string;
     name: string;
     email: string;
 }
-"#;
+";
         let elements = parse_ts(src);
         let iface = elements.iter().find(|e| e.name == "User");
         assert!(iface.is_some());

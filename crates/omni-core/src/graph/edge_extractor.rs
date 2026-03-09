@@ -548,7 +548,7 @@ mod tests {
     #[test]
     fn test_resolve_rust_import() {
         let mut resolver = ImportResolver::new();
-        let source = PathBuf::from("src/main.rs");
+        let _source = PathBuf::from("src/main.rs");
         let target = PathBuf::from("src/config.rs");
 
         resolver.register_file(target.clone(), "config".to_string());
@@ -561,7 +561,7 @@ mod tests {
     #[test]
     fn test_extract_inheritance_edges() {
         let mut extractor = EdgeExtractor::new();
-        let file_path = PathBuf::from("src/derived.py");
+        let _file_path = PathBuf::from("src/derived.py");
         let base_path = PathBuf::from("src/base.py");
 
         extractor.register_file(base_path.clone(), "Base".to_string());

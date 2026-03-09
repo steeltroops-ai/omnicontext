@@ -540,7 +540,7 @@ mod tests {
     fn test_sigmoid_range() {
         for x in [-100.0, -10.0, -1.0, 0.0, 1.0, 10.0, 100.0] {
             let s = sigmoid(x);
-            assert!(s >= 0.0 && s <= 1.0, "sigmoid({x}) = {s} out of [0,1]");
+            assert!((0.0..=1.0).contains(&s), "sigmoid({x}) = {s} out of [0,1]");
         }
     }
 
@@ -551,7 +551,7 @@ mod tests {
             1,
             "reranker model should have dimensions=1 (single score output)"
         );
-        assert_eq!(model_manager::RERANKER_MODEL.max_seq_length, 512);
+        assert_eq!(model_manager::RERANKER_MODEL.max_seq_length, 1024);
     }
 
     #[test]

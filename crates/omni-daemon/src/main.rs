@@ -32,6 +32,16 @@
     clippy::doc_markdown,
     clippy::unused_async
 )]
+// Suppress common test-helper lints that are intentional in unit tests
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::float_cmp,
+        clippy::field_reassign_with_default,
+        clippy::ignore_without_reason,
+    )
+)]
 
 mod backpressure;
 mod compression;

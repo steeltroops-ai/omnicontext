@@ -497,13 +497,13 @@ def hello(name):
 
     #[test]
     fn test_private_function() {
-        let src = r#"
+        let src = r"
 def _private_helper():
     pass
 
 def __mangled_name():
     pass
-"#;
+";
         let elements = parse_python(src);
         assert_eq!(elements.len(), 2);
 
@@ -557,7 +557,7 @@ class UserService:
 
     #[test]
     fn test_test_function_detection() {
-        let src = r#"
+        let src = r"
 def test_addition():
     assert 1 + 1 == 2
 
@@ -566,7 +566,7 @@ def test():
 
 def helper_function():
     pass
-"#;
+";
         let elements = parse_python(src);
 
         let test_add = elements.iter().find(|e| e.name == "test_addition");
@@ -601,14 +601,14 @@ def list_users():
 
     #[test]
     fn test_class_inheritance() {
-        let src = r#"
+        let src = r"
 class Dog(Animal):
     def bark(self):
         pass
 
 class ServiceError(ValueError, CustomMixin):
     pass
-"#;
+";
         let elements = parse_python(src);
 
         let dog = elements.iter().find(|e| e.name == "Dog");
@@ -623,12 +623,12 @@ class ServiceError(ValueError, CustomMixin):
 
     #[test]
     fn test_nested_class() {
-        let src = r#"
+        let src = r"
 class Outer:
     class Inner:
         def method(self):
             pass
-"#;
+";
         let elements = parse_python(src);
 
         let inner = elements.iter().find(|e| e.name == "Inner");

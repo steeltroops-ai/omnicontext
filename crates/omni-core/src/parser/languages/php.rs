@@ -296,7 +296,7 @@ mod tests {
 
     #[test]
     fn test_php_class() {
-        let code = r#"
+        let code = r"
 <?php
 class User {
     private $name;
@@ -309,7 +309,7 @@ class User {
         return $this->name;
     }
 }
-"#;
+";
         let analyzer = PhpAnalyzer;
         let mut parser = tree_sitter::Parser::new();
         parser

@@ -1,4 +1,5 @@
-//! Minimal benchmark suite for OmniContext core operations.
+//! Minimal benchmark suite for `OmniContext` core operations.
+#![allow(missing_docs)]
 //!
 //! Benchmarks critical paths that are easy to test:
 //! - Graph queries (in-memory, no dependencies)
@@ -18,7 +19,7 @@ fn bench_graph_queries(c: &mut Criterion) {
 
     // Build a sample graph with 100 files
     for i in 0..100 {
-        let file = PathBuf::from(format!("src/file_{}.rs", i));
+        let file = PathBuf::from(format!("src/file_{i}.rs"));
         let _ = graph.add_file(file.clone(), "rust".to_string());
 
         // Add some edges
@@ -36,12 +37,13 @@ fn bench_graph_queries(c: &mut Criterion) {
 
     let focal_file = PathBuf::from("src/file_50.rs");
 
-    for hops in [1, 2, 3].iter() {
+    for hops in &[1, 2, 3] {
         group.bench_with_input(
-            BenchmarkId::from_parameter(format!("{}_hops", hops)),
+            BenchmarkId::from_parameter(format!("{hops}_hops")),
             hops,
             |b, hops| {
                 b.iter(|| {
+                    #[allow(clippy::unwrap_used)]
                     let neighbors = graph
                         .get_neighbors(black_box(&focal_file), black_box(*hops))
                         .unwrap();

@@ -3,6 +3,15 @@
 //! Measures MRR, NDCG, Recall@K, and Precision@K against expected results.
 //!
 //! Run with: cargo test --test search_quality_bench -- --nocapture --ignored
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::cast_precision_loss,
+    clippy::float_cmp,
+    clippy::ignore_without_reason,
+    clippy::doc_markdown,
+    clippy::ptr_arg
+)]
 
 use omni_core::config::Config;
 use omni_core::Engine;
@@ -73,13 +82,12 @@ struct BenchmarkResults {
 /// Run search quality benchmarks.
 ///
 /// This test is marked as #[ignore] because it requires a fully indexed repository.
-/// Run with: cargo test --test search_quality_bench -- --nocapture --ignored
+/// Run with: cargo test --test `search_quality_bench` -- --nocapture --ignored
 #[test]
-#[ignore]
+#[ignore = "requires a fully indexed repository to run"]
 fn benchmark_search_quality() {
-    let repo_path = std::env::var("OMNI_TEST_REPO")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."));
+    let repo_path =
+        std::env::var("OMNI_TEST_REPO").map_or_else(|_| PathBuf::from("."), PathBuf::from);
 
     println!(
         "Running search quality benchmarks on: {}",
@@ -262,7 +270,7 @@ fn calculate_ndcg(results: &[String], relevance_map: &HashMap<String, u32>, k: u
     let mut dcg = 0.0;
     for (i, symbol) in results.iter().take(k).enumerate() {
         let rel = relevance_map.get(symbol).copied().unwrap_or(0);
-        let gain = (2_u32.pow(rel) - 1) as f64;
+        let gain = f64::from(2_u32.pow(rel) - 1);
         let discount = (2.0 + i as f64).log2();
         dcg += gain / discount;
     }
@@ -273,7 +281,7 @@ fn calculate_ndcg(results: &[String], relevance_map: &HashMap<String, u32>, k: u
 
     let mut idcg = 0.0;
     for (i, &rel) in ideal_rels.iter().take(k).enumerate() {
-        let gain = (2_u32.pow(rel) - 1) as f64;
+        let gain = f64::from(2_u32.pow(rel) - 1);
         let discount = (2.0 + i as f64).log2();
         idcg += gain / discount;
     }
@@ -320,6 +328,19 @@ fn calculate_precision(results: &[String], relevance_map: &HashMap<String, u32>,
     }
 
     found as f64 / k as f64
+}
+
+fn print_target_status(metric: &str, actual: f64, target: f64) {
+    let status = if actual >= target {
+        "✅ PASS"
+    } else if actual >= target * 0.8 {
+        "⚠️  WARN"
+    } else {
+        "❌ FAIL"
+    };
+
+    let percentage = (actual / target * 100.0).min(100.0);
+    println!("{metric:12} {actual:.4} / {target:.4} ({percentage:5.1}%) {status}");
 }
 
 #[cfg(test)]
@@ -398,20 +419,4 @@ mod tests {
         let precision = calculate_precision(&results, &relevance, 2);
         assert!((precision - 0.5).abs() < 1e-6);
     }
-}
-
-fn print_target_status(metric: &str, actual: f64, target: f64) {
-    let status = if actual >= target {
-        "✅ PASS"
-    } else if actual >= target * 0.8 {
-        "⚠️  WARN"
-    } else {
-        "❌ FAIL"
-    };
-
-    let percentage = (actual / target * 100.0).min(100.0);
-    println!(
-        "{:12} {:.4} / {:.4} ({:5.1}%) {}",
-        metric, actual, target, percentage, status
-    );
 }

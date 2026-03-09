@@ -1573,385 +1573,6 @@ async fn handle_find_cycles(
     }))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use omni_core::Engine;
-    use std::path::PathBuf;
-    use std::time::Duration;
-
-    fn create_test_engine() -> Engine {
-        std::env::set_var("OMNI_SKIP_MODEL_DOWNLOAD", "1");
-        std::env::set_var("OMNI_DISABLE_RERANKER", "1");
-        let temp_dir = std::env::temp_dir().join(format!(
-            "omni-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&temp_dir).unwrap();
-
-        // Create a minimal test file
-        let test_file = temp_dir.join("test.rs");
-        std::fs::write(&test_file, "fn main() { println!(\"Hello\"); }").unwrap();
-
-        Engine::new(&temp_dir).unwrap()
-    }
-
-    #[tokio::test]
-    async fn test_preflight_cache_miss() {
-        let engine = Arc::new(Mutex::new(create_test_engine()));
-        let cache = Arc::new(crate::prefetch::PrefetchCache::default());
-
-        let params = protocol::PreflightParams {
-            prompt: "test query".to_string(),
-            active_file: Some("/path/to/test.rs".to_string()),
-            cursor_line: Some(10),
-            open_files: vec![],
-            intent: Some("edit".to_string()),
-            token_budget: 4000,
-        };
-
-        let start = std::time::Instant::now();
-        let result = handle_preflight(engine.clone(), cache.clone(), params, start).await;
-
-        assert!(result.is_ok());
-        let value = result.unwrap();
-
-        // Verify response structure
-        assert!(value.get("system_context").is_some());
-        assert!(value.get("from_cache").is_some());
-        assert_eq!(value.get("from_cache").unwrap().as_bool().unwrap(), false);
-
-        // Verify cache stats show a miss (from the get attempt)
-        let stats = cache.stats();
-        assert_eq!(stats.misses, 1);
-        assert_eq!(stats.hits, 0);
-    }
-
-    #[tokio::test]
-    async fn test_preflight_cache_hit() {
-        let engine = Arc::new(Mutex::new(create_test_engine()));
-        let cache = Arc::new(crate::prefetch::PrefetchCache::default());
-
-        let params = protocol::PreflightParams {
-            prompt: "test query".to_string(),
-            active_file: Some("/path/to/test.rs".to_string()),
-            cursor_line: Some(10),
-            open_files: vec![],
-            intent: Some("edit".to_string()),
-            token_budget: 4000,
-        };
-
-        // First request: cache miss, stores result
-        let start1 = std::time::Instant::now();
-        let result1 = handle_preflight(engine.clone(), cache.clone(), params.clone(), start1).await;
-        assert!(result1.is_ok());
-
-        let value1 = result1.unwrap();
-        assert_eq!(value1.get("from_cache").unwrap().as_bool().unwrap(), false);
-
-        // Second request: cache hit
-        let start2 = std::time::Instant::now();
-        let result2 = handle_preflight(engine.clone(), cache.clone(), params, start2).await;
-        assert!(result2.is_ok());
-
-        let value2 = result2.unwrap();
-        assert_eq!(value2.get("from_cache").unwrap().as_bool().unwrap(), true);
-
-        // Verify cache stats
-        let stats = cache.stats();
-        assert_eq!(stats.hits, 1);
-        assert_eq!(stats.misses, 1); // One miss from first request
-        assert_eq!(stats.hit_rate, 0.5); // 1 hit out of 2 total accesses
-    }
-
-    #[tokio::test]
-    async fn test_preflight_no_active_file() {
-        let engine = Arc::new(Mutex::new(create_test_engine()));
-        let cache = Arc::new(crate::prefetch::PrefetchCache::default());
-
-        let params = protocol::PreflightParams {
-            prompt: "test query".to_string(),
-            active_file: None, // No active file
-            cursor_line: None,
-            open_files: vec![],
-            intent: Some("explain".to_string()),
-            token_budget: 4000,
-        };
-
-        let start = std::time::Instant::now();
-        let result = handle_preflight(engine.clone(), cache.clone(), params, start).await;
-
-        assert!(result.is_ok());
-        let value = result.unwrap();
-
-        // Should always be from_cache: false when no active_file
-        assert_eq!(value.get("from_cache").unwrap().as_bool().unwrap(), false);
-
-        // Cache should not be accessed
-        let stats = cache.stats();
-        assert_eq!(stats.hits, 0);
-        assert_eq!(stats.misses, 0);
-    }
-
-    #[tokio::test]
-    async fn test_preflight_cache_expiry() {
-        let engine = Arc::new(Mutex::new(create_test_engine()));
-        // Create cache with very short TTL (10ms)
-        let cache = Arc::new(crate::prefetch::PrefetchCache::new(
-            100,
-            Duration::from_millis(10),
-        ));
-
-        let params = protocol::PreflightParams {
-            prompt: "test query".to_string(),
-            active_file: Some("/path/to/test.rs".to_string()),
-            cursor_line: Some(10),
-            open_files: vec![],
-            intent: Some("edit".to_string()),
-            token_budget: 4000,
-        };
-
-        // First request: cache miss, stores result
-        let start1 = std::time::Instant::now();
-        let result1 = handle_preflight(engine.clone(), cache.clone(), params.clone(), start1).await;
-        assert!(result1.is_ok());
-
-        // Wait for cache to expire
-        std::thread::sleep(Duration::from_millis(20));
-
-        // Second request: cache miss due to expiry
-        let start2 = std::time::Instant::now();
-        let result2 = handle_preflight(engine.clone(), cache.clone(), params, start2).await;
-        assert!(result2.is_ok());
-
-        let value2 = result2.unwrap();
-        assert_eq!(value2.get("from_cache").unwrap().as_bool().unwrap(), false);
-
-        // Both requests should be cache misses
-        let stats = cache.stats();
-        assert_eq!(stats.hits, 0);
-        assert_eq!(stats.misses, 2);
-    }
-
-    #[tokio::test]
-    async fn test_preflight_different_files() {
-        let engine = Arc::new(Mutex::new(create_test_engine()));
-        let cache = Arc::new(crate::prefetch::PrefetchCache::default());
-
-        let params1 = protocol::PreflightParams {
-            prompt: "test query".to_string(),
-            active_file: Some("/path/to/file1.rs".to_string()),
-            cursor_line: Some(10),
-            open_files: vec![],
-            intent: Some("edit".to_string()),
-            token_budget: 4000,
-        };
-
-        let params2 = protocol::PreflightParams {
-            prompt: "test query".to_string(),
-            active_file: Some("/path/to/file2.rs".to_string()),
-            cursor_line: Some(20),
-            open_files: vec![],
-            intent: Some("edit".to_string()),
-            token_budget: 4000,
-        };
-
-        // Request for file1
-        let start1 = std::time::Instant::now();
-        let result1 =
-            handle_preflight(engine.clone(), cache.clone(), params1.clone(), start1).await;
-        assert!(result1.is_ok());
-
-        // Request for file2 (different file, should be cache miss)
-        let start2 = std::time::Instant::now();
-        let result2 = handle_preflight(engine.clone(), cache.clone(), params2, start2).await;
-        assert!(result2.is_ok());
-
-        let value2 = result2.unwrap();
-        assert_eq!(value2.get("from_cache").unwrap().as_bool().unwrap(), false);
-
-        // Request for file1 again (should be cache hit)
-        let start3 = std::time::Instant::now();
-        let result3 = handle_preflight(engine.clone(), cache.clone(), params1, start3).await;
-        assert!(result3.is_ok());
-
-        let value3 = result3.unwrap();
-        assert_eq!(value3.get("from_cache").unwrap().as_bool().unwrap(), true);
-
-        // Verify cache stats: 1 hit, 2 misses
-        let stats = cache.stats();
-        assert_eq!(stats.hits, 1);
-        assert_eq!(stats.misses, 2);
-    }
-
-    #[tokio::test]
-    async fn test_clear_cache_handler() {
-        let cache = Arc::new(crate::prefetch::PrefetchCache::default());
-
-        // Add some entries to cache
-        cache.put_file_context(PathBuf::from("test1.rs"), "context1".to_string());
-        cache.put_file_context(PathBuf::from("test2.rs"), "context2".to_string());
-
-        // Generate some stats
-        cache.get_file_context(&PathBuf::from("test1.rs")); // hit
-        cache.get_file_context(&PathBuf::from("nonexistent.rs")); // miss
-
-        let stats_before = cache.stats();
-        assert_eq!(stats_before.size, 2);
-        assert!(stats_before.hits > 0);
-        assert!(stats_before.misses > 0);
-
-        // Clear cache
-        let result = handle_clear_cache(cache.clone()).await;
-        assert!(result.is_ok());
-
-        let value = result.unwrap();
-        assert_eq!(value.get("cleared").unwrap().as_bool().unwrap(), true);
-
-        // Verify cache is empty and stats are reset
-        let stats_after = cache.stats();
-        assert_eq!(stats_after.size, 0);
-        assert_eq!(stats_after.hits, 0);
-        assert_eq!(stats_after.misses, 0);
-    }
-
-    #[tokio::test]
-    async fn test_prefetch_stats_handler() {
-        let cache = Arc::new(crate::prefetch::PrefetchCache::default());
-
-        // Add entries and generate stats
-        cache.put_file_context(PathBuf::from("test.rs"), "context".to_string());
-        cache.get_file_context(&PathBuf::from("test.rs")); // hit
-        cache.get_file_context(&PathBuf::from("other.rs")); // miss
-
-        let result = handle_prefetch_stats(cache.clone()).await;
-        assert!(result.is_ok());
-
-        let value = result.unwrap();
-        assert_eq!(value.get("hits").unwrap().as_u64().unwrap(), 1);
-        assert_eq!(value.get("misses").unwrap().as_u64().unwrap(), 1);
-        assert_eq!(value.get("size").unwrap().as_u64().unwrap(), 1);
-        assert_eq!(value.get("hit_rate").unwrap().as_f64().unwrap(), 0.5);
-    }
-
-    #[tokio::test]
-    async fn test_update_config_handler() {
-        let cache = Arc::new(crate::prefetch::PrefetchCache::default());
-
-        // Add some entries to cache
-        cache.put_file_context(PathBuf::from("test1.rs"), "context1".to_string());
-        cache.put_file_context(PathBuf::from("test2.rs"), "context2".to_string());
-
-        let stats_before = cache.stats();
-        assert_eq!(stats_before.size, 2);
-
-        // Update cache configuration
-        let params = protocol::UpdateConfigParams {
-            cache_size: Some(50),
-            cache_ttl_seconds: Some(600),
-        };
-
-        let result = handle_update_config(cache.clone(), params).await;
-        assert!(result.is_ok());
-
-        let value = result.unwrap();
-        assert_eq!(value.get("updated").unwrap().as_bool().unwrap(), true);
-        assert_eq!(value.get("cache_size").unwrap().as_u64().unwrap(), 50);
-        assert_eq!(
-            value.get("cache_ttl_seconds").unwrap().as_u64().unwrap(),
-            600
-        );
-
-        // Verify existing entries are still present
-        let stats_after = cache.stats();
-        assert_eq!(stats_after.size, 2);
-        assert!(cache.get_file_context(&PathBuf::from("test1.rs")).is_some());
-        assert!(cache.get_file_context(&PathBuf::from("test2.rs")).is_some());
-    }
-
-    #[tokio::test]
-    async fn test_update_config_partial() {
-        let cache = Arc::new(crate::prefetch::PrefetchCache::default());
-
-        // Update only cache size
-        let params1 = protocol::UpdateConfigParams {
-            cache_size: Some(75),
-            cache_ttl_seconds: None,
-        };
-
-        let result1 = handle_update_config(cache.clone(), params1).await;
-        assert!(result1.is_ok());
-
-        let value1 = result1.unwrap();
-        assert_eq!(value1.get("updated").unwrap().as_bool().unwrap(), true);
-
-        // Update only TTL
-        let params2 = protocol::UpdateConfigParams {
-            cache_size: None,
-            cache_ttl_seconds: Some(900),
-        };
-
-        let result2 = handle_update_config(cache.clone(), params2).await;
-        assert!(result2.is_ok());
-
-        let value2 = result2.unwrap();
-        assert_eq!(value2.get("updated").unwrap().as_bool().unwrap(), true);
-    }
-
-    #[tokio::test]
-    async fn test_update_config_no_changes() {
-        let cache = Arc::new(crate::prefetch::PrefetchCache::default());
-
-        // Update with no parameters
-        let params = protocol::UpdateConfigParams {
-            cache_size: None,
-            cache_ttl_seconds: None,
-        };
-
-        let result = handle_update_config(cache.clone(), params).await;
-        assert!(result.is_ok());
-
-        let value = result.unwrap();
-        assert_eq!(value.get("updated").unwrap().as_bool().unwrap(), false);
-    }
-
-    #[tokio::test]
-    async fn test_update_config_capacity_reduction() {
-        let cache = Arc::new(crate::prefetch::PrefetchCache::new(
-            100,
-            Duration::from_secs(300),
-        ));
-
-        // Add 5 entries
-        for i in 1..=5 {
-            cache.put_file_context(
-                PathBuf::from(format!("test{}.rs", i)),
-                format!("context{}", i),
-            );
-        }
-
-        let stats_before = cache.stats();
-        assert_eq!(stats_before.size, 5);
-
-        // Reduce capacity to 3
-        let params = protocol::UpdateConfigParams {
-            cache_size: Some(3),
-            cache_ttl_seconds: None,
-        };
-
-        let result = handle_update_config(cache.clone(), params).await;
-        assert!(result.is_ok());
-
-        // Verify only 3 entries remain (most recent ones)
-        let stats_after = cache.stats();
-        assert_eq!(stats_after.size, 3);
-    }
-}
-
 // Phase 5: Multi-Repository Support Handlers
 // ---------------------------------------------------------------------------
 
@@ -2063,4 +1684,380 @@ async fn handle_compression_stats(
         "compression_ratio": 1.0,
         "savings_percent": 0.0
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use omni_core::Engine;
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    fn create_test_engine() -> Engine {
+        std::env::set_var("OMNI_SKIP_MODEL_DOWNLOAD", "1");
+        std::env::set_var("OMNI_DISABLE_RERANKER", "1");
+        let temp_dir = std::env::temp_dir().join(format!(
+            "omni-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+
+        // Create a minimal test file
+        let test_file = temp_dir.join("test.rs");
+        std::fs::write(&test_file, "fn main() { println!(\"Hello\"); }").unwrap();
+
+        Engine::new(&temp_dir).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_preflight_cache_miss() {
+        let engine = Arc::new(Mutex::new(create_test_engine()));
+        let cache = Arc::new(crate::prefetch::PrefetchCache::default());
+
+        let params = protocol::PreflightParams {
+            prompt: "test query".to_string(),
+            active_file: Some("/path/to/test.rs".to_string()),
+            cursor_line: Some(10),
+            open_files: vec![],
+            intent: Some("edit".to_string()),
+            token_budget: 4000,
+        };
+
+        let start = std::time::Instant::now();
+        let result = handle_preflight(engine.clone(), cache.clone(), params, start).await;
+
+        assert!(result.is_ok());
+        let value = result.unwrap();
+
+        // Verify response structure
+        assert!(value.get("system_context").is_some());
+        assert!(value.get("from_cache").is_some());
+        assert!(!value.get("from_cache").unwrap().as_bool().unwrap());
+
+        // Verify cache stats show a miss (from the get attempt)
+        let stats = cache.stats();
+        assert_eq!(stats.misses, 1);
+        assert_eq!(stats.hits, 0);
+    }
+
+    #[tokio::test]
+    async fn test_preflight_cache_hit() {
+        let engine = Arc::new(Mutex::new(create_test_engine()));
+        let cache = Arc::new(crate::prefetch::PrefetchCache::default());
+
+        let params = protocol::PreflightParams {
+            prompt: "test query".to_string(),
+            active_file: Some("/path/to/test.rs".to_string()),
+            cursor_line: Some(10),
+            open_files: vec![],
+            intent: Some("edit".to_string()),
+            token_budget: 4000,
+        };
+
+        // First request: cache miss, stores result
+        let start1 = std::time::Instant::now();
+        let result1 = handle_preflight(engine.clone(), cache.clone(), params.clone(), start1).await;
+        assert!(result1.is_ok());
+
+        let value1 = result1.unwrap();
+        assert!(!value1.get("from_cache").unwrap().as_bool().unwrap());
+
+        // Second request: cache hit
+        let start2 = std::time::Instant::now();
+        let result2 = handle_preflight(engine.clone(), cache.clone(), params, start2).await;
+        assert!(result2.is_ok());
+
+        let value2 = result2.unwrap();
+        assert!(value2.get("from_cache").unwrap().as_bool().unwrap());
+
+        // Verify cache stats
+        let stats = cache.stats();
+        assert_eq!(stats.hits, 1);
+        assert_eq!(stats.misses, 1); // One miss from first request
+        assert_eq!(stats.hit_rate, 0.5); // 1 hit out of 2 total accesses
+    }
+
+    #[tokio::test]
+    async fn test_preflight_no_active_file() {
+        let engine = Arc::new(Mutex::new(create_test_engine()));
+        let cache = Arc::new(crate::prefetch::PrefetchCache::default());
+
+        let params = protocol::PreflightParams {
+            prompt: "test query".to_string(),
+            active_file: None, // No active file
+            cursor_line: None,
+            open_files: vec![],
+            intent: Some("explain".to_string()),
+            token_budget: 4000,
+        };
+
+        let start = std::time::Instant::now();
+        let result = handle_preflight(engine.clone(), cache.clone(), params, start).await;
+
+        assert!(result.is_ok());
+        let value = result.unwrap();
+
+        // Should always be from_cache: false when no active_file
+        assert!(!value.get("from_cache").unwrap().as_bool().unwrap());
+
+        // Cache should not be accessed
+        let stats = cache.stats();
+        assert_eq!(stats.hits, 0);
+        assert_eq!(stats.misses, 0);
+    }
+
+    #[tokio::test]
+    async fn test_preflight_cache_expiry() {
+        let engine = Arc::new(Mutex::new(create_test_engine()));
+        // Create cache with very short TTL (10ms)
+        let cache = Arc::new(crate::prefetch::PrefetchCache::new(
+            100,
+            Duration::from_millis(10),
+        ));
+
+        let params = protocol::PreflightParams {
+            prompt: "test query".to_string(),
+            active_file: Some("/path/to/test.rs".to_string()),
+            cursor_line: Some(10),
+            open_files: vec![],
+            intent: Some("edit".to_string()),
+            token_budget: 4000,
+        };
+
+        // First request: cache miss, stores result
+        let start1 = std::time::Instant::now();
+        let result1 = handle_preflight(engine.clone(), cache.clone(), params.clone(), start1).await;
+        assert!(result1.is_ok());
+
+        // Wait for cache to expire
+        std::thread::sleep(Duration::from_millis(20));
+
+        // Second request: cache miss due to expiry
+        let start2 = std::time::Instant::now();
+        let result2 = handle_preflight(engine.clone(), cache.clone(), params, start2).await;
+        assert!(result2.is_ok());
+
+        let value2 = result2.unwrap();
+        assert!(!value2.get("from_cache").unwrap().as_bool().unwrap());
+
+        // Both requests should be cache misses
+        let stats = cache.stats();
+        assert_eq!(stats.hits, 0);
+        assert_eq!(stats.misses, 2);
+    }
+
+    #[tokio::test]
+    async fn test_preflight_different_files() {
+        let engine = Arc::new(Mutex::new(create_test_engine()));
+        let cache = Arc::new(crate::prefetch::PrefetchCache::default());
+
+        let params1 = protocol::PreflightParams {
+            prompt: "test query".to_string(),
+            active_file: Some("/path/to/file1.rs".to_string()),
+            cursor_line: Some(10),
+            open_files: vec![],
+            intent: Some("edit".to_string()),
+            token_budget: 4000,
+        };
+
+        let params2 = protocol::PreflightParams {
+            prompt: "test query".to_string(),
+            active_file: Some("/path/to/file2.rs".to_string()),
+            cursor_line: Some(20),
+            open_files: vec![],
+            intent: Some("edit".to_string()),
+            token_budget: 4000,
+        };
+
+        // Request for file1
+        let start1 = std::time::Instant::now();
+        let result1 =
+            handle_preflight(engine.clone(), cache.clone(), params1.clone(), start1).await;
+        assert!(result1.is_ok());
+
+        // Request for file2 (different file, should be cache miss)
+        let start2 = std::time::Instant::now();
+        let result2 = handle_preflight(engine.clone(), cache.clone(), params2, start2).await;
+        assert!(result2.is_ok());
+
+        let value2 = result2.unwrap();
+        assert!(!value2.get("from_cache").unwrap().as_bool().unwrap());
+
+        // Request for file1 again (should be cache hit)
+        let start3 = std::time::Instant::now();
+        let result3 = handle_preflight(engine.clone(), cache.clone(), params1, start3).await;
+        assert!(result3.is_ok());
+
+        let value3 = result3.unwrap();
+        assert!(value3.get("from_cache").unwrap().as_bool().unwrap());
+
+        // Verify cache stats: 1 hit, 2 misses
+        let stats = cache.stats();
+        assert_eq!(stats.hits, 1);
+        assert_eq!(stats.misses, 2);
+    }
+
+    #[tokio::test]
+    async fn test_clear_cache_handler() {
+        let cache = Arc::new(crate::prefetch::PrefetchCache::default());
+
+        // Add some entries to cache
+        cache.put_file_context(PathBuf::from("test1.rs"), "context1".to_string());
+        cache.put_file_context(PathBuf::from("test2.rs"), "context2".to_string());
+
+        // Generate some stats
+        cache.get_file_context(&PathBuf::from("test1.rs")); // hit
+        cache.get_file_context(&PathBuf::from("nonexistent.rs")); // miss
+
+        let stats_before = cache.stats();
+        assert_eq!(stats_before.size, 2);
+        assert!(stats_before.hits > 0);
+        assert!(stats_before.misses > 0);
+
+        // Clear cache
+        let result = handle_clear_cache(cache.clone()).await;
+        assert!(result.is_ok());
+
+        let value = result.unwrap();
+        assert!(value.get("cleared").unwrap().as_bool().unwrap());
+
+        // Verify cache is empty and stats are reset
+        let stats_after = cache.stats();
+        assert_eq!(stats_after.size, 0);
+        assert_eq!(stats_after.hits, 0);
+        assert_eq!(stats_after.misses, 0);
+    }
+
+    #[tokio::test]
+    async fn test_prefetch_stats_handler() {
+        let cache = Arc::new(crate::prefetch::PrefetchCache::default());
+
+        // Add entries and generate stats
+        cache.put_file_context(PathBuf::from("test.rs"), "context".to_string());
+        cache.get_file_context(&PathBuf::from("test.rs")); // hit
+        cache.get_file_context(&PathBuf::from("other.rs")); // miss
+
+        let result = handle_prefetch_stats(cache.clone()).await;
+        assert!(result.is_ok());
+
+        let value = result.unwrap();
+        assert_eq!(value.get("hits").unwrap().as_u64().unwrap(), 1);
+        assert_eq!(value.get("misses").unwrap().as_u64().unwrap(), 1);
+        assert_eq!(value.get("size").unwrap().as_u64().unwrap(), 1);
+        assert_eq!(value.get("hit_rate").unwrap().as_f64().unwrap(), 0.5);
+    }
+
+    #[tokio::test]
+    async fn test_update_config_handler() {
+        let cache = Arc::new(crate::prefetch::PrefetchCache::default());
+
+        // Add some entries to cache
+        cache.put_file_context(PathBuf::from("test1.rs"), "context1".to_string());
+        cache.put_file_context(PathBuf::from("test2.rs"), "context2".to_string());
+
+        let stats_before = cache.stats();
+        assert_eq!(stats_before.size, 2);
+
+        // Update cache configuration
+        let params = protocol::UpdateConfigParams {
+            cache_size: Some(50),
+            cache_ttl_seconds: Some(600),
+        };
+
+        let result = handle_update_config(cache.clone(), params).await;
+        assert!(result.is_ok());
+
+        let value = result.unwrap();
+        assert!(value.get("updated").unwrap().as_bool().unwrap());
+        assert_eq!(value.get("cache_size").unwrap().as_u64().unwrap(), 50);
+        assert_eq!(
+            value.get("cache_ttl_seconds").unwrap().as_u64().unwrap(),
+            600
+        );
+
+        // Verify existing entries are still present
+        let stats_after = cache.stats();
+        assert_eq!(stats_after.size, 2);
+        assert!(cache.get_file_context(&PathBuf::from("test1.rs")).is_some());
+        assert!(cache.get_file_context(&PathBuf::from("test2.rs")).is_some());
+    }
+
+    #[tokio::test]
+    async fn test_update_config_partial() {
+        let cache = Arc::new(crate::prefetch::PrefetchCache::default());
+
+        // Update only cache size
+        let params1 = protocol::UpdateConfigParams {
+            cache_size: Some(75),
+            cache_ttl_seconds: None,
+        };
+
+        let result1 = handle_update_config(cache.clone(), params1).await;
+        assert!(result1.is_ok());
+
+        let value1 = result1.unwrap();
+        assert!(value1.get("updated").unwrap().as_bool().unwrap());
+
+        // Update only TTL
+        let params2 = protocol::UpdateConfigParams {
+            cache_size: None,
+            cache_ttl_seconds: Some(900),
+        };
+
+        let result2 = handle_update_config(cache.clone(), params2).await;
+        assert!(result2.is_ok());
+
+        let value2 = result2.unwrap();
+        assert!(value2.get("updated").unwrap().as_bool().unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_update_config_no_changes() {
+        let cache = Arc::new(crate::prefetch::PrefetchCache::default());
+
+        // Update with no parameters
+        let params = protocol::UpdateConfigParams {
+            cache_size: None,
+            cache_ttl_seconds: None,
+        };
+
+        let result = handle_update_config(cache.clone(), params).await;
+        assert!(result.is_ok());
+
+        let value = result.unwrap();
+        assert!(!value.get("updated").unwrap().as_bool().unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_update_config_capacity_reduction() {
+        let cache = Arc::new(crate::prefetch::PrefetchCache::new(
+            100,
+            Duration::from_secs(300),
+        ));
+
+        // Add 5 entries
+        for i in 1..=5 {
+            cache.put_file_context(PathBuf::from(format!("test{i}.rs")), format!("context{i}"));
+        }
+
+        let stats_before = cache.stats();
+        assert_eq!(stats_before.size, 5);
+
+        // Reduce capacity to 3
+        let params = protocol::UpdateConfigParams {
+            cache_size: Some(3),
+            cache_ttl_seconds: None,
+        };
+
+        let result = handle_update_config(cache.clone(), params).await;
+        assert!(result.is_ok());
+
+        // Verify only 3 entries remain (most recent ones)
+        let stats_after = cache.stats();
+        assert_eq!(stats_after.size, 3);
+    }
 }

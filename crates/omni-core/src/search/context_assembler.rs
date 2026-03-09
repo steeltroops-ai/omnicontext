@@ -379,7 +379,7 @@ impl ContextAssembler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{ChunkKind, Visibility};
+    use crate::types::{ChunkKind, ScoreBreakdown, Visibility};
 
     fn make_test_chunk(content: &str, token_count: u32) -> Chunk {
         Chunk {
@@ -404,7 +404,7 @@ mod tests {
             chunk,
             file_path: PathBuf::from("test.rs"),
             score,
-            score_breakdown: Default::default(),
+            score_breakdown: ScoreBreakdown::default(),
         }
     }
 
@@ -473,7 +473,7 @@ mod tests {
 
         // With compression, we might fit both chunks (second one compressed)
         // The important thing is we don't exceed the budget
-        assert!(context.entries.len() >= 1);
+        assert!(!context.entries.is_empty());
         assert!(context.entries.len() <= 2);
         assert!(context.total_tokens <= 150);
     }

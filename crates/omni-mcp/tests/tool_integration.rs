@@ -1,12 +1,18 @@
 //! Integration tests for MCP tool handlers.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::float_cmp,
+    clippy::ignore_without_reason
+)]
 //!
 //! These tests create a real Engine backed by a tempdir, index test files,
 //! and then exercise each MCP tool to verify correct behavior.
 //!
-//! Uses multi_thread flavor because Engine internally uses blocking I/O
-//! (SQLite, file I/O) that must not run on the async executor.
+//! Uses `multi_thread` flavor because Engine internally uses blocking I/O
+//! (`SQLite`, file I/O) that must not run on the async executor.
 //!
-//! OMNI_SKIP_MODEL_DOWNLOAD is set to prevent the 550MB model download
+//! `OMNI_SKIP_MODEL_DOWNLOAD` is set to prevent the 550MB model download
 //! during tests. The engine operates in keyword-only mode.
 
 use omni_core::Engine;
@@ -26,7 +32,7 @@ fn init() {
 
 /// Create a test engine with some sample files in a tempdir.
 /// Engine creation must happen on a blocking thread because it
-/// internally initializes SQLite and other blocking resources.
+/// internally initializes `SQLite` and other blocking resources.
 async fn create_test_engine() -> (Engine, TempDir) {
     init();
     let dir = TempDir::new().expect("create temp dir");

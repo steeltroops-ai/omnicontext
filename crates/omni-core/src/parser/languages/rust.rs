@@ -551,11 +551,11 @@ fn hello(name: &str) -> String {
 
     #[test]
     fn test_pub_function() {
-        let src = r#"
+        let src = r"
 pub fn public_api(x: i32) -> i32 {
     x * 2
 }
-"#;
+";
         let elements = parse_rust(src);
         let func = elements.iter().find(|e| e.name == "public_api");
         assert!(func.is_some());
@@ -564,9 +564,9 @@ pub fn public_api(x: i32) -> i32 {
 
     #[test]
     fn test_pub_crate_visibility() {
-        let src = r#"
+        let src = r"
 pub(crate) fn internal_fn() {}
-"#;
+";
         let elements = parse_rust(src);
         let func = elements.iter().find(|e| e.name == "internal_fn");
         assert!(func.is_some());
@@ -575,13 +575,13 @@ pub(crate) fn internal_fn() {}
 
     #[test]
     fn test_struct() {
-        let src = r#"
+        let src = r"
 /// A configuration object.
 pub struct Config {
     pub name: String,
     port: u16,
 }
-"#;
+";
         let elements = parse_rust(src);
         let s = elements.iter().find(|e| e.name == "Config");
         assert!(s.is_some());
@@ -593,13 +593,13 @@ pub struct Config {
 
     #[test]
     fn test_enum() {
-        let src = r#"
+        let src = r"
 pub enum Color {
     Red,
     Green,
     Blue,
 }
-"#;
+";
         let elements = parse_rust(src);
         let e = elements.iter().find(|e| e.name == "Color");
         assert!(e.is_some());
@@ -608,12 +608,12 @@ pub enum Color {
 
     #[test]
     fn test_trait() {
-        let src = r#"
+        let src = r"
 pub trait Drawable {
     fn draw(&self);
     fn area(&self) -> f64;
 }
-"#;
+";
         let elements = parse_rust(src);
         let t = elements.iter().find(|e| e.name == "Drawable");
         assert!(t.is_some());
@@ -622,7 +622,7 @@ pub trait Drawable {
 
     #[test]
     fn test_impl_block() {
-        let src = r#"
+        let src = r"
 impl Config {
     pub fn new() -> Self {
         Config { name: String::new(), port: 8080 }
@@ -632,7 +632,7 @@ impl Config {
         true
     }
 }
-"#;
+";
         let elements = parse_rust(src);
 
         let imp = elements.iter().find(|e| e.name == "impl Config");
@@ -670,12 +670,12 @@ impl Display for Config {
 
     #[test]
     fn test_test_function() {
-        let src = r#"
+        let src = r"
 #[test]
 fn test_addition() {
     assert_eq!(1 + 1, 2);
 }
-"#;
+";
         let elements = parse_rust(src);
         let test = elements.iter().find(|e| e.name == "test_addition");
         assert!(test.is_some());
@@ -684,10 +684,10 @@ fn test_addition() {
 
     #[test]
     fn test_const_and_static() {
-        let src = r#"
+        let src = r"
 pub const MAX_SIZE: usize = 1024;
 static COUNTER: AtomicU64 = AtomicU64::new(0);
-"#;
+";
         let elements = parse_rust(src);
 
         let c = elements.iter().find(|e| e.name == "MAX_SIZE");
@@ -702,9 +702,9 @@ static COUNTER: AtomicU64 = AtomicU64::new(0);
 
     #[test]
     fn test_type_alias() {
-        let src = r#"
+        let src = r"
 pub type Result<T> = std::result::Result<T, Error>;
-"#;
+";
         let elements = parse_rust(src);
         let t = elements.iter().find(|e| e.name == "Result");
         assert!(t.is_some());
@@ -713,11 +713,11 @@ pub type Result<T> = std::result::Result<T, Error>;
 
     #[test]
     fn test_module() {
-        let src = r#"
+        let src = r"
 mod tests {
     fn helper() {}
 }
-"#;
+";
         let elements = parse_rust(src);
         let m = elements.iter().find(|e| e.name == "tests");
         assert!(m.is_some());
@@ -730,7 +730,7 @@ mod tests {
 
     #[test]
     fn test_multiline_doc_comment() {
-        let src = r#"
+        let src = r"
 /// Perform the computation.
 ///
 /// This function does amazing things.
@@ -738,7 +738,7 @@ mod tests {
 pub fn compute(x: i32) -> i32 {
     x * 2
 }
-"#;
+";
         let elements = parse_rust(src);
         let func = elements.iter().find(|e| e.name == "compute");
         assert!(func.is_some());
@@ -757,13 +757,13 @@ pub fn compute(x: i32) -> i32 {
 
     #[test]
     fn test_symbol_path_uses_double_colon() {
-        let src = r#"
+        let src = r"
 impl Config {
     pub fn new() -> Self {
         Config {}
     }
 }
-"#;
+";
         let elements = parse_rust(src);
         let new_fn = elements.iter().find(|e| e.name == "new");
         assert!(new_fn.is_some());

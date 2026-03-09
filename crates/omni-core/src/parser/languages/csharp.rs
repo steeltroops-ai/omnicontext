@@ -304,11 +304,11 @@ mod tests {
 
     #[test]
     fn test_cs_class() {
-        let src = r#"
+        let src = r"
 public class UserService {
     public void GetUser() {}
 }
-"#;
+";
         let elements = parse_cs(src);
         assert!(elements
             .iter()
@@ -320,11 +320,11 @@ public class UserService {
 
     #[test]
     fn test_cs_interface() {
-        let src = r#"
+        let src = r"
 public interface IRepository {
     void Save();
 }
-"#;
+";
         let elements = parse_cs(src);
         assert!(elements
             .iter()

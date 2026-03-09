@@ -359,7 +359,9 @@ mod tests {
         let mut vec = Vec::with_capacity(dim);
         let mut state = seed;
         for _ in 0..dim {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
             vec.push(((state >> 33) as f32) / (u32::MAX as f32) - 0.5);
         }
         l2_normalize(&mut vec);

@@ -296,13 +296,13 @@ mod tests {
 
     #[test]
     fn test_cpp_class() {
-        let src = r#"
+        let src = r"
 class Vector {
 public:
     int x, y;
     void normalize() {}
 };
-"#;
+";
         let elements = parse_cpp(src);
         assert!(elements
             .iter()
@@ -311,11 +311,11 @@ public:
 
     #[test]
     fn test_cpp_namespace() {
-        let src = r#"
+        let src = r"
 namespace engine {
     void init() {}
 }
-"#;
+";
         let elements = parse_cpp(src);
         assert!(elements
             .iter()

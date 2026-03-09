@@ -576,7 +576,7 @@ mod tests {
     #[test]
     fn test_edge_type_conversion() {
         assert_eq!(EdgeType::Imports.as_str(), "imports");
-        assert_eq!(EdgeType::from_str("imports"), Some(EdgeType::Imports));
-        assert_eq!(EdgeType::from_str("invalid"), None);
+        assert_eq!(EdgeType::parse("imports"), Some(EdgeType::Imports));
+        assert_eq!(EdgeType::parse("invalid"), None);
     }
 }

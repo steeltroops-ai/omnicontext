@@ -131,7 +131,11 @@ opt-level = 3
 
 [profile.dev]
 opt-level = 0
-debug = true
+debug = 1
+
+[profile.test]
+opt-level = 0
+debug = 1
 
 [profile.bench]
 lto = "thin"

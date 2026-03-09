@@ -84,6 +84,7 @@ indicatif = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
+criterion = { version = "0.5", features = ["html_reports"] }
 
 [[bin]]
 name = "eval"
@@ -92,6 +93,10 @@ path = "src/bin/eval.rs"
 [[bin]]
 name = "benchmark"
 path = "src/bin/benchmark.rs"
+
+[[bench]]
+name = "core_benchmarks"
+harness = false
 
 [lints]
 workspace = true

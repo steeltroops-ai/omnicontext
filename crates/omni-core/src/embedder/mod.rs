@@ -239,10 +239,10 @@ impl Embedder {
         #[cfg(test)]
         {
             tracing::debug!("skipping model download in test environment");
-            return Ok((
+            Ok((
                 model_manager::model_path(spec),
                 model_manager::tokenizer_path(spec),
-            ));
+            ))
         }
 
         // Production path: download the Jina model with retry + exponential backoff.

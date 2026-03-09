@@ -75,7 +75,7 @@ mod tests {
 
     #[test]
     fn test_js_class() {
-        let src = r#"
+        let src = r"
 class Animal {
     constructor(name) {
         this.name = name;
@@ -84,7 +84,7 @@ class Animal {
         console.log(this.name);
     }
 }
-"#;
+";
         let elements = parse_js(src);
         let class = elements.iter().find(|e| e.name == "Animal");
         assert!(class.is_some());

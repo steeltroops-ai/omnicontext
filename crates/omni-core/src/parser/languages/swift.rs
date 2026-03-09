@@ -317,7 +317,7 @@ class User {
 
     #[test]
     fn test_swift_struct() {
-        let code = r#"
+        let code = r"
 struct Point {
     var x: Double
     var y: Double
@@ -326,7 +326,7 @@ struct Point {
         return sqrt(x * x + y * y)
     }
 }
-"#;
+";
         let analyzer = SwiftAnalyzer;
         let mut parser = tree_sitter::Parser::new();
         parser

@@ -244,11 +244,11 @@ mod tests {
 
     #[test]
     fn test_java_class() {
-        let src = r#"
+        let src = r"
 public class UserService {
     public void getUser() {}
 }
-"#;
+";
         let elements = parse_java(src);
         assert!(elements
             .iter()
@@ -260,11 +260,11 @@ public class UserService {
 
     #[test]
     fn test_java_interface() {
-        let src = r#"
+        let src = r"
 public interface Repository {
     void save(Object entity);
 }
-"#;
+";
         let elements = parse_java(src);
         assert!(elements
             .iter()
