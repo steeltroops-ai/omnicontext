@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.15.0] - 2026-03-09
+
+## What's Changed
+
+### Features
+
+- add graph visualization and performance monitoring UI (55293d7)
+
+### Maintenance
+
+- harden automation suite with extension vetting and performance monitoring (36b94e3)
+
+### Other
+
+- security(vscode): fix high-severity rce in serialize-javascript via dependency overrides (aa306f0)
+
 ## [0.14.0] - 2026-03-08
 
 ## What's Changed

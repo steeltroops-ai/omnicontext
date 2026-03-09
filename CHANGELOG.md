@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.15.0] - 2026-03-09
+
+## What's Changed
+
+### Features
+
+- add resilience monitoring and file dependency infrastructure (f8ea24a)
+- add graph visualization and performance monitoring UI (55293d7)
+- add IPC handlers for VS Code extension phases 4-6 (a25b9f8)
+- add file-level dependency graph for architectural context (841d4b5)
+
+### Bug Fixes
+
+- update embedder tests to use RERANKER_MODEL (16c2bf6)
+
+### Maintenance
+
+- harden automation suite with extension vetting and performance monitoring (36b94e3)
+
+### Other
+
+- security(vscode): fix high-severity rce in serialize-javascript via dependency overrides (aa306f0)
+
 ## [0.14.0] - 2026-03-08
 
 ## What's Changed
