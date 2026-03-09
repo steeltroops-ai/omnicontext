@@ -4,6 +4,11 @@ All notable changes to OmniContext are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] - 2026-03-09
+
+### Fixed
+- Resolve 404 errors and mermaid rendering issues ([ba3da03](https://github.com/steeltroops-ai/omnicontext/commit/ba3da03a6c49bb9215a49ee74d4cce23e260e898))
+
 ## [1.1.0] - 2026-03-09
 
 ### Added
