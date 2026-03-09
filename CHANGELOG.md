@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.16.0] - 2026-03-09
+
+## What's Changed
+
+### Features
+
+- add connection pooling for concurrent database access (9a8ae9e)
+- add contextual chunking and query result caching (d668215)
+- add batching, contrastive learning, and quantization support (b18fce6)
+
+### Maintenance
+
+- restructure documentation with comprehensive guides (97d8db9)
+- add benchmarks and golden query test suite (8a9dd68)
+
 ## [0.15.0] - 2026-03-09
 
 ## What's Changed
