@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import mermaid from "mermaid";
-import { ZoomIn, ZoomOut, Maximize2, Move } from "lucide-react";
+import { ZoomIn, ZoomOut, Maximize2, RotateCcw } from "lucide-react";
 
 interface MermaidDiagramProps {
     chart: string;
@@ -15,9 +15,10 @@ export function MermaidDiagram({ chart, id }: MermaidDiagramProps) {
     const [zoom, setZoom] = useState(1);
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [svg, setSvg] = useState<string>("");
-    const [isPanning, setIsPanning] = useState(false);
+    const [isDragging, setIsDragging] = useState(false);
     const [position, setPosition] = useState({ x: 0, y: 0 });
-    const [startPos, setStartPos] = useState({ x: 0, y: 0 });
+    const dragStart = useRef({ x: 0, y: 0 });
+    const lastPosition = useRef({ x: 0, y: 0 });
 
     useEffect(() => {
         mermaid.initialize({
@@ -59,55 +60,106 @@ export function MermaidDiagram({ chart, id }: MermaidDiagramProps) {
         renderDiagram();
     }, [chart, id]);
 
-    const handleZoomIn = () => setZoom((prev) => Math.min(prev + 0.2, 3));
-    const handleZoomOut = () => setZoom((prev) => Math.max(prev - 0.2, 0.5));
-    const handleFullscreen = () => {
-        setIsFullscreen(!isFullscreen);
+    const handleZoomIn = useCallback(() => {
+        setZoom((prev) => Math.min(prev + 0.2, 3));
+    }, []);
+
+    const handleZoomOut = useCallback(() => {
+        setZoom((prev) => Math.max(prev - 0.2, 0.5));
+    }, []);
+
+    const handleFullscreen = useCallback(() => {
+        setIsFullscreen((prev) => !prev);
+        if (!isFullscreen) {
+            setZoom(1);
+            setPosition({ x: 0, y: 0 });
+            lastPosition.current = { x: 0, y: 0 };
+        }
+    }, [isFullscreen]);
+
+    const handleReset = useCallback(() => {
         setZoom(1);
         setPosition({ x: 0, y: 0 });
-    };
+        lastPosition.current = { x: 0, y: 0 };
+    }, []);
 
-    const handleWheel = (e: React.WheelEvent) => {
+    const handleWheel = useCallback((e: WheelEvent) => {
         e.preventDefault();
+        e.stopPropagation();
+
         const delta = e.deltaY > 0 ? -0.1 : 0.1;
         setZoom((prev) => Math.max(0.5, Math.min(3, prev + delta)));
-    };
+    }, []);
 
-    const handleMouseDown = (e: React.MouseEvent) => {
-        if (e.button === 0) {
-            setIsPanning(true);
-            setStartPos({
-                x: e.clientX - position.x,
-                y: e.clientY - position.y,
-            });
-        }
-    };
+    const handleMouseDown = useCallback((e: MouseEvent) => {
+        // Only start dragging on left click
+        if (e.button !== 0) return;
 
-    const handleMouseMove = (e: React.MouseEvent) => {
-        if (isPanning) {
-            setPosition({
-                x: e.clientX - startPos.x,
-                y: e.clientY - startPos.y,
-            });
-        }
-    };
+        e.preventDefault();
+        e.stopPropagation();
 
-    const handleMouseUp = () => {
-        setIsPanning(false);
-    };
+        setIsDragging(true);
+        dragStart.current = {
+            x: e.clientX - lastPosition.current.x,
+            y: e.clientY - lastPosition.current.y,
+        };
+    }, []);
 
-    const handleMouseLeave = () => {
-        setIsPanning(false);
-    };
+    const handleMouseMove = useCallback((e: MouseEvent) => {
+        if (!isDragging) return;
 
-    const handleReset = () => {
-        setZoom(1);
-        setPosition({ x: 0, y: 0 });
-    };
+        e.preventDefault();
+        e.stopPropagation();
+
+        const newX = e.clientX - dragStart.current.x;
+        const newY = e.clientY - dragStart.current.y;
+
+        lastPosition.current = { x: newX, y: newY };
+        setPosition({ x: newX, y: newY });
+    }, [isDragging]);
+
+    const handleMouseUp = useCallback((e: MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragging(false);
+    }, []);
+
+    // Set up event listeners
+    useEffect(() => {
+        const container = containerRef.current;
+        if (!container) return;
+
+        // Add wheel listener with passive: false to allow preventDefault
+        container.addEventListener('wheel', handleWheel, { passive: false });
+        container.addEventListener('mousedown', handleMouseDown);
+
+        // Add global listeners for mouse move and up (so dragging works even outside container)
+        const handleGlobalMouseMove = (e: MouseEvent) => {
+            if (isDragging) {
+                handleMouseMove(e);
+            }
+        };
+
+        const handleGlobalMouseUp = (e: MouseEvent) => {
+            if (isDragging) {
+                handleMouseUp(e);
+            }
+        };
+
+        document.addEventListener('mousemove', handleGlobalMouseMove);
+        document.addEventListener('mouseup', handleGlobalMouseUp);
+
+        return () => {
+            container.removeEventListener('wheel', handleWheel);
+            container.removeEventListener('mousedown', handleMouseDown);
+            document.removeEventListener('mousemove', handleGlobalMouseMove);
+            document.removeEventListener('mouseup', handleGlobalMouseUp);
+        };
+    }, [handleWheel, handleMouseDown, handleMouseMove, handleMouseUp, isDragging]);
 
     return (
         <div
-            className={`relative bg-[#0E0E11] border border-white/5 rounded-xl overflow-hidden mb-8 ${isFullscreen ? "fixed inset-4 z-50" : ""
+            className={`relative bg-[#0E0E11] border border-white/5 rounded-xl overflow-hidden mb-8 select-none ${isFullscreen ? "fixed inset-4 z-50" : ""
                 }`}
         >
             {/* Controls */}
@@ -131,7 +183,7 @@ export function MermaidDiagram({ chart, id }: MermaidDiagramProps) {
                     className="p-2 bg-zinc-900/90 hover:bg-zinc-800 border border-white/10 rounded-lg transition-colors backdrop-blur-sm"
                     title="Reset View"
                 >
-                    <Move size={16} className="text-zinc-400" />
+                    <RotateCcw size={16} className="text-zinc-400" />
                 </button>
                 <button
                     onClick={handleFullscreen}
@@ -149,29 +201,25 @@ export function MermaidDiagram({ chart, id }: MermaidDiagramProps) {
 
             {/* Instructions */}
             <div className="absolute bottom-3 left-3 px-3 py-1.5 bg-zinc-900/90 border border-white/10 rounded-lg text-[11px] text-zinc-500 backdrop-blur-sm z-10">
-                Drag to pan • Scroll to zoom
+                Click & drag to pan • Scroll to zoom
             </div>
 
             {/* Diagram Container */}
             <div
                 ref={containerRef}
-                className={`overflow-hidden ${isPanning ? "cursor-grabbing" : "cursor-grab"}`}
+                className={`overflow-hidden ${isDragging ? "cursor-grabbing" : "cursor-grab"}`}
                 style={{
                     maxHeight: isFullscreen ? "calc(100vh - 2rem)" : "600px",
+                    touchAction: "none",
                 }}
-                onWheel={handleWheel}
-                onMouseDown={handleMouseDown}
-                onMouseMove={handleMouseMove}
-                onMouseUp={handleMouseUp}
-                onMouseLeave={handleMouseLeave}
             >
                 <div
                     ref={contentRef}
-                    className="p-8"
+                    className="p-8 pointer-events-none"
                     style={{
                         transform: `translate(${position.x}px, ${position.y}px) scale(${zoom})`,
                         transformOrigin: "0 0",
-                        transition: isPanning ? "none" : "transform 0.1s ease-out",
+                        transition: isDragging ? "none" : "transform 0.1s ease-out",
                         minWidth: "100%",
                         minHeight: "100%",
                     }}
