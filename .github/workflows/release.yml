@@ -22,6 +22,7 @@ jobs:
   analyze:
     name: Analyze Changes
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       should_release: ${{ steps.check.outputs.should_release }}
       bump_type: ${{ steps.check.outputs.bump_type }}
@@ -120,6 +121,7 @@ jobs:
     needs: analyze
     if: needs.analyze.outputs.should_release == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
     outputs:
@@ -287,8 +289,11 @@ EOF
     needs: [analyze, bump-and-tag]
     if: needs.analyze.outputs.should_release == 'true'
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     permissions:
       contents: write
+      id-token: write # for provenance
+      attestations: write # for SLSA attestation
     strategy:
       fail-fast: false
       matrix:
@@ -384,12 +389,66 @@ EOF
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Step 4: Publish VS Code Extension
-  publish-extension:
-    name: Publish VS Code Extension
+      - name: Generate provenance attestation
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: ${{ env.ARCHIVE }}
+
+  # Step 4: Smoke test binaries before publishing
+  smoke-test:
+    name: Smoke Test ${{ matrix.target }}
     needs: [analyze, bump-and-tag, build]
     if: needs.analyze.outputs.should_release == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary: omnicontext.exe
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary: omnicontext
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            binary: omnicontext
+    steps:
+      - name: Download release artifact
+        run: |
+          version="${{ needs.bump-and-tag.outputs.version }}"
+          target="${{ matrix.target }}"
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            ext="zip"
+          else
+            ext="tar.gz"
+          fi
+          archive="omnicontext-${version}-${target}.${ext}"
+          url="https://github.com/${{ github.repository }}/releases/download/v${version}/${archive}"
+          
+          curl -sSL -f "$url" -o "$archive"
+          
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            unzip "$archive"
+          else
+            tar -xzf "$archive"
+          fi
+        shell: bash
+
+      - name: Test binary execution
+        run: |
+          ./${{ matrix.binary }} --version
+          ./${{ matrix.binary }} --help
+        shell: bash
+
+  # Step 5: Publish VS Code Extension
+  publish-extension:
+    name: Publish VS Code Extension
+    needs: [analyze, bump-and-tag, build, smoke-test]
+    if: needs.analyze.outputs.should_release == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -408,24 +467,25 @@ EOF
 
       - name: Publish to Marketplace
         working-directory: editors/vscode
+        if: github.repository == 'steeltroops-ai/omnicontext' && secrets.VSCE_PAT != ''
         run: npx vsce publish -p ${{ secrets.VSCE_PAT }} --no-dependencies
-        if: github.repository == 'steeltroops-ai/omnicontext' && env.VSCE_PAT != ''
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
 
       - name: Publish to Open VSX
         working-directory: editors/vscode
+        if: github.repository == 'steeltroops-ai/omnicontext' && secrets.OVSX_PAT != ''
         run: npx ovsx publish -p ${{ secrets.OVSX_PAT }} --no-dependencies
-        if: github.repository == 'steeltroops-ai/omnicontext' && env.OVSX_PAT != ''
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
 
-  # Step 5: Update package manager manifests with real SHA256 hashes
+  # Step 6: Update package manager manifests with real SHA256 hashes
   update-manifests:
     name: Update Package Manifests
-    needs: [analyze, bump-and-tag, build]
+    needs: [analyze, bump-and-tag, build, smoke-test]
     if: needs.analyze.outputs.should_release == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:

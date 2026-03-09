@@ -22,6 +22,7 @@ jobs:
   audit:
     name: Security Audit
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       checks: write # required by rustsec/audit-check to post annotations
@@ -30,7 +31,6 @@ jobs:
 
       - name: Security audit
         uses: rustsec/audit-check@v2.0.0
-        continue-on-error: true
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
         # Note: unmaintained/unsound crates produce warnings, not hard failures.
@@ -45,6 +45,7 @@ jobs:
   supply-chain:
     name: Supply Chain
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -64,6 +65,7 @@ jobs:
   node-audit:
     name: Node Audit
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -86,6 +88,7 @@ jobs:
   codeql:
     name: CodeQL
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       security-events: write
       actions: read
@@ -106,6 +109,61 @@ jobs:
         uses: github/codeql-action/analyze@v4
 
   # ---------------------------------------------------------------------------
+  # job: dependency-review
+  # Reviews dependency changes in PRs for security and license issues.
+  # Only runs on pull requests to catch issues before merge.
+  # ---------------------------------------------------------------------------
+  dependency-review:
+    name: Dependency Review
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: moderate
+          comment-summary-in-pr: always
+
+  # ---------------------------------------------------------------------------
+  # job: sbom
+  # Generate Software Bill of Materials for supply chain transparency.
+  # ---------------------------------------------------------------------------
+  sbom:
+    name: Generate SBOM
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Generate Rust SBOM
+        run: |
+          cargo install cargo-sbom || true
+          cargo sbom > sbom-rust.json || echo '{"error": "cargo-sbom not available"}' > sbom-rust.json
+      
+      - name: Generate Node SBOM
+        working-directory: editors/vscode
+        run: |
+          bun install
+          npx @cyclonedx/cyclonedx-npm --output-file ../../sbom-node.json || echo '{"error": "sbom generation failed"}' > ../../sbom-node.json
+      
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: |
+            sbom-rust.json
+            sbom-node.json
+          retention-days: 90
+
+  # ---------------------------------------------------------------------------
   # job: security-gate
   # Acts as the required status check for branch protection.
   # PR cannot merge unless both audit + supply-chain pass.
@@ -113,11 +171,13 @@ jobs:
   security-gate:
     name: Security Gate
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs: [audit, supply-chain, codeql, node-audit]
     if: always()
     steps:
       - name: Evaluate security jobs
         run: |
+          audit="${{ needs.audit.result }}"
           supply="${{ needs.supply-chain.result }}"
           codeql="${{ needs.codeql.result }}"
           node_audit="${{ needs.node-audit.result }}"
@@ -144,11 +204,11 @@ jobs:
              exit 1
           fi
 
-          # audit-check surfaces all advisories including unmaintained/unsound.
-          # These are already triaged via deny.toml ignore list in the supply-chain job.
-          # Treat audit failures as informational warnings, not blockers.
-          if [[ "$audit" == "failure" ]]; then
-            echo "::warning::Security audit flagged advisories. Review the audit job logs. Accepted risks are tracked in deny.toml."
+          # audit-check now fails on real issues (removed continue-on-error).
+          # Accepted risks must be in deny.toml [advisories].ignore.
+          if [[ "$audit" != "success" ]]; then
+            echo "::error::Security audit failed. Review advisories and add accepted risks to deny.toml with documented reasons."
+            exit 1
           fi
 
           echo "Security gate passed."

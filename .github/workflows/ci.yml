@@ -27,6 +27,7 @@ jobs:
   check:
     name: Check
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -42,6 +43,7 @@ jobs:
   fmt:
     name: Format
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -64,6 +66,10 @@ jobs:
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write # for SARIF upload
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -72,12 +78,27 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Clippy — binary crates
-        run: cargo clippy -p omni-mcp -p omni-daemon -p omni-cli --bins -- -D warnings
+        run: cargo clippy -p omni-mcp -p omni-daemon -p omni-cli --bins --message-format=json -- -D warnings | tee clippy-bins.json
 
       - name: Clippy — core library (lib only, not test targets)
         # --lib explicitly excludes integration test files from -D warnings
         # Integration/benchmark tests use #[allow(dead_code)] where needed
-        run: cargo clippy -p omni-core --lib -- -D warnings
+        run: cargo clippy -p omni-core --lib --message-format=json -- -D warnings | tee clippy-core.json
+
+      - name: Convert clippy output to SARIF
+        if: always()
+        continue-on-error: true
+        run: |
+          cargo install clippy-sarif sarif-fmt || true
+          cat clippy-bins.json clippy-core.json | clippy-sarif | sarif-fmt > clippy-results.sarif
+
+      - name: Upload SARIF results
+        if: always()
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: clippy-results.sarif
+          category: clippy
 
   # ---------------------------------------------------------------------------
   # job: test
@@ -87,6 +108,7 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     needs: [check, fmt] # don't waste matrix runners on unformatted code
     strategy:
       fail-fast: false # always run all platforms to surface OS-specific failures
@@ -112,6 +134,7 @@ jobs:
   vscode-ci:
     name: VS Code Extension CI
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -136,6 +159,7 @@ jobs:
   deny:
     name: Dependency Audit
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: [check]
     steps:
       - uses: actions/checkout@v4
@@ -152,6 +176,7 @@ jobs:
   ci-success:
     name: CI Success
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs: [check, fmt, clippy, test, deny, vscode-ci]
     if: always()
     steps:
