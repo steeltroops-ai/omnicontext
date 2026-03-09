@@ -46,8 +46,8 @@ export default function QuickstartPage() {
   };
 
   return (
-    <div className="flex-1 flex overflow-hidden h-full">
-      <div className="flex-1 overflow-y-scroll custom-scrollbar px-10 md:px-20 py-16 flex justify-center bg-[#09090B]">
+    <div className="flex-1 flex h-full">
+      <div className="flex-1 px-10 md:px-20 py-16 flex justify-center bg-[#09090B] xl:mr-[240px]">
         <article className="max-w-[760px] w-full">
           <div className="text-[12px] font-semibold tracking-wider uppercase text-zinc-600 mb-6">
             Getting Started
@@ -206,7 +206,7 @@ omnicontext-mcp --transport sse --port 8080`}
         </article>
       </div>
 
-      <aside className="w-[240px] shrink-0 p-10 overflow-y-auto custom-scrollbar border-l border-white/5 hidden xl:block bg-[#09090B]" data-lenis-prevent>
+      <aside className="w-[240px] shrink-0 p-10 overflow-y-auto custom-scrollbar border-l border-white/5 hidden xl:block bg-[#09090B] xl:fixed xl:right-0 xl:top-14 xl:bottom-0" data-lenis-prevent>
         <div className="text-[12px] font-semibold uppercase tracking-wider text-zinc-600 mb-6">
           On this page
         </div>
