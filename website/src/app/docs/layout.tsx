@@ -21,9 +21,9 @@ export default function DocsLayout({
   };
 
   return (
-    <div className="flex flex-col md:flex-row h-screen bg-[#09090B] text-zinc-100 font-sans overflow-hidden selection:bg-primary/30">
+    <div className="flex flex-col md:flex-row min-h-screen bg-[#09090B] text-zinc-100 font-sans selection:bg-primary/30">
       {/* Left Sidebar */}
-      <aside className="w-[280px] shrink-0 border-r border-white/5 flex flex-col bg-[#0E0E11] overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <aside className="w-[280px] shrink-0 border-r border-white/5 flex flex-col bg-[#0E0E11] md:fixed md:h-screen md:overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden" data-lenis-prevent>
         <div className="h-14 flex items-center px-8 font-semibold text-[14px] text-zinc-100 border-b border-white/5 shrink-0 bg-[#09090B]/50 backdrop-blur-xl sticky top-0 z-10">
           <Link
             href="/"
@@ -179,9 +179,9 @@ export default function DocsLayout({
       </aside>
 
       {/* Main Wrapper */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-[#09090B]">
+      <div className="flex-1 flex flex-col min-w-0 md:ml-[280px]">
         {/* Topbar */}
-        <header className="h-14 shrink-0 flex items-center justify-between px-8 border-b border-white/5 bg-[#09090B]/70 backdrop-blur-xl z-20">
+        <header className="h-14 shrink-0 flex items-center justify-between px-8 border-b border-white/5 bg-[#09090B]/70 backdrop-blur-xl z-20 md:fixed md:top-0 md:right-0 md:left-[280px]">
           <div className="flex items-center bg-[#141418] border border-white/5 px-3 h-8 rounded-full w-[360px] gap-2 text-zinc-500 cursor-pointer transition-all duration-300 hover:bg-[#111] hover:border-white/10 group">
             <Search
               size={14}
@@ -220,7 +220,7 @@ export default function DocsLayout({
         </header>
 
         {/* Content Area */}
-        <div className="flex-1 overflow-hidden">{children}</div>
+        <div className="flex-1 md:mt-14">{children}</div>
       </div>
     </div>
   );

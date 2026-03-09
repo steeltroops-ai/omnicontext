@@ -206,7 +206,7 @@ omnicontext-mcp --transport sse --port 8080`}
         </article>
       </div>
 
-      <aside className="w-[240px] shrink-0 p-10 overflow-y-auto custom-scrollbar border-l border-white/5 hidden xl:block bg-[#09090B]">
+      <aside className="w-[240px] shrink-0 p-10 overflow-y-auto custom-scrollbar border-l border-white/5 hidden xl:block bg-[#09090B]" data-lenis-prevent>
         <div className="text-[12px] font-semibold uppercase tracking-wider text-zinc-600 mb-6">
           On this page
         </div>
