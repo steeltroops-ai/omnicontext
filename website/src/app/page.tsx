@@ -255,12 +255,11 @@ export default function Home() {
           animation: spin-slow 20s linear infinite;
         }
       `}</style>
-      <div className="flex flex-col h-screen overflow-hidden bg-[#09090B] selection:bg-primary/30">
-        <SiteNav transparent scrollTarget="main-scroll" />
+      <div className="flex flex-col min-h-screen bg-[#09090B] selection:bg-primary/30">
+        <SiteNav transparent scrollTarget={null} />
 
         <main
-          id="main-scroll"
-          className="flex-1 overflow-y-scroll custom-scrollbar flex flex-col pt-0"
+          className="flex-1 flex flex-col pt-0"
         >
           <section className="relative w-full flex items-center min-h-screen pt-14 pb-16 overflow-hidden">
             <DottedSurface className="absolute inset-0 z-0 opacity-50" />
@@ -520,7 +519,7 @@ export default function Home() {
           </section>
 
           {/* Feature Sections - Alternating Interactive Blocks */}
-          <section className="py-[140px] w-full max-w-[1400px] mx-auto flex flex-col gap-[180px] px-8 md:px-16 mb-20">
+          <section className="py-20 md:py-24 w-full max-w-[1400px] mx-auto flex flex-col gap-[180px] px-8 md:px-16">
             {/* Block 1: Context Engine - Enterprise Visualization */}
             <div className="flex flex-col gap-12">
               {/* Header */}
@@ -742,7 +741,7 @@ export default function Home() {
           </section>
 
           {/* Feature Sections - Alternating Interactive Blocks */}
-          <section className="py-[140px] w-full max-w-[1400px] mx-auto flex flex-col gap-[180px] px-8 md:px-16 mb-20">
+          <section className="py-20 md:py-24 w-full max-w-[1400px] mx-auto flex flex-col gap-[180px] px-8 md:px-16">
             {/* Block 1: Hybrid Retrieval */}
             <div className="flex flex-col md:flex-row items-stretch gap-16">
               <div className="flex-1 flex flex-col justify-center py-2">

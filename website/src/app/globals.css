@@ -6,15 +6,18 @@
   .max-w-3xl {
     max-width: var(--container-3xl);
   }
+
   @supports (color: color-mix(in lab, red, red)) {
     * {
       outline-color: color-mix(in oklab, var(--ring) 50%, transparent);
     }
   }
+
   * {
     border-color: var(--border);
     outline-color: var(--ring);
   }
+
   *,
   :after,
   :before,
@@ -29,10 +32,36 @@
   .text-foreground\/60 {
     color: var(--foreground);
   }
+
   body {
     background-color: var(--background);
     color: var(--foreground);
     font-family: var(--font-sans);
+  }
+
+  /* Apply custom scrollbar to body for full-page screenshots */
+  body::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  body::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  body::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+  }
+
+  body::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.2);
+  }
+
+  /* Firefox Support */
+  body {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
   }
 
   :root {
@@ -72,6 +101,7 @@
       --ring: lab(48.496% 0 0);
     }
   }
+
   .dark {
     --background: #0a0a0a;
     --background-content: #181818;
@@ -97,11 +127,13 @@
     --input: #343434;
     --ring: #737373;
   }
+
   @media (min-width: 640px) {
     :root {
       --nav-height: 76px;
     }
   }
+
   @supports (color: lab(0% 0 0)) {
     :root {
       --background: lab(100% 0 0);
@@ -128,6 +160,7 @@
       --ring: lab(66.128% -0.0000298023 0.0000119209);
     }
   }
+
   :root {
     --nav-height: 64px;
     --background: #fff;
@@ -170,7 +203,8 @@ body {
   color-scheme: dark !important;
   margin: 0;
   padding: 0;
-  overflow: hidden; /* Lock root to prevent double scrollbars and header overlap */
+  overflow: hidden;
+  /* Lock root to prevent double scrollbars and header overlap */
   height: 100%;
 }
 
