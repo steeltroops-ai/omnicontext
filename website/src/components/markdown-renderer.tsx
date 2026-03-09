@@ -2,9 +2,10 @@
 
 import React from "react";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
-import { Copy, Check } from "lucide-react";
+import { Copy, Check, Info, AlertTriangle, AlertCircle, CheckCircle } from "lucide-react";
 
 interface MarkdownRendererProps {
     content: string;
@@ -21,6 +22,7 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
 
     return (
         <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
             components={{
                 h1: ({ children }) => (
                     <h1 className="text-4xl md:text-5xl font-semibold text-white tracking-tighter mb-6 leading-tight mt-8">
@@ -129,24 +131,50 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
                     </a>
                 ),
                 table: ({ children }) => (
-                    <div className="bg-[#0E0E11] border border-white/5 rounded-2xl overflow-hidden mb-8">
-                        <table className="w-full text-[13px]">{children}</table>
+                    <div className="overflow-x-auto mb-8">
+                        <div className="bg-[#0E0E11] border border-white/5 rounded-xl overflow-hidden inline-block min-w-full">
+                            <table className="w-full text-[13px] border-collapse">{children}</table>
+                        </div>
                     </div>
                 ),
                 thead: ({ children }) => (
-                    <thead className="border-b border-white/5">{children}</thead>
+                    <thead className="bg-white/[0.02]">{children}</thead>
+                ),
+                tbody: ({ children }) => (
+                    <tbody>{children}</tbody>
+                ),
+                tr: ({ children }) => (
+                    <tr className="border-b border-white/5 last:border-b-0">{children}</tr>
                 ),
                 th: ({ children }) => (
-                    <th className="text-left p-4 text-zinc-500 font-semibold tracking-tight">
+                    <th className="text-left px-4 py-3 text-zinc-400 font-semibold tracking-tight text-[12px] uppercase">
                         {children}
                     </th>
                 ),
                 td: ({ children }) => (
-                    <td className="p-4 text-zinc-400 border-b border-white/5 last:border-b-0">
+                    <td className="px-4 py-3 text-zinc-400">
                         {children}
                     </td>
                 ),
                 hr: () => <hr className="border-white/5 my-8" />,
+                strong: ({ children }) => (
+                    <strong className="text-zinc-200 font-semibold">{children}</strong>
+                ),
+                em: ({ children }) => (
+                    <em className="text-zinc-300 italic">{children}</em>
+                ),
+                del: ({ children }) => (
+                    <del className="text-zinc-500 line-through">{children}</del>
+                ),
+                input: ({ checked, ...props }: any) => (
+                    <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled
+                        className="mr-2 accent-emerald-500"
+                        {...props}
+                    />
+                ),
             }}
         >
             {content}

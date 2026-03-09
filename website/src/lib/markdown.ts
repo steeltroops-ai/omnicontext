@@ -21,7 +21,7 @@ export interface DocContent {
     headings: { id: string; text: string; level: number }[];
 }
 
-const DOCS_PATH = path.join(process.cwd(), 'docs');
+const DOCS_PATH = path.join(process.cwd(), 'website', 'docs');
 
 /**
  * Get all markdown files recursively from docs directory
@@ -65,9 +65,9 @@ export function getAllDocs(): DocMetadata[] {
 /**
  * Get doc content by slug
  */
-export function getDocBySlug(slug: string[]): DocContent | null {
-    // Handle root docs page
-    if (slug.length === 0 || (slug.length === 1 && slug[0] === '')) {
+export function getDocBySlug(slug: string[] | undefined): DocContent | null {
+    // Handle undefined or empty slug
+    if (!slug || slug.length === 0 || (slug.length === 1 && slug[0] === '')) {
         const indexPath = path.join(DOCS_PATH, 'index.md');
         if (fs.existsSync(indexPath)) {
             const fileContents = fs.readFileSync(indexPath, 'utf8');

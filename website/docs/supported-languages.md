@@ -1,8 +1,8 @@
 ---
 title: Supported Languages
 description: Languages with full AST parsing support
-category: Reference
-order: 20
+category: API Reference
+order: 11
 ---
 
 # Supported Languages

@@ -19,19 +19,22 @@ export function DocsSidebar({ docsByCategory }: DocsSidebarProps) {
     };
 
     // Sort categories by order of first doc in each category
-    const sortedCategories = Object.entries(docsByCategory).sort(
-        ([, docsA], [, docsB]) => {
-            const minOrderA = Math.min(...docsA.map((d) => d.order ?? 999));
-            const minOrderB = Math.min(...docsB.map((d) => d.order ?? 999));
-            return minOrderA - minOrderB;
-        }
-    );
+    // Filter out "Getting Started" since we show it statically
+    const sortedCategories = Object.entries(docsByCategory)
+        .filter(([category]) => category !== "Getting Started")
+        .sort(
+            ([, docsA], [, docsB]) => {
+                const minOrderA = Math.min(...docsA.map((d) => d.order ?? 999));
+                const minOrderB = Math.min(...docsB.map((d) => d.order ?? 999));
+                return minOrderA - minOrderB;
+            }
+        );
 
     return (
         <>
             {/* Static pages first */}
-            <div className="mb-10">
-                <div className="text-[11px] uppercase tracking-widest text-zinc-600 font-semibold mb-4 px-2">
+            <div className="mb-6">
+                <div className="text-[11px] uppercase tracking-widest text-zinc-600 font-semibold mb-3 px-2">
                     Getting Started
                 </div>
                 <Link
@@ -50,8 +53,8 @@ export function DocsSidebar({ docsByCategory }: DocsSidebarProps) {
 
             {/* Dynamic markdown pages */}
             {sortedCategories.map(([category, docs]) => (
-                <div key={category} className="mb-10">
-                    <div className="text-[11px] uppercase tracking-widest text-zinc-600 font-semibold mb-4 px-2">
+                <div key={category} className="mb-6">
+                    <div className="text-[11px] uppercase tracking-widest text-zinc-600 font-semibold mb-3 px-2">
                         {category}
                     </div>
                     {docs.map((doc) => (

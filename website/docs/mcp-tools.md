@@ -1,7 +1,7 @@
 ---
 title: MCP Tools
 description: Available tools for AI agents
-category: API
+category: API Reference
 order: 10
 ---
 

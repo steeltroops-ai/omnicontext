@@ -1,7 +1,11 @@
-import { MarkdownRenderer } from "@/components/markdown-renderer";
+---
+title: Introduction
+description: OmniContext is a semantic code search engine that provides AI agents with structured codebase context through the Model Context Protocol (MCP).
+category: Getting Started
+order: 1
+---
 
-export default function IntroductionPage() {
-  const content = `# Introduction
+# Introduction
 
 OmniContext is a natively-compiled semantic code search engine that provides AI agents with structured codebase context through the Model Context Protocol (MCP). All processing runs locally without external APIs.
 
@@ -45,18 +49,4 @@ OmniContext uses a multi-stage pipeline to understand your codebase:
 
 Ready to get started? Check out our [Quickstart](/docs/quickstart) guide to install OmniContext and index your first codebase.
 
-For detailed installation instructions, see the [Installation](/docs/installation) guide.`;
-
-  return (
-    <div className="flex-1 flex h-full">
-      <div className="flex-1 px-10 md:px-20 py-16 flex justify-center bg-[#09090B]">
-        <article className="max-w-[760px] w-full">
-          <div className="text-[12px] font-semibold tracking-wider uppercase text-zinc-600 mb-6">
-            Getting Started
-          </div>
-          <MarkdownRenderer content={content} />
-        </article>
-      </div>
-    </div>
-  );
-}
+For detailed installation instructions, see the [Installation](/docs/installation) guide.
