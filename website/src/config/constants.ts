@@ -224,19 +224,19 @@ export type Platform = keyof typeof PLATFORMS;
 
 // Context Engine Visualization Data
 export const CONTEXT_ENGINE_LEFT_COLUMN = [
-    { label: "Code", y: 0 },
+    { label: "Code files", y: 0 },
     { label: "Dependencies", y: 60 },
     { label: "Documentation", y: 120 },
-    { label: "Style", y: 180 },
-    { label: "Recent changes", y: 240 },
-    { label: "Issues", y: 300 },
+    { label: "Git history", y: 180 },
+    { label: "File structure", y: 240 },
+    { label: "Symbols", y: 300 },
 ] as const;
 
 export const CONTEXT_ENGINE_RIGHT_COLUMN = [
-    { label: "Completions", y: 0 },
-    { label: "Code Review", y: 80 },
-    { label: "Agents", y: 160 },
-    { label: "Intent", y: 240 },
+    { label: "Search results", y: 0 },
+    { label: "Context windows", y: 80 },
+    { label: "Symbol lookups", y: 160 },
+    { label: "Dependency graphs", y: 240 },
 ] as const;
 
 // SVG positioning constants
