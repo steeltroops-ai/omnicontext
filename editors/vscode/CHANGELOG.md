@@ -2,6 +2,11 @@
 
 All notable changes to the OmniContext VS Code extension are documented here.
 
+## [1.1.0] - 2026-03-09
+
+_No direct changes in this release._
+
+
 ## [1.0.1] - 2026-03-09
 
 

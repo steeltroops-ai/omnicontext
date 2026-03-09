@@ -4,6 +4,38 @@ All notable changes to OmniContext are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-03-09
+
+### Added
+- Add focus-based mermaid diagram controls ([a09d625](https://github.com/steeltroops-ai/omnicontext/commit/a09d62575d42b7dfe05ca2a450380dee3246b8db))
+- Add pan and mouse wheel zoom to mermaid diagrams ([6683e69](https://github.com/steeltroops-ai/omnicontext/commit/6683e69614b49742efefe3f216a8901d5b8ad1c9))
+- Add mermaid diagram support with interactive architecture documentation ([03448db](https://github.com/steeltroops-ai/omnicontext/commit/03448db097c0d651221a8bc79a299cdaa7b3bdbd))
+- Implement markdown-based documentation system ([c0c65b5](https://github.com/steeltroops-ai/omnicontext/commit/c0c65b5cbcb3c132e159689a777d35a7162c03db))
+- Implement smooth scrolling with lenis ([2d90438](https://github.com/steeltroops-ai/omnicontext/commit/2d9043873efc3ea7c0c93ba4818a77c647cdd952))
+
+### Documentation
+- Add architecture, configuration, contributing, and enterprise pages ([94105dd](https://github.com/steeltroops-ai/omnicontext/commit/94105ddac9c72835d3149870fb6d9ef649c29b0f))
+- Create professional documentation with proper naming conventions ([109d5fb](https://github.com/steeltroops-ai/omnicontext/commit/109d5fbe42b951bfca4e098fe8d1c1af532f5a88))
+- Create minimal essential documentation for website ([53c2899](https://github.com/steeltroops-ai/omnicontext/commit/53c2899b41dba439efd284b39ebd7bd49bb5930a))
+- Create production documentation structure and phase 1 mvp pages ([bd60f45](https://github.com/steeltroops-ai/omnicontext/commit/bd60f450ee8172605662885e42c3903aebf34d1f))
+- Add comprehensive end-to-end feature audit and improvement roadmap ([674c18b](https://github.com/steeltroops-ai/omnicontext/commit/674c18b56c0ef669a3996f5d43cb9c48b260ca55))
+
+### Fixed
+- Resolve hydration errors with stable ID generation ([4d440a7](https://github.com/steeltroops-ai/omnicontext/commit/4d440a7f8601e9342ed816a3d5c391ff9968546c))
+- Implement industry-standard controls for mermaid diagrams ([0eedb68](https://github.com/steeltroops-ai/omnicontext/commit/0eedb6870d8af6f2dc993c4c51e465c65256ae79))
+- Correct docs path to resolve sidebar not showing documentation ([d129b9d](https://github.com/steeltroops-ai/omnicontext/commit/d129b9d1b6ff0770fd6e57ef02fcbdb6fea2df76))
+- Add scroll spy to table of contents and show all docs in sidebar ([b5221fe](https://github.com/steeltroops-ai/omnicontext/commit/b5221fedab971364ca55741430a735b2cb57a9d3))
+- Restore original introduction content and add table of contents ([9a05f85](https://github.com/steeltroops-ai/omnicontext/commit/9a05f85c22e11792fa3fcaca04152d8667687bff))
+- Resolve markdown rendering and sidebar organization issues ([4bbba0f](https://github.com/steeltroops-ai/omnicontext/commit/4bbba0f170b7d145424ddcf9321469c08801e697))
+- Add static pages to sidebar navigation ([f0634cc](https://github.com/steeltroops-ai/omnicontext/commit/f0634cc49c1de6ca0478d7f168f9351f7e53db34))
+- Correct docs path to parent directory ([9005dd3](https://github.com/steeltroops-ai/omnicontext/commit/9005dd3ba8dde5b60bf43bd2eba232bd88efe649))
+- Correct context engine visualization labels ([2e3ffc4](https://github.com/steeltroops-ai/omnicontext/commit/2e3ffc48faeddd0733efd203856143903866b7cc))
+- Correct mcp tools count from 8 to 16 ([95abeed](https://github.com/steeltroops-ai/omnicontext/commit/95abeed9c8a2f3ab52e9ad19de5148abfceb38e9))
+- Make toc sidebar fixed position on docs pages ([2a348d1](https://github.com/steeltroops-ai/omnicontext/commit/2a348d1fbc97107b2e82b40cbfdbc252a46e01ea))
+- Enable lenis smooth scrolling on docs pages ([93b6e15](https://github.com/steeltroops-ai/omnicontext/commit/93b6e15bb794072dd958e39c8e03bb63b3bd3291))
+- Enable full-page screenshots by using document-level scroll ([7fb2696](https://github.com/steeltroops-ai/omnicontext/commit/7fb269634a2998bb0d13b9f0f38c691dbc99dbf3))
+- Improve footer and context engine section responsiveness ([69d0e9e](https://github.com/steeltroops-ai/omnicontext/commit/69d0e9e0b16544dae2e22411f55213f89391739a))
+
 ## [1.0.1] - 2026-03-09
 
 ### Fixed
