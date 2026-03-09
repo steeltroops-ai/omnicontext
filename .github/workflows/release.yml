@@ -465,14 +465,16 @@ jobs:
 
       - name: Publish to Marketplace
         working-directory: editors/vscode
-        if: github.repository == 'steeltroops-ai/omnicontext' && secrets.VSCE_PAT != ''
+        if: github.repository == 'steeltroops-ai/omnicontext'
+        continue-on-error: true
         run: npx vsce publish -p ${{ secrets.VSCE_PAT }} --no-dependencies
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
 
       - name: Publish to Open VSX
         working-directory: editors/vscode
-        if: github.repository == 'steeltroops-ai/omnicontext' && secrets.OVSX_PAT != ''
+        if: github.repository == 'steeltroops-ai/omnicontext'
+        continue-on-error: true
         run: npx ovsx publish -p ${{ secrets.OVSX_PAT }} --no-dependencies
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
