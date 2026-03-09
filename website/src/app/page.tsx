@@ -389,7 +389,10 @@ export default function Home() {
                   </div>
 
                   {/* Window Content - Fixed height with scrollable content */}
-                  <div className="w-full h-[420px] overflow-y-auto overflow-x-hidden custom-scrollbar p-6 md:p-8 text-left relative z-10 font-mono text-[13px] leading-[1.9] text-zinc-300 tracking-tight">
+                  <div
+                    className="w-full h-[420px] overflow-y-auto overflow-x-hidden custom-scrollbar p-6 md:p-8 text-left relative z-10 font-mono text-[13px] leading-[1.9] text-zinc-300 tracking-tight"
+                    data-lenis-prevent
+                  >
                     {/* Command 1 */}
                     <div className="flex items-center gap-3 mb-4 font-semibold text-zinc-200">
                       <span className="text-emerald-500 shrink-0">❯</span>
@@ -586,22 +589,24 @@ export default function Home() {
                     </svg>
                   </div>
 
-                  {/* Left Column */}
+                  {/* Left Column - Data only on mobile */}
                   <div className="flex flex-col z-10 w-full lg:w-[140px] flex-none h-auto lg:h-full relative order-1 lg:order-1 items-center lg:items-start text-center lg:text-left mt-2 lg:mt-0">
-                    <h4 className="lg:absolute lg:top-0 w-full text-[11px] uppercase tracking-[0.15em] text-zinc-500/80 font-mono mb-4 lg:mb-0">
+                    {/* Desktop heading */}
+                    <h4 className="hidden lg:block lg:absolute lg:top-0 w-full text-[11px] uppercase tracking-[0.15em] text-zinc-500/80 font-mono">
                       REALTIME RAW CONTEXT
                     </h4>
-                    <div className="lg:absolute w-full flex flex-row flex-wrap justify-center lg:flex-col h-auto gap-x-4 gap-y-2 lg:gap-0" style={{ top: `${CONTEXT_ENGINE_SVG.leftColumnTop}px` }}>
+                    {/* Desktop: Vertical absolute positioning */}
+                    <div className="hidden lg:block lg:absolute w-full" style={{ top: `${CONTEXT_ENGINE_SVG.leftColumnTop}px` }}>
                       {CONTEXT_ENGINE_LEFT_COLUMN.map((item, i) => (
                         <div
                           key={i}
                           style={{ top: `${item.y}px` }}
-                          className="relative lg:absolute w-auto lg:w-full flex items-center justify-between group h-auto lg:h-[20px]"
+                          className="absolute w-full flex items-center justify-between group h-[20px]"
                         >
                           <span className="text-[11px] font-mono text-zinc-400 whitespace-nowrap">
                             {item.label}
                           </span>
-                          <div className="flex items-center gap-[6px] opacity-40 bg-white/[0.02] backdrop-blur-sm pl-2 z-10 hidden lg:flex">
+                          <div className="flex items-center gap-[6px] opacity-40 bg-white/[0.02] backdrop-blur-sm pl-2 z-10">
                             <div className="w-[3px] h-[3px] rounded-full bg-zinc-600" />
                             <div className="w-[3px] h-[3px] rounded-full bg-zinc-600" />
                             <div className="w-[3px] h-[3px] rounded-full bg-zinc-600" />
@@ -610,32 +615,49 @@ export default function Home() {
                         </div>
                       ))}
                     </div>
+                    {/* Mobile/Tablet: Horizontal grid layout - 3 columns */}
+                    <div className="grid grid-cols-3 gap-x-4 gap-y-3 w-full lg:hidden max-w-md mx-auto">
+                      {CONTEXT_ENGINE_LEFT_COLUMN.map((item, i) => (
+                        <div key={i} className="flex items-center justify-center">
+                          <span className="text-[10px] font-mono text-zinc-400 whitespace-nowrap">
+                            {item.label}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
 
-                  {/* Mobile Top SVG Overlay */}
-                  <div className="w-full h-[30px] lg:hidden order-2 relative z-0 mt-2">
-                    <div className="absolute bottom-0 left-1/2 w-[4px] h-[4px] bg-zinc-500 rounded-full shadow-[0_0_8px_rgba(255,255,255,0.3)] shrink-0 z-10 -translate-x-1/2" />
-                    <svg
-                      className="w-full h-full relative z-0"
-                      viewBox="0 0 100 30"
-                      preserveAspectRatio="none"
-                      xmlns="http://www.w3.org/2000/svg"
-                    >
-                      {[10, 26, 42, 58, 74, 90].map((x, i) => (
-                        <path
-                          key={i}
-                          d={`M ${x} 0 C ${x} 15, 50 15, 50 30`}
-                          fill="none"
-                          stroke="rgba(255,255,255,0.15)"
-                          strokeWidth="1.5"
-                          vectorEffect="non-scaling-stroke"
-                        />
-                      ))}
-                    </svg>
+                  {/* Mobile Top SVG Overlay with heading below connection point */}
+                  <div className="w-full lg:hidden order-2 relative z-0 mt-3">
+                    {/* SVG connections */}
+                    <div className="w-full h-[40px] relative">
+                      <div className="absolute bottom-0 left-1/2 w-[4px] h-[4px] bg-zinc-500 rounded-full shadow-[0_0_8px_rgba(255,255,255,0.3)] shrink-0 z-10 -translate-x-1/2" />
+                      <svg
+                        className="w-full h-full relative z-0"
+                        viewBox="0 0 100 40"
+                        preserveAspectRatio="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                      >
+                        {[25, 50, 75].map((x, i) => (
+                          <path
+                            key={i}
+                            d={`M ${x} 0 C ${x} 20, 50 20, 50 40`}
+                            fill="none"
+                            stroke="rgba(255,255,255,0.1)"
+                            strokeWidth="1.5"
+                            vectorEffect="non-scaling-stroke"
+                          />
+                        ))}
+                      </svg>
+                    </div>
+                    {/* Heading below connection point */}
+                    <h4 className="w-full text-[11px] uppercase tracking-[0.15em] text-zinc-500/80 font-mono text-center mt-1">
+                      REALTIME RAW CONTEXT
+                    </h4>
                   </div>
 
                   {/* Center Column: Sphere */}
-                  <div className="relative flex flex-col items-center justify-center flex-1 w-full lg:max-w-[calc(100%-280px)] h-auto lg:h-full order-3 lg:order-2 mt-2 lg:mt-0">
+                  <div className="relative flex flex-col items-center justify-center flex-1 w-full lg:max-w-[calc(100%-280px)] h-auto lg:h-full order-3 lg:order-2 mt-1 lg:mt-0">
                     <h4 className="text-[11px] uppercase tracking-[0.15em] text-zinc-500/80 font-mono mb-2 lg:mb-0 text-center lg:absolute lg:top-0 hidden lg:block">
                       SEMANTIC UNDERSTANDING
                     </h4>
@@ -646,47 +668,66 @@ export default function Home() {
                     </div>
                   </div>
 
-                  {/* Mobile Bottom SVG Overlay */}
-                  <div className="w-full h-[30px] lg:hidden order-4 relative z-0 mb-2">
-                    <div className="absolute top-0 left-1/2 w-[4px] h-[4px] bg-emerald-500 rounded-full shadow-[0_0_8px_rgba(16,185,129,0.5)] shrink-0 z-10 -translate-x-1/2" />
-                    <svg
-                      className="w-full h-full relative z-0"
-                      viewBox="0 0 100 30"
-                      preserveAspectRatio="none"
-                      xmlns="http://www.w3.org/2000/svg"
-                    >
-                      {[20, 40, 60, 80].map((x, i) => (
-                        <path
-                          key={i}
-                          d={`M 50 0 C 50 15, ${x} 15, ${x} 30`}
-                          fill="none"
-                          stroke="rgba(16,185,129,0.3)"
-                          strokeWidth="1.5"
-                          vectorEffect="non-scaling-stroke"
-                        />
-                      ))}
-                    </svg>
-                  </div>
-
-                  {/* Right Column */}
-                  <div className="flex flex-col z-10 w-full lg:w-[140px] flex-none h-auto lg:h-full relative order-5 lg:order-3 items-center lg:items-end text-center lg:text-right mb-2 lg:mt-0">
-                    <h4 className="lg:absolute lg:top-0 w-full text-[11px] uppercase tracking-[0.15em] text-zinc-500/80 font-mono text-center lg:text-right mb-4 lg:mb-0">
+                  {/* Mobile Bottom SVG Overlay with heading above connection point */}
+                  <div className="w-full lg:hidden order-4 relative z-0 mt-1">
+                    {/* Heading above connection point */}
+                    <h4 className="w-full text-[11px] uppercase tracking-[0.15em] text-zinc-500/80 font-mono text-center mb-1">
                       CURATED CONTEXT
                     </h4>
-                    <div className="lg:absolute w-full flex flex-row flex-wrap justify-center lg:flex-col h-auto gap-x-4 gap-y-2 lg:gap-0" style={{ top: `${CONTEXT_ENGINE_SVG.rightColumnTop}px` }}>
+                    {/* SVG connections */}
+                    <div className="w-full h-[40px] relative">
+                      <div className="absolute top-0 left-1/2 w-[4px] h-[4px] bg-emerald-500 rounded-full shadow-[0_0_8px_rgba(16,185,129,0.5)] shrink-0 z-10 -translate-x-1/2" />
+                      <svg
+                        className="w-full h-full relative z-0"
+                        viewBox="0 0 100 40"
+                        preserveAspectRatio="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                      >
+                        {[25, 50, 75].map((x, i) => (
+                          <path
+                            key={i}
+                            d={`M 50 0 C 50 20, ${x} 20, ${x} 40`}
+                            fill="none"
+                            stroke="rgba(16,185,129,0.2)"
+                            strokeWidth="1.5"
+                            vectorEffect="non-scaling-stroke"
+                          />
+                        ))}
+                      </svg>
+                    </div>
+                  </div>
+
+                  {/* Right Column - Data only on mobile */}
+                  <div className="flex flex-col z-10 w-full lg:w-[140px] flex-none h-auto lg:h-full relative order-5 lg:order-3 items-center lg:items-end text-center lg:text-right lg:mt-0">
+                    {/* Desktop heading */}
+                    <h4 className="hidden lg:block lg:absolute lg:top-0 w-full text-[11px] uppercase tracking-[0.15em] text-zinc-500/80 font-mono">
+                      CURATED CONTEXT
+                    </h4>
+                    {/* Desktop: Vertical absolute positioning */}
+                    <div className="hidden lg:block lg:absolute w-full" style={{ top: `${CONTEXT_ENGINE_SVG.rightColumnTop}px` }}>
                       {CONTEXT_ENGINE_RIGHT_COLUMN.map((item, i) => (
                         <div
                           key={i}
                           style={{ top: `${item.y}px` }}
-                          className="relative lg:absolute w-auto lg:w-full flex items-center justify-between group h-auto lg:h-[20px]"
+                          className="absolute w-full flex items-center justify-between group h-[20px]"
                         >
-                          <div className="flex items-center gap-[6px] opacity-40 bg-white/[0.02] backdrop-blur-sm pr-2 z-10 hidden lg:flex">
+                          <div className="flex items-center gap-[6px] opacity-40 bg-white/[0.02] backdrop-blur-sm pr-2 z-10">
                             <div className="w-[4px] h-[4px] rounded-full bg-emerald-400" />
                             <div className="w-[3px] h-[3px] rounded-full bg-emerald-600" />
                             <div className="w-[3px] h-[3px] rounded-full bg-emerald-600" />
                             <div className="w-[3px] h-[3px] rounded-full bg-emerald-600" />
                           </div>
                           <span className="text-[11px] font-mono text-zinc-400 whitespace-nowrap">
+                            {item.label}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    {/* Mobile/Tablet: Horizontal grid layout - 3 columns */}
+                    <div className="grid grid-cols-3 gap-x-4 gap-y-3 w-full lg:hidden max-w-md mx-auto mt-3">
+                      {CONTEXT_ENGINE_RIGHT_COLUMN.map((item, i) => (
+                        <div key={i} className="flex items-center justify-center">
+                          <span className="text-[10px] font-mono text-zinc-400 whitespace-nowrap">
                             {item.label}
                           </span>
                         </div>
