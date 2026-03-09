@@ -51,8 +51,13 @@ function Get-NewVersion {
             return "$($v.Major).$($v.Minor).$($v.Patch + 1)"
         }
         default {
-            # Custom version provided
-            return $BumpType
+            # Custom version provided - validate format but return as-is
+            # Strip 'v' prefix if provided
+            $cleanVersion = $BumpType -replace '^v', ''
+            if ($cleanVersion -match '^\d+\.\d+\.\d+$') {
+                return $cleanVersion
+            }
+            throw "Invalid version or bump type: $BumpType. Use major, minor, patch, or x.y.z"
         }
     }
 }
@@ -180,10 +185,12 @@ function Update-PackageManifests {
             Set-Content distribution\homebrew\omnicontext.rb
     }
     
-    # Update Scoop manifest
-    if (Test-Path distribution\scoop\omnicontext.json) {
-        (Get-Content distribution\scoop\omnicontext.json) -replace '"version": ".*"', "`"version`": `"$NewVersion`"" | 
-            Set-Content distribution\scoop\omnicontext.json
+    # Update VS Code extension manifest
+    $vscodePackage = "editors\vscode\package.json"
+    if (Test-Path $vscodePackage) {
+        (Get-Content $vscodePackage) -replace '"version": ".*"', "`"version`": `"$NewVersion`"" | 
+            Set-Content $vscodePackage
+        Write-Host "  Updated editors/vscode/package.json" -ForegroundColor Gray
     }
     
     Write-Host "✓ Updated package manifests" -ForegroundColor Green

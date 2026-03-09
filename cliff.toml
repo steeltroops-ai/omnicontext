@@ -26,11 +26,9 @@ body = """
 ## [Unreleased]
 {% endif %}\
 {% for group, commits in commits | group_by(attribute="group") %}
-### {{ group | upper_first }}
+### {{ group }}
 {% for commit in commits %}\
-- {{ commit.message | upper_first | trim }}\
-{% if commit.breaking %} **[BREAKING]**{% endif %} \
-([{{ commit.id | truncate(length=7, end="") }}](https://github.com/steeltroops-ai/omnicontext/commit/{{ commit.id }}))
+- {{ commit.message | upper_first | trim }} ([{{ commit.id | truncate(length=7, end="") }}](https://github.com/steeltroops-ai/omnicontext/commit/{{ commit.id }}))
 {% endfor %}\
 {% endfor %}\n
 """
@@ -71,7 +69,7 @@ commit_parsers = [
   { message = "^refactor", group = "Changed" },
   { message = "^revert", group = "Reverted" },
   { message = "^docs", group = "Documentation" },
-  { message = "^style", group = "Styling" },
+  { message = "^style", group = "Changed" },
   { message = "^test", group = "Testing" },
   { message = "^ci", skip = true },
   { message = "^chore\\(release\\)", skip = true },

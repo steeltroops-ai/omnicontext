@@ -97,15 +97,20 @@ jobs:
           current="${{ steps.versions.outputs.current }}"
           bump_type="${{ steps.check.outputs.bump_type }}"
 
-          IFS='.' read -r major minor patch <<< "$current"
+          # Handle direct version string (e.g., 1.1.0)
+          if [[ "$bump_type" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            new_version="$bump_type"
+          else
+            IFS='.' read -r major minor patch <<< "$current"
+            case $bump_type in
+              major) major=$((major + 1)); minor=0; patch=0 ;;
+              minor) minor=$((minor + 1)); patch=0 ;;
+              patch) patch=$((patch + 1)) ;;
+              *) echo "Error: Unknown bump type $bump_type"; exit 1 ;;
+            esac
+            new_version="${major}.${minor}.${patch}"
+          fi
 
-          case $bump_type in
-            major) major=$((major + 1)); minor=0; patch=0 ;;
-            minor) minor=$((minor + 1)); patch=0 ;;
-            patch) patch=$((patch + 1)) ;;
-          esac
-
-          new_version="${major}.${minor}.${patch}"
           echo "new_version=$new_version" >> $GITHUB_OUTPUT
           echo "New version: $new_version"
 
@@ -145,92 +150,111 @@ jobs:
 
           cargo update --workspace --quiet
 
+      - name: Install git-cliff
+        run: |
+          curl -sSL https://github.com/orhun/git-cliff/releases/download/v2.7.0/git-cliff-2.7.0-x86_64-unknown-linux-gnu.tar.gz | tar xz
+          sudo mv git-cliff-2.7.0/git-cliff /usr/local/bin/
+          git-cliff --version
+
       - name: Generate changelog
         run: |
+          new_version="${{ needs.analyze.outputs.new_version }}"
           last_tag="${{ needs.analyze.outputs.last_tag }}"
+          
+          # Generate full changelog entry for this release
           if [ -z "$last_tag" ] || [ "$last_tag" = "v0.0.0" ]; then
-            commits=$(git log --pretty=format:"%s|%h" HEAD)
-            vscode_commits=$(git log --pretty=format:"%s|%h" HEAD -- editors/vscode/)
+            git-cliff --unreleased --tag "v${new_version}" --strip all > /tmp/changelog.md
           else
-            commits=$(git log --pretty=format:"%s|%h" "${last_tag}..HEAD" 2>/dev/null || git log --pretty=format:"%s|%h" HEAD)
-            vscode_commits=$(git log --pretty=format:"%s|%h" "${last_tag}..HEAD" -- editors/vscode/ 2>/dev/null || git log --pretty=format:"%s|%h" HEAD -- editors/vscode/)
+            git-cliff "${last_tag}..HEAD" --tag "v${new_version}" --strip all > /tmp/changelog.md
           fi
-
-          generate_changelog() {
-            local input_commits="$1"
-            local output_file="$2"
-            
-            local changelog="## What's Changed\n\n"
-            local breaking="" features="" fixes="" maintenance="" other=""
-
+          
+          # Generate VS Code-specific changelog
+          if [ -z "$last_tag" ] || [ "$last_tag" = "v0.0.0" ]; then
+            commits=$(git log --pretty=format:"%s|%h" HEAD -- editors/vscode/)
+          else
+            commits=$(git log --pretty=format:"%s|%h" "${last_tag}..HEAD" -- editors/vscode/)
+          fi
+          
+          # Build VS Code changelog with Keep a Changelog format
+          {
+            echo "### Added"
+            echo ""
             while IFS='|' read -r msg hash; do
               [ -z "$msg" ] && continue
               echo "$msg" | grep -qi '\[skip ci\]' && continue
-
-              if echo "$msg" | grep -qE '^[a-z]+(\([^)]*\))?!:|BREAKING CHANGE:'; then
-                breaking="${breaking}- ${msg} (${hash})\n"
-              elif echo "$msg" | grep -qE '^feat(\([^)]*\))?:'; then
+              if echo "$msg" | grep -qE '^feat(\([^)]*\))?:'; then
                 clean=$(echo "$msg" | sed -E 's/^feat(\([^)]+\))?:[[:space:]]*//')
-                features="${features}- ${clean} (${hash})\n"
-              elif echo "$msg" | grep -qE '^fix(\([^)]*\))?:'; then
-                clean=$(echo "$msg" | sed -E 's/^fix(\([^)]+\))?:[[:space:]]*//')
-                fixes="${fixes}- ${clean} (${hash})\n"
-              elif echo "$msg" | grep -qE '^(chore|ci|docs|refactor|perf|test|build|style)(\([^)]*\))?:'; then
-                clean=$(echo "$msg" | sed -E 's/^[a-z]+(\([^)]+\))?:[[:space:]]*//')
-                maintenance="${maintenance}- ${clean} (${hash})\n"
-              else
-                other="${other}- ${msg} (${hash})\n"
+                echo "- ${clean} ([${hash}](https://github.com/steeltroops-ai/omnicontext/commit/${hash}))"
               fi
-            done <<< "$input_commits"
-
-            [ -n "$breaking" ] && changelog="${changelog}### Breaking Changes\n\n${breaking}\n"
-            [ -n "$features" ] && changelog="${changelog}### Features\n\n${features}\n"
-            [ -n "$fixes" ] && changelog="${changelog}### Bug Fixes\n\n${fixes}\n"
-            [ -n "$maintenance" ] && changelog="${changelog}### Maintenance\n\n${maintenance}\n"
-            [ -n "$other" ] && changelog="${changelog}### Other\n\n${other}\n"
-
-            # If no commits match, just set it to empty so awk logic is clean, or put a placeholder
-            if [ "$changelog" = "## What's Changed\n\n" ]; then
-              changelog="${changelog}*No direct changes in this directory.*"
-            fi
-
-            echo -e "$changelog" > "$output_file"
-          }
-
-          generate_changelog "$commits" "/tmp/changelog.md"
-          generate_changelog "$vscode_commits" "/tmp/vscode_changelog.md"
-
+            done <<< "$commits"
+            echo ""
+            echo "### Fixed"
+            echo ""
+            while IFS='|' read -r msg hash; do
+              [ -z "$msg" ] && continue
+              echo "$msg" | grep -qi '\[skip ci\]' && continue
+              if echo "$msg" | grep -qE '^fix(\([^)]*\))?:'; then
+                clean=$(echo "$msg" | sed -E 's/^fix(\([^)]+\))?:[[:space:]]*//')
+                echo "- ${clean} ([${hash}](https://github.com/steeltroops-ai/omnicontext/commit/${hash}))"
+              fi
+            done <<< "$commits"
+            echo ""
+            echo "### Changed"
+            echo ""
+            while IFS='|' read -r msg hash; do
+              [ -z "$msg" ] && continue
+              echo "$msg" | grep -qi '\[skip ci\]' && continue
+              if echo "$msg" | grep -qE '^(refactor|perf|docs|style|test)(\([^)]*\))?:'; then
+                clean=$(echo "$msg" | sed -E 's/^[a-z]+(\([^)]+\))?:[[:space:]]*//')
+                echo "- ${clean} ([${hash}](https://github.com/steeltroops-ai/omnicontext/commit/${hash}))"
+              fi
+            done <<< "$commits"
+          } > /tmp/vscode_changelog.md
+          
+          # Clean up empty sections
+          sed -i '/^### [A-Za-z]*$/N;/\n$/d' /tmp/vscode_changelog.md
+          
+          # If no changes, add placeholder
+          if [ ! -s /tmp/vscode_changelog.md ] || [ "$(wc -l < /tmp/vscode_changelog.md)" -lt 3 ]; then
+            echo "_No direct changes in this release._" > /tmp/vscode_changelog.md
+          fi
+          
           echo "--- Generated global changelog ---"
           cat /tmp/changelog.md
-          echo "--- Generated vscode changelog ---"
+          echo "--- Generated VS Code changelog ---"
           cat /tmp/vscode_changelog.md
 
       - name: Update CHANGELOG.md
         run: |
           new_version="${{ needs.analyze.outputs.new_version }}"
-          date=$(date +%Y-%m-%d)
-
-          # Update root CHANGELOG.md
-          if [ ! -f CHANGELOG.md ]; then
-            echo "# Changelog\n\n## [${new_version}] - ${date}\n\n" > CHANGELOG.md
-            cat /tmp/changelog.md >> CHANGELOG.md
-          else
-            awk -v version="$new_version" -v date="$date" -v changelog="$(cat /tmp/changelog.md)" '
-              /^#.*Changelog/ { print; print ""; print "## [" version "] - " date; print ""; print changelog; next }
-              { print }
-            ' CHANGELOG.md > CHANGELOG.md.tmp
-            mv CHANGELOG.md.tmp CHANGELOG.md
-          fi
-
+          
+          # Use git-cliff to regenerate the entire CHANGELOG.md with the new release
+          git-cliff --tag "v${new_version}" --output CHANGELOG.md
+          
           # Update VS Code extension CHANGELOG.md
           vscode_cl="editors/vscode/CHANGELOG.md"
-          if [ -f "$vscode_cl" ]; then
-            awk -v version="$new_version" -v date="$date" -v changelog="$(cat /tmp/vscode_changelog.md)" '
-              /^#.*Changelog/ { print; print ""; print "## [" version "] - " date; print ""; print changelog; next }
-              { print }
-            ' "$vscode_cl" > "$vscode_cl.tmp"
-            mv "$vscode_cl.tmp" "$vscode_cl"
+          date=$(date +%Y-%m-%d)
+          
+          if [ ! -f "$vscode_cl" ]; then
+            cat > "$vscode_cl" << 'EOF'
+# Changelog
+
+All notable changes to the OmniContext VS Code extension are documented here.
+
+EOF
           fi
+          
+          # Prepend new version section to VS Code changelog
+          {
+            head -n 3 "$vscode_cl"
+            echo ""
+            echo "## [${new_version}] - ${date}"
+            echo ""
+            cat /tmp/vscode_changelog.md
+            echo ""
+            tail -n +4 "$vscode_cl"
+          } > "${vscode_cl}.tmp"
+          mv "${vscode_cl}.tmp" "$vscode_cl"
 
       - name: Commit and push
         run: |

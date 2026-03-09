@@ -1,7 +1,7 @@
 class Omnicontext < Formula
   desc "Universal code context engine for AI coding agents"
   homepage "https://github.com/steeltroops-ai/omnicontext"
-  version "0.16.1"
+  version "1.1.0"
 
   on_macos do
     if Hardware::CPU.arm?
