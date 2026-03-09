@@ -43,7 +43,7 @@ export const SUPPORTED_AI_CLIENTS = [
 ] as const;
 
 // MCP Tools Count
-export const MCP_TOOLS_COUNT = 8;
+export const MCP_TOOLS_COUNT = 16;
 
 // Supported Languages
 export const SUPPORTED_LANGUAGES = [
@@ -89,7 +89,7 @@ export const FEATURES = {
     ],
 
     mcpIntegration: [
-        `Provides ${MCP_TOOLS_COUNT} powerful MCP tools`,
+        `Provides ${MCP_TOOLS_COUNT} powerful MCP tools for code intelligence`,
         `Connects to ${SUPPORTED_AI_CLIENTS.slice(0, 3).join(", ")}, and more`,
         "Stdio and HTTP SSE transports",
         "Zero-config MCP sync: auto-configures all detected AI clients",

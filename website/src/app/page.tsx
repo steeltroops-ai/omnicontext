@@ -507,7 +507,7 @@ export default function Home() {
                         Repository: /workspace/omnicontext
                       </div>
                       <div className="text-zinc-600 text-[11px] mt-2">
-                        Ready to serve 8 MCP tools to AI agents
+                        Ready to serve 16 MCP tools to AI agents
                       </div>
                     </div>
                   </div>
