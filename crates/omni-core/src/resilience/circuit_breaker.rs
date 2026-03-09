@@ -22,17 +22,19 @@
 //! ## Example
 //!
 //! ```rust
-//! use omni_core::resilience::circuit_breaker::CircuitBreaker;
-//! use std::time::Duration;
-//!
+//! # use omni_core::resilience::circuit_breaker::{CircuitBreaker, CircuitBreakerError};
+//! # use std::time::Duration;
+//! # #[tokio::main(flavor = "current_thread")]
+//! # async fn main() {
 //! let breaker = CircuitBreaker::new("embedder", 5, Duration::from_secs(60));
 //!
 //! // Protected call
-//! match breaker.call(|| embedder.embed(chunk)).await {
+//! match breaker.call(async { Ok::<_, String>("result") }).await {
 //!     Ok(result) => println!("Success: {:?}", result),
 //!     Err(CircuitBreakerError::Open) => println!("Circuit open, skipping"),
 //!     Err(e) => println!("Operation failed: {:?}", e),
 //! }
+//! # }
 //! ```
 
 use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};

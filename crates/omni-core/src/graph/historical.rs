@@ -22,9 +22,10 @@
 //! ```rust,no_run
 //! use omni_core::graph::historical::HistoricalGraphEnhancer;
 //! use omni_core::index::MetadataIndex;
+//! use std::path::Path;
 //!
-//! # fn example() -> omni_core::error::OmniResult<()> {
-//! let index = MetadataIndex::open("path/to/index")?;
+//! # fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let index = MetadataIndex::open(Path::new("path/to/index"))?;
 //! let mut enhancer = HistoricalGraphEnhancer::new(index);
 //! enhancer.analyze_history(1000)?;
 //! # Ok(())

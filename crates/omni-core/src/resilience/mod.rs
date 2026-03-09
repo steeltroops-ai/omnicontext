@@ -18,14 +18,15 @@
 //! ## Usage
 //!
 //! ```rust
-//! use omni_core::resilience::circuit_breaker::CircuitBreaker;
-//!
+//! # use omni_core::resilience::circuit_breaker::CircuitBreaker;
+//! # use std::time::Duration;
+//! # #[tokio::main(flavor = "current_thread")]
+//! # async fn main() {
 //! let breaker = CircuitBreaker::new("embedder", 5, Duration::from_secs(60));
 //!
 //! // Protected call
-//! let result = breaker.call(|| {
-//!     embedder.embed(chunk)
-//! }).await?;
+//! let result = breaker.call(async { Ok::<_, String>("result") }).await;
+//! # }
 //! ```
 
 pub mod circuit_breaker;
