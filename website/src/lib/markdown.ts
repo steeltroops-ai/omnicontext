@@ -21,7 +21,7 @@ export interface DocContent {
     headings: { id: string; text: string; level: number }[];
 }
 
-const DOCS_PATH = path.join(process.cwd(), 'website', 'docs');
+const DOCS_PATH = path.join(process.cwd(), 'docs');
 
 /**
  * Get all markdown files recursively from docs directory
@@ -30,6 +30,10 @@ export function getAllDocs(): DocMetadata[] {
     const docs: DocMetadata[] = [];
 
     function scanDirectory(dir: string, baseSlug = '') {
+        if (!fs.existsSync(dir)) {
+            return;
+        }
+
         const entries = fs.readdirSync(dir, { withFileTypes: true });
 
         for (const entry of entries) {
