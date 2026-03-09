@@ -1,6 +1,13 @@
 import Link from "next/link";
 
 export default function QuickstartPage() {
+  const headings = [
+    { id: "1-install", text: "1. Install", level: 2 },
+    { id: "2-index-your-codebase", text: "2. Index your codebase", level: 2 },
+    { id: "3-configure-mcp", text: "3. Configure MCP", level: 2 },
+    { id: "4-test", text: "4. Test", level: 2 },
+  ];
+
   return (
     <div className="flex-1 flex h-full">
       <div className="flex-1 px-10 md:px-20 py-16 flex justify-center bg-[#09090B] xl:mr-[240px]">
@@ -17,7 +24,7 @@ export default function QuickstartPage() {
             Get OmniContext running in under 5 minutes.
           </p>
 
-          <h2 className="text-[26px] text-white mt-12 mb-4 font-semibold tracking-tight">
+          <h2 id="1-install" className="text-[26px] text-white mt-12 mb-4 font-semibold tracking-tight">
             1. Install
           </h2>
           <div className="bg-[#0E0E11] border border-white/5 rounded-xl p-5 font-mono text-[13px] mb-8">
@@ -34,7 +41,7 @@ export default function QuickstartPage() {
             </div>
           </div>
 
-          <h2 className="text-[26px] text-white mt-12 mb-4 font-semibold tracking-tight">
+          <h2 id="2-index-your-codebase" className="text-[26px] text-white mt-12 mb-4 font-semibold tracking-tight">
             2. Index your codebase
           </h2>
           <div className="bg-[#0E0E11] border border-white/5 rounded-xl p-5 font-mono text-[13px] mb-8">
@@ -47,7 +54,7 @@ export default function QuickstartPage() {
             </div>
           </div>
 
-          <h2 className="text-[26px] text-white mt-12 mb-4 font-semibold tracking-tight">
+          <h2 id="3-configure-mcp" className="text-[26px] text-white mt-12 mb-4 font-semibold tracking-tight">
             3. Configure MCP
           </h2>
           <p className="text-[16px] text-zinc-400 leading-relaxed mb-4 tracking-tight">
@@ -68,7 +75,7 @@ export default function QuickstartPage() {
             </div>
           </div>
 
-          <h2 className="text-[26px] text-white mt-12 mb-4 font-semibold tracking-tight">
+          <h2 id="4-test" className="text-[26px] text-white mt-12 mb-4 font-semibold tracking-tight">
             4. Test
           </h2>
           <p className="text-[16px] text-zinc-400 leading-relaxed mb-4 tracking-tight">
@@ -92,14 +99,36 @@ export default function QuickstartPage() {
               ← Introduction
             </Link>
             <Link
-              href="/docs/get-started"
+              href="/docs/installation"
               className="inline-flex items-center gap-2 px-5 py-2.5 rounded-full bg-zinc-100 text-black text-[14px] font-semibold hover:scale-105 active:scale-95 transition-all duration-300"
             >
-              Get Started →
+              Installation →
             </Link>
           </div>
         </article>
       </div>
+
+      {/* Right TOC Sidebar */}
+      <aside
+        className="w-[240px] shrink-0 p-10 overflow-y-auto custom-scrollbar border-l border-white/5 hidden xl:block bg-[#09090B] xl:fixed xl:right-0 xl:top-14 xl:bottom-0"
+        data-lenis-prevent
+      >
+        <div className="text-[12px] font-semibold uppercase tracking-wider text-zinc-600 mb-6">
+          On this page
+        </div>
+        <nav className="flex flex-col gap-4 text-[13px] tracking-tight">
+          {headings.map((heading, idx) => (
+            <a
+              key={heading.id}
+              href={`#${heading.id}`}
+              className={`hover:text-zinc-300 transition-colors duration-200 ${idx === 0 ? "text-zinc-200 font-medium" : "text-zinc-500"
+                }`}
+            >
+              {heading.text}
+            </a>
+          ))}
+        </nav>
+      </aside>
     </div>
   );
 }
