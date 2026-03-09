@@ -21,7 +21,7 @@ export interface DocContent {
     headings: { id: string; text: string; level: number }[];
 }
 
-const DOCS_PATH = path.join(process.cwd(), 'docs');
+const DOCS_PATH = path.join(process.cwd(), '..', 'docs');
 
 /**
  * Get all markdown files recursively from docs directory
