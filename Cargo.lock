@@ -2573,7 +2573,7 @@ checksum = "830b246a0e5f20af87141b25c173cd1b609bd7779a4617d6ec582abaf90870f3"
 
 [[package]]
 name = "omni-cli"
-version = "0.16.0"
+version = "0.16.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -2587,7 +2587,7 @@ dependencies = [
 
 [[package]]
 name = "omni-core"
-version = "0.16.0"
+version = "0.16.1"
 dependencies = [
  "bincode",
  "criterion",
@@ -2633,7 +2633,7 @@ dependencies = [
 
 [[package]]
 name = "omni-daemon"
-version = "0.16.0"
+version = "0.16.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -2655,7 +2655,7 @@ dependencies = [
 
 [[package]]
 name = "omni-mcp"
-version = "0.16.0"
+version = "0.16.1"
 dependencies = [
  "anyhow",
  "clap",

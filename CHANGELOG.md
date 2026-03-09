@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.16.1] - 2026-03-09
+
+## What's Changed
+
+### Bug Fixes
+
+- resolve broken doctests and async runtime issues (c5380e8)
+- resolve compilation errors in module exports and type annotations (5ddfc63)
+
+### Maintenance
+
+- resolve workspace clippy warnings and fix test failures (7a51cfb)
+
 ## [0.16.0] - 2026-03-09
 
 ## What's Changed
