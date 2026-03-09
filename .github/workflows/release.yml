@@ -238,12 +238,10 @@ jobs:
           date=$(date +%Y-%m-%d)
           
           if [ ! -f "$vscode_cl" ]; then
-            cat > "$vscode_cl" << 'EOF'
-# Changelog
-
-All notable changes to the OmniContext VS Code extension are documented here.
-
-EOF
+            echo "# Changelog" > "$vscode_cl"
+            echo "" >> "$vscode_cl"
+            echo "All notable changes to the OmniContext VS Code extension are documented here." >> "$vscode_cl"
+            echo "" >> "$vscode_cl"
           fi
           
           # Prepend new version section to VS Code changelog
