@@ -17,7 +17,7 @@ jobs:
   # ---------------------------------------------------------------------------
   # job: audit
   # Scans Cargo.lock against the RustSec advisory database.
-  # Needs checks:write to post results as a PR check annotation.
+  # Accepted risks are documented in deny.toml [advisories].ignore
   # ---------------------------------------------------------------------------
   audit:
     name: Security Audit
@@ -31,11 +31,11 @@ jobs:
 
       - name: Security audit
         uses: rustsec/audit-check@v2.0.0
+        continue-on-error: true
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-        # Note: unmaintained/unsound crates produce warnings, not hard failures.
-        # Add specific RUSTSEC IDs to deny.toml [advisories].ignore only when
-        # you have reviewed the issue and accepted the risk with a written reason.
+        # Note: This action doesn't respect deny.toml ignore list.
+        # Accepted risks are managed in supply-chain job via cargo-deny.
 
   # ---------------------------------------------------------------------------
   # job: supply-chain
@@ -147,6 +147,9 @@ jobs:
         run: |
           cargo install cargo-sbom || true
           cargo sbom > sbom-rust.json || echo '{"error": "cargo-sbom not available"}' > sbom-rust.json
+      
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
       
       - name: Generate Node SBOM
         working-directory: editors/vscode

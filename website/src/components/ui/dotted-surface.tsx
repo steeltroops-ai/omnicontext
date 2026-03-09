@@ -107,8 +107,8 @@ export function DottedSurface({ className, ...props }: DottedSurfaceProps) {
 
           // Animate Y position with sine waves
           positions[index + 1] =
-            Math.sin((ix + count) * 0.3) * 50 +
-            Math.sin((iy + count) * 0.5) * 50;
+            Math.sin((ix + count) * 0.3) * 20 +
+            Math.sin((iy + count) * 0.5) * 20;
 
           i++;
         }
@@ -126,7 +126,7 @@ export function DottedSurface({ className, ...props }: DottedSurfaceProps) {
       }
 
       renderer.render(scene, camera);
-      count += 0.1;
+      count += 0.05;
     };
 
     // Handle window resize

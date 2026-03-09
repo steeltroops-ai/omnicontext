@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Github } from "lucide-react";
+import { Github, Globe } from "lucide-react";
 import { siteConfig } from "@/config/site";
 import { Logo } from "@/components/icons";
 
@@ -7,8 +7,8 @@ export function SiteFooterFull() {
   return (
     <footer className="py-16 px-6 sm:px-8 md:px-16 bg-[#09090B] border-t border-white/5">
       <div className="max-w-[1400px] mx-auto">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-[1.5fr_1fr_1fr_1fr_1fr] gap-x-8 gap-y-10 mb-16">
-          <div className="col-span-1 sm:col-span-2 lg:col-span-1">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-x-6 md:gap-x-8 gap-y-10 mb-16">
+          <div className="col-span-2 md:col-span-3 lg:col-span-1">
             <Link
               href="/"
               className="flex items-center gap-2 font-semibold text-sm text-zinc-100 mb-4"
@@ -130,13 +130,24 @@ export function SiteFooterFull() {
           </div>
         </div>
 
-        <div className="border-t border-white/5 pt-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-center sm:text-left">
+        <div className="border-t border-white/5 pt-8 flex flex-col md:flex-row items-center justify-center md:justify-between gap-4 text-center md:text-left">
           <p className="text-[12px] text-zinc-600">
             (c) 2026 {siteConfig.name}. All rights reserved. Apache-2.0 License.
           </p>
           <div className="flex items-center gap-4">
             <a
+              href="https://steeltroops.vercel.app/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-zinc-600 hover:text-zinc-300 transition-colors flex items-center gap-1.5"
+              title="My Portfolio"
+            >
+              <Globe size={18} />
+            </a>
+            <a
               href={siteConfig.links.github}
+              target="_blank"
+              rel="noopener noreferrer"
               className="text-zinc-600 hover:text-zinc-300 transition-colors"
             >
               <Github size={18} />
