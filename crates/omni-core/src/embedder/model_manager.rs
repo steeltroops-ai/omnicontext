@@ -40,14 +40,18 @@ pub struct ModelSpec {
     pub approx_size_bytes: u64,
 }
 
-/// Default model: Jina Code v2 -- specifically trained for code retrieval.
+/// Default and ONLY model: Jina Code v2 -- specifically trained for code retrieval.
 ///
 /// Why this model:
 /// - Trained on code-to-text and code-to-code retrieval tasks
 /// - Understands variable names, syntax patterns, cross-language concepts
 /// - 768 dimensions provides high-quality embeddings
-/// - 8192 token context window (much larger than MiniLM's 256)
+/// - 8192 token context window (much larger than alternatives)
 /// - ONNX available directly from HuggingFace
+/// - Part of Jina AI family (consistent with reranker)
+///
+/// NO FALLBACK: This is the only embedding model. If it fails to load,
+/// the system will retry with exponential backoff and self-heal.
 pub const DEFAULT_MODEL: ModelSpec = ModelSpec {
     name: "jina-embeddings-v2-base-code",
     hf_repo: "jinaai/jina-embeddings-v2-base-code",
@@ -60,42 +64,33 @@ pub const DEFAULT_MODEL: ModelSpec = ModelSpec {
     approx_size_bytes: 550_000_000, // ~550MB
 };
 
-/// Fallback model: BGE Small -- for constrained environments or fast indexing.
-pub const FALLBACK_MODEL: ModelSpec = ModelSpec {
-    name: "bge-small-en-v1.5",
-    hf_repo: "BAAI/bge-small-en-v1.5",
-    model_url: "https://huggingface.co/BAAI/bge-small-en-v1.5/resolve/main/onnx/model.onnx",
-    tokenizer_url: "https://huggingface.co/BAAI/bge-small-en-v1.5/resolve/main/tokenizer.json",
-    dimensions: 384,
-    max_seq_length: 512,
-    approx_size_bytes: 130_000_000, // ~130MB
-};
-
-/// Cross-encoder reranker model: ms-marco-MiniLM-L-6-v2.
+/// Cross-encoder reranker model: jina-reranker-v2-base-multilingual.
 ///
 /// This is a CROSS-ENCODER (not a bi-encoder). It takes a (query, document)
 /// pair as input and outputs a single relevance score. This is fundamentally
 /// different from the embedding models above which produce vectors.
 ///
 /// Why this model:
-/// - Specifically trained on MS MARCO passage ranking (query-document scoring)
-/// - 6-layer MiniLM architecture -- fast inference (~5ms per pair)
+/// - Part of the Jina AI family (consistent with embedding model)
+/// - Trained on multilingual passage ranking with code understanding
+/// - 8-layer architecture -- fast inference (~8ms per pair on CPU)
 /// - Output: single logit per pair, apply sigmoid for [0, 1] probability
-/// - ~90MB download -- lightweight for a cross-encoder
-/// - ONNX compatible
+/// - ~280MB download -- optimized for production use
+/// - ONNX compatible with quantization support
+/// - Better code understanding than MS MARCO (trained on code + text)
 ///
 /// NOTE: `dimensions` is set to 1 because the output is a single score,
 /// not a vector embedding.
 pub const RERANKER_MODEL: ModelSpec = ModelSpec {
-    name: "ms-marco-MiniLM-L-6-v2",
-    hf_repo: "cross-encoder/ms-marco-MiniLM-L-6-v2",
+    name: "jina-reranker-v2-base-multilingual",
+    hf_repo: "jinaai/jina-reranker-v2-base-multilingual",
     model_url:
-        "https://huggingface.co/cross-encoder/ms-marco-MiniLM-L-6-v2/resolve/main/onnx/model.onnx",
+        "https://huggingface.co/jinaai/jina-reranker-v2-base-multilingual/resolve/main/onnx/model.onnx",
     tokenizer_url:
-        "https://huggingface.co/cross-encoder/ms-marco-MiniLM-L-6-v2/resolve/main/tokenizer.json",
+        "https://huggingface.co/jinaai/jina-reranker-v2-base-multilingual/resolve/main/tokenizer.json",
     dimensions: 1, // single relevance score output, not an embedding vector
-    max_seq_length: 512,
-    approx_size_bytes: 90_000_000, // ~90MB
+    max_seq_length: 1024,
+    approx_size_bytes: 280_000_000, // ~280MB
 };
 
 /// Get the models directory: `~/.omnicontext/models/`
@@ -329,8 +324,14 @@ fn download_file(
 
 /// Resolve the embedding model spec.
 ///
-/// Always returns the Jina Code v2 model. This is the canonical and only
-/// embedding model for OmniContext. No fallback models are supported.
+/// Always returns the Jina Code v2 model. This is the canonical and ONLY
+/// embedding model for OmniContext. NO fallback models are supported.
+///
+/// Self-Healing Architecture:
+/// - If model download fails: Retry with exponential backoff (max 5 attempts)
+/// - If model is corrupted: Auto-delete and re-download
+/// - If ONNX session fails: Circuit breaker opens, system retries after cooldown
+/// - NO degraded mode: System either works with full quality or self-heals
 ///
 /// The `OMNI_EMBEDDING_MODEL` env var is accepted for forward-compatibility
 /// but currently only "default" / "jina-code" are recognized (both map to Jina).
@@ -341,7 +342,7 @@ pub fn resolve_model_spec() -> &'static ModelSpec {
             other => {
                 tracing::warn!(
                     requested = other,
-                    "unrecognized OMNI_EMBEDDING_MODEL value, using Jina Code v2"
+                    "unrecognized OMNI_EMBEDDING_MODEL value, using Jina Code v2 (no fallback)"
                 );
             }
         }
@@ -376,10 +377,10 @@ mod tests {
     }
 
     #[test]
-    fn test_fallback_model_different_path() {
+    fn test_reranker_model_different_path() {
         let default_dir = model_dir(&DEFAULT_MODEL);
-        let fallback_dir = model_dir(&FALLBACK_MODEL);
-        assert_ne!(default_dir, fallback_dir);
+        let reranker_dir = model_dir(&RERANKER_MODEL);
+        assert_ne!(default_dir, reranker_dir);
     }
 
     #[test]
@@ -423,8 +424,8 @@ mod tests {
     }
 
     #[test]
-    fn test_fallback_model_constants() {
-        assert_eq!(FALLBACK_MODEL.dimensions, 384);
-        assert_eq!(FALLBACK_MODEL.max_seq_length, 512);
+    fn test_reranker_model_constants() {
+        assert_eq!(RERANKER_MODEL.dimensions, 1);
+        assert_eq!(RERANKER_MODEL.max_seq_length, 1024);
     }
 }
