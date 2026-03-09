@@ -12,9 +12,8 @@ interface DocsSidebarProps {
 export function DocsSidebar({ docsByCategory }: DocsSidebarProps) {
     const pathname = usePathname();
 
-    const isLinkActive = (slug: string) => {
-        const docPath = `/docs/${slug}`;
-        return pathname === docPath
+    const isLinkActive = (path: string) => {
+        return pathname === path
             ? "bg-zinc-900 text-zinc-100 font-medium"
             : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/30 font-normal";
     };
@@ -30,6 +29,26 @@ export function DocsSidebar({ docsByCategory }: DocsSidebarProps) {
 
     return (
         <>
+            {/* Static pages first */}
+            <div className="mb-10">
+                <div className="text-[11px] uppercase tracking-widest text-zinc-600 font-semibold mb-4 px-2">
+                    Getting Started
+                </div>
+                <Link
+                    href="/docs"
+                    className={`flex items-center px-3 py-2 mb-1 rounded-lg text-[13px] transition-all duration-200 ${isLinkActive("/docs")}`}
+                >
+                    Introduction
+                </Link>
+                <Link
+                    href="/docs/quickstart"
+                    className={`flex items-center px-3 py-2 mb-1 rounded-lg text-[13px] transition-all duration-200 ${isLinkActive("/docs/quickstart")}`}
+                >
+                    Quickstart
+                </Link>
+            </div>
+
+            {/* Dynamic markdown pages */}
             {sortedCategories.map(([category, docs]) => (
                 <div key={category} className="mb-10">
                     <div className="text-[11px] uppercase tracking-widest text-zinc-600 font-semibold mb-4 px-2">
@@ -39,7 +58,7 @@ export function DocsSidebar({ docsByCategory }: DocsSidebarProps) {
                         <Link
                             key={doc.slug}
                             href={`/docs/${doc.slug}`}
-                            className={`flex items-center px-3 py-2 mb-1 rounded-lg text-[13px] transition-all duration-200 ${isLinkActive(doc.slug)}`}
+                            className={`flex items-center px-3 py-2 mb-1 rounded-lg text-[13px] transition-all duration-200 ${isLinkActive(`/docs/${doc.slug}`)}`}
                         >
                             {doc.title}
                         </Link>
