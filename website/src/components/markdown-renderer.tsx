@@ -6,6 +6,7 @@ import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { Copy, Check, Info, AlertTriangle, AlertCircle, CheckCircle } from "lucide-react";
+import { MermaidDiagram } from "./mermaid-diagram";
 
 interface MarkdownRendererProps {
     content: string;
@@ -75,6 +76,11 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
                     const match = /language-(\w+)/.exec(className || '');
                     const codeString = String(children).replace(/\n$/, '');
                     const codeId = `code-${Math.random().toString(36).substr(2, 9)}`;
+
+                    // Handle mermaid diagrams
+                    if (!inline && match && match[1] === 'mermaid') {
+                        return <MermaidDiagram chart={codeString} id={codeId} />;
+                    }
 
                     if (!inline && match) {
                         return (
