@@ -2,6 +2,13 @@
 
 All notable changes to the OmniContext VS Code extension are documented here.
 
+## [1.0.1] - 2026-03-09
+
+
+- align changelog versions with git tags and fix vscode engines compatibility ([f22c2e0](https://github.com/steeltroops-ai/omnicontext/commit/f22c2e0))
+
+
+
 ## [0.16.1] - 2026-03-09
 
 _No direct changes in this release._
