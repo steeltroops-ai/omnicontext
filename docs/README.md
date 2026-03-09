@@ -1,30 +1,106 @@
-# OmniContext Documentation Mapping
+---
+title: Documentation System
+description: How to add and manage documentation
+category: Meta
+order: 999
+---
 
-This directory contains the central repository of knowledge, strategic planning, architecture documentation, and deep-dive guides for the OmniContext execution environment.
+# Documentation System
 
-This document (`docs/README.md`) serves as the master index for locating documentation within this folder. All documentation adheres strictly to the INTJ Execution Doctrine and the `.agents/workflows/write-docs.md` structural guidelines.
+This directory contains all documentation for OmniContext. The website automatically generates navigation and pages from markdown files in this directory.
 
-## Directory Structure & Purpose
+## Adding a new doc page
 
-- **`/api`**: Formal API Contracts
-  Includes Application Programming Interface (API) specifications, Inter-Process Communication (IPC) interfaces, and standardized endpoint mappings between clients and the core Daemon.
+1. Create a markdown file in the appropriate subdirectory (e.g., `docs/getting-started/my-page.md`)
+2. Add frontmatter with metadata:
 
-- **`/architecture`**: System Design & ADRs
-  Contains Architecture Decision Records (ADRs), threat models, concurrency architecture boundaries, and deep-dives into the `intelligence` subsystems (chunking, hybrid search, vector indices).
+```markdown
+---
+title: My Page Title
+description: Brief description for SEO
+category: Getting Started
+order: 10
+---
 
-- **`/development`**: Engineering Standard Operating Procedures
-  Holds rules surrounding test strategies (e.g., `testing-strategy.md`) and error recovery mechanisms.
+# My Page Title
 
-- **`/guides`**: Operational Manuals & Deployment
-  Detailed reference material for distribution (`distribution.md`), installation workflows, conventional commit enforcement, and language support matrices.
+Your content here...
+```
 
-- **`/logs`**: Strategic Execution Summaries
-  Chronological records of critical engineering milestones, technical consolidation reports, benchmark results, and testing output records.
+3. The page will automatically appear in the docs navigation at `/docs/getting-started/my-page`
 
-- **`/planning`**: Vision & Roadmaps
-  Contains long-term strategy execution plans, operational visions (`vision-and-roadmap.md`), and detailed tactical objectives for future development cycles.
+## Frontmatter fields
 
-## Root Documents
+- `title` (required): Page title shown in navigation and heading
+- `description` (optional): SEO description
+- `category` (required): Navigation section (e.g., "Getting Started", "Core Concepts")
+- `order` (required): Sort order within category (lower numbers appear first)
 
-- **`README.md`**: (This Document) Universal index mapping the knowledge base.
-- **`commercial-license.md`**: Legal terms strictly governing the commercial viability and licensing requirements of the core software and enterprise extensions.
+## Supported markdown features
+
+- Headings (H1-H6)
+- Paragraphs and line breaks
+- Lists (ordered and unordered)
+- Code blocks with syntax highlighting
+- Inline code
+- Links (internal and external)
+- Blockquotes
+- Tables
+- Horizontal rules
+
+## Code blocks
+
+Use fenced code blocks with language identifiers:
+
+\`\`\`rust
+fn main() {
+    println!("Hello, world!");
+}
+\`\`\`
+
+Supported languages: rust, typescript, javascript, python, bash, json, toml, yaml, and more.
+
+## Internal links
+
+Link to other docs pages using relative paths:
+
+```markdown
+See [Installation](/docs/getting-started/installation) for setup instructions.
+```
+
+## Categories
+
+Current categories (in order):
+- Getting Started (order: 0-10)
+- Core Concepts (order: 11-20)
+- MCP Integration (order: 21-30)
+- Architecture (order: 31-40)
+- Enterprise (order: 41-50)
+
+Add new categories by using them in frontmatter. They'll appear automatically in navigation.
+
+## File organization
+
+Organize files by topic in subdirectories:
+
+```
+docs/
+├── getting-started/
+│   ├── installation.md
+│   └── quickstart.md
+├── core-concepts/
+│   ├── indexing.md
+│   └── search.md
+└── api-reference/
+    └── mcp-tools.md
+```
+
+The URL structure mirrors the file structure: `docs/getting-started/installation.md` → `/docs/getting-started/installation`
+
+## Table of contents
+
+The right sidebar automatically generates a table of contents from H2 and H3 headings in your markdown.
+
+## Styling
+
+All markdown is automatically styled to match the website design. No custom CSS needed.

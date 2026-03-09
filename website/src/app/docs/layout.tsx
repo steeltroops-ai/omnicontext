@@ -1,24 +1,17 @@
-"use client";
-
 import React from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
 import { Search, Github } from "lucide-react";
 import { siteConfig } from "@/config/site";
 import { Logo } from "@/components/icons";
+import { getDocsByCategory } from "@/lib/markdown";
+import { DocsSidebar } from "@/components/docs-sidebar";
 
 export default function DocsLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const pathname = usePathname();
-
-  const isLinkActive = (path: string) => {
-    return pathname === path
-      ? "bg-zinc-900 text-zinc-100 font-medium"
-      : "text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/30 font-normal";
-  };
+  const docsByCategory = getDocsByCategory();
 
   return (
     <div className="flex flex-col md:flex-row min-h-screen bg-[#09090B] text-zinc-100 font-sans selection:bg-primary/30">
@@ -38,131 +31,7 @@ export default function DocsLayout({
         </div>
 
         <div className="p-6 flex-1">
-          <div className="mb-10">
-            <div className="text-[11px] uppercase tracking-widest text-zinc-600 font-semibold mb-4 px-2">
-              Getting Started
-            </div>
-            <Link
-              href="/docs"
-              className={`flex items-center px-3 py-2 mb-1 rounded-lg text-[13px] transition-all duration-200 ${isLinkActive("/docs")}`}
-            >
-              Introduction
-            </Link>
-            <Link
-              href="/docs/quickstart"
-              className={`flex items-center px-3 py-2 mb-1 rounded-lg text-[13px] transition-all duration-200 ${isLinkActive("/docs/quickstart")}`}
-            >
-              Quickstart
-            </Link>
-            <Link
-              href="/docs/installation"
-              className={`flex items-center px-3 py-2 mb-1 rounded-lg text-[13px] transition-all duration-200 ${isLinkActive("/docs/installation")}`}
-            >
-              Installation
-            </Link>
-          </div>
-
-          <div className="mb-10">
-            <div className="text-[11px] uppercase tracking-widest text-zinc-600 font-semibold mb-4 px-2">
-              Core Concepts
-            </div>
-            <Link
-              href="/docs/context-engine"
-              className={`flex items-center px-3 py-2 mb-1 rounded-lg text-[13px] transition-all duration-200 ${isLinkActive("/docs/context-engine")}`}
-            >
-              Context Engine
-            </Link>
-            <Link
-              href="/docs/indexing"
-              className={`flex items-center px-3 py-2 mb-1 rounded-lg text-[13px] transition-all duration-200 ${isLinkActive("/docs/indexing")}`}
-            >
-              Indexing Pipeline
-            </Link>
-            <Link
-              href="/docs/search"
-              className={`flex items-center px-3 py-2 mb-1 rounded-lg text-[13px] transition-all duration-200 ${isLinkActive("/docs/search")}`}
-            >
-              Hybrid Search
-            </Link>
-            <Link
-              href="/docs/dependency-graph"
-              className={`flex items-center px-3 py-2 mb-1 rounded-lg text-[13px] transition-all duration-200 ${isLinkActive("/docs/dependency-graph")}`}
-            >
-              Dependency Graph
-            </Link>
-          </div>
-
-          <div className="mb-10">
-            <div className="text-[11px] uppercase tracking-widest text-zinc-600 font-semibold mb-4 px-2">
-              MCP Integration
-            </div>
-            <Link
-              href="/docs/mcp-server"
-              className={`flex items-center px-3 py-2 mb-1 rounded-lg text-[13px] transition-all duration-200 ${isLinkActive("/docs/mcp-server")}`}
-            >
-              MCP Server
-            </Link>
-            <Link
-              href="/docs/mcp-tools"
-              className={`flex items-center px-3 py-2 mb-1 rounded-lg text-[13px] transition-all duration-200 ${isLinkActive("/docs/mcp-tools")}`}
-            >
-              Available Tools
-            </Link>
-            <Link
-              href="/docs/mcp-transports"
-              className={`flex items-center px-3 py-2 mb-1 rounded-lg text-[13px] transition-all duration-200 ${isLinkActive("/docs/mcp-transports")}`}
-            >
-              Transports (stdio / SSE)
-            </Link>
-          </div>
-
-          <div className="mb-10">
-            <div className="text-[11px] uppercase tracking-widest text-zinc-600 font-semibold mb-4 px-2">
-              Architecture
-            </div>
-            <Link
-              href="/docs/architecture"
-              className={`flex items-center px-3 py-2 mb-1 rounded-lg text-[13px] transition-all duration-200 ${isLinkActive("/docs/architecture")}`}
-            >
-              System Overview
-            </Link>
-            <Link
-              href="/docs/supported-languages"
-              className={`flex items-center px-3 py-2 mb-1 rounded-lg text-[13px] transition-all duration-200 ${isLinkActive("/docs/supported-languages")}`}
-            >
-              Supported Languages
-            </Link>
-            <Link
-              href="/docs/configuration"
-              className={`flex items-center px-3 py-2 mb-1 rounded-lg text-[13px] transition-all duration-200 ${isLinkActive("/docs/configuration")}`}
-            >
-              Configuration
-            </Link>
-          </div>
-
-          <div className="mb-10">
-            <div className="text-[11px] uppercase tracking-widest text-zinc-600 font-semibold mb-4 px-2">
-              Enterprise
-            </div>
-            <Link
-              href="/docs/pricing"
-              className={`flex items-center px-3 py-2 mb-1 rounded-lg text-[13px] transition-all duration-200 ${isLinkActive("/docs/pricing")}`}
-            >
-              Pricing Tiers
-            </Link>
-            <Link
-              href="/docs/rest-api"
-              className={`flex items-center px-3 py-2 mb-1 rounded-lg text-[13px] transition-all duration-200 ${isLinkActive("/docs/rest-api")}`}
-            >
-              REST API
-            </Link>
-            <Link
-              href="/docs/security"
-              className={`flex items-center px-3 py-2 mb-1 rounded-lg text-[13px] transition-all duration-200 ${isLinkActive("/docs/security")}`}
-            >
-              Security &amp; Auth
-            </Link>
-          </div>
+          <DocsSidebar docsByCategory={docsByCategory} />
         </div>
 
         {/* Sidebar Footer */}

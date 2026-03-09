@@ -71,8 +71,8 @@ export const SUPPORTED_LANGUAGES_COUNT = SUPPORTED_LANGUAGES.length;
 export const FEATURES = {
     zeroConfig: [
         "Tree-sitter AST parsing for 16+ languages",
-        "Semantic chunking with token counting",
-        "Contextual chunking for better semantic boundaries",
+        "Semantic chunking with contextual boundaries",
+        "Token counting for budget-aware assembly",
         "ONNX embedding (jina-embeddings-v2-base-code)",
         "Batch embedding with intelligent backpressure",
         "SQLite FTS5 + HNSW vector index",
@@ -80,12 +80,14 @@ export const FEATURES = {
     ],
 
     hybridSearch: [
-        "BM25 keyword search",
-        "Semantic vector search",
-        "Graph-boosted reranking",
+        "BM25 keyword search with FTS5",
+        "Semantic vector search with HNSW",
+        "Cross-encoder reranking (ms-marco-MiniLM)",
+        "Graph-boosted scoring with dependency awareness",
         "Query result caching for instant responses",
         "HyDE (Hypothetical Document Embeddings)",
         "Intent classification and synonym expansion",
+        "RRF (Reciprocal Rank Fusion) for signal fusion",
     ],
 
     mcpIntegration: [
@@ -93,6 +95,8 @@ export const FEATURES = {
         `Connects to ${SUPPORTED_AI_CLIENTS.slice(0, 3).join(", ")}, and more`,
         "Stdio and HTTP SSE transports",
         "Zero-config MCP sync: auto-configures all detected AI clients",
+        "Token-budget-aware context assembly",
+        "Priority-based result packing with compression",
     ],
 
     ideIntegration: [
@@ -107,8 +111,9 @@ export const FEATURES = {
         "Background daemon with IPC",
         "Connection pooling for concurrent access",
         "Health monitoring with circuit breaker",
-        "Dependency graph analysis",
-        "Git-aware indexing",
+        "Dependency graph analysis with cycle detection",
+        "Git-aware indexing with commit history",
+        "Incremental updates with hash-based change detection",
     ],
 } as const;
 
@@ -224,27 +229,31 @@ export type Platform = keyof typeof PLATFORMS;
 
 // Context Engine Visualization Data
 export const CONTEXT_ENGINE_LEFT_COLUMN = [
-    { label: "Code files", y: 0 },
-    { label: "Dependencies", y: 60 },
-    { label: "Documentation", y: 120 },
-    { label: "Git history", y: 180 },
-    { label: "File structure", y: 240 },
-    { label: "Symbols", y: 300 },
+    { label: "Source code", y: 0 },
+    { label: "AST structure", y: 50 },
+    { label: "Dependencies", y: 100 },
+    { label: "Documentation", y: 150 },
+    { label: "Git history", y: 200 },
+    { label: "Symbols & types", y: 250 },
+    { label: "File metadata", y: 300 },
+    { label: "Import graph", y: 350 },
 ] as const;
 
 export const CONTEXT_ENGINE_RIGHT_COLUMN = [
-    { label: "Search results", y: 0 },
-    { label: "Context windows", y: 80 },
-    { label: "Symbol lookups", y: 160 },
-    { label: "Dependency graphs", y: 240 },
+    { label: "Hybrid search", y: 0 },
+    { label: "Context assembly", y: 70 },
+    { label: "Symbol resolution", y: 140 },
+    { label: "Dependency analysis", y: 210 },
+    { label: "Architecture maps", y: 280 },
+    { label: "Change tracking", y: 350 },
 ] as const;
 
 // SVG positioning constants
 export const CONTEXT_ENGINE_SVG = {
-    leftColumnTop: 142, // Container top position for left column
-    rightColumnTop: 172, // Container top position for right column
-    leftPathOffset: 200, // SVG path y-offset for left connections
-    rightPathOffset: 230, // SVG path y-offset for right connections
-    centerConnectionY: 350, // Y position where all paths meet at center
+    leftColumnTop: 100, // Container top position for left column (vertically centered around 350)
+    rightColumnTop: 100, // Container top position for right column (vertically centered around 350)
+    leftPathOffset: 100, // SVG path y-offset for left connections (matches leftColumnTop)
+    rightPathOffset: 100, // SVG path y-offset for right connections (matches rightColumnTop)
+    centerConnectionY: 350, // Y position where all paths meet at center (sphere center)
 } as const;
 

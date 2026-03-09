@@ -142,7 +142,7 @@ const CanvasSphere = () => {
         }
       }
 
-      let hoveredPoint = null;
+      let hoveredPoint: typeof sortedPoints[0] | null = null;
       let minDistance = 20;
 
       sortedPoints.forEach((p) => {
@@ -538,45 +538,51 @@ export default function Home() {
                 <div className="relative z-10 flex flex-col lg:flex-row w-full p-4 sm:p-6 lg:p-12 lg:px-16 min-h-full items-center lg:items-stretch justify-between gap-6 lg:gap-0">
                   {/* Left SVG overlay for connecting lines */}
                   <div className="absolute top-0 bottom-0 left-[204px] w-[calc(50%-204px-240px)] pointer-events-none hidden lg:block z-0">
-                    <div className="absolute top-[348px] right-0 w-[4px] h-[4px] bg-zinc-500 rounded-full shadow-[0_0_8px_rgba(255,255,255,0.3)] shrink-0 z-10 translate-x-1/2" />
+                    <div className="absolute right-0 w-[4px] h-[4px] bg-zinc-500 rounded-full shadow-[0_0_8px_rgba(255,255,255,0.3)] shrink-0 z-10 translate-x-1/2" style={{ top: `${CONTEXT_ENGINE_SVG.centerConnectionY}px` }} />
                     <svg
                       className="w-full h-full relative z-0"
                       viewBox="0 0 100 700"
                       preserveAspectRatio="none"
                       xmlns="http://www.w3.org/2000/svg"
                     >
-                      {CONTEXT_ENGINE_LEFT_COLUMN.map((item, i) => (
-                        <path
-                          key={`l-${i}`}
-                          d={`M 0 ${item.y + CONTEXT_ENGINE_SVG.leftPathOffset} C 60 ${item.y + CONTEXT_ENGINE_SVG.leftPathOffset}, 60 ${CONTEXT_ENGINE_SVG.centerConnectionY}, 100 ${CONTEXT_ENGINE_SVG.centerConnectionY}`}
-                          fill="none"
-                          stroke="rgba(255,255,255,0.08)"
-                          strokeWidth="1.5"
-                          vectorEffect="non-scaling-stroke"
-                        />
-                      ))}
+                      {CONTEXT_ENGINE_LEFT_COLUMN.map((item, i) => {
+                        const yPos = item.y + CONTEXT_ENGINE_SVG.leftPathOffset + 48 + 10;
+                        return (
+                          <path
+                            key={`l-${i}`}
+                            d={`M 0 ${yPos} C 60 ${yPos}, 60 ${CONTEXT_ENGINE_SVG.centerConnectionY}, 100 ${CONTEXT_ENGINE_SVG.centerConnectionY}`}
+                            fill="none"
+                            stroke="rgba(255,255,255,0.08)"
+                            strokeWidth="1.5"
+                            vectorEffect="non-scaling-stroke"
+                          />
+                        );
+                      })}
                     </svg>
                   </div>
 
                   {/* Right SVG overlay for connecting lines */}
                   <div className="absolute top-0 bottom-0 right-[204px] w-[calc(50%-204px-240px)] pointer-events-none hidden lg:block z-0">
-                    <div className="absolute top-[350px] left-0 w-[4px] h-[4px] bg-emerald-500 rounded-full shadow-[0_0_8px_rgba(16,185,129,0.5)] shrink-0 z-10 -translate-x-1/2" />
+                    <div className="absolute left-0 w-[4px] h-[4px] bg-emerald-500 rounded-full shadow-[0_0_8px_rgba(16,185,129,0.5)] shrink-0 z-10 -translate-x-1/2" style={{ top: `${CONTEXT_ENGINE_SVG.centerConnectionY}px` }} />
                     <svg
                       className="w-full h-full relative z-0"
                       viewBox="0 0 100 700"
                       preserveAspectRatio="none"
                       xmlns="http://www.w3.org/2000/svg"
                     >
-                      {CONTEXT_ENGINE_RIGHT_COLUMN.map((item, i) => (
-                        <path
-                          key={`r-${i}`}
-                          d={`M 100 ${item.y + CONTEXT_ENGINE_SVG.rightPathOffset} C 40 ${item.y + CONTEXT_ENGINE_SVG.rightPathOffset}, 40 ${CONTEXT_ENGINE_SVG.centerConnectionY}, 0 ${CONTEXT_ENGINE_SVG.centerConnectionY}`}
-                          fill="none"
-                          stroke="rgba(16,185,129,0.3)"
-                          strokeWidth="1.5"
-                          vectorEffect="non-scaling-stroke"
-                        />
-                      ))}
+                      {CONTEXT_ENGINE_RIGHT_COLUMN.map((item, i) => {
+                        const yPos = item.y + CONTEXT_ENGINE_SVG.rightPathOffset + 48 + 10;
+                        return (
+                          <path
+                            key={`r-${i}`}
+                            d={`M 100 ${yPos} C 40 ${yPos}, 40 ${CONTEXT_ENGINE_SVG.centerConnectionY}, 0 ${CONTEXT_ENGINE_SVG.centerConnectionY}`}
+                            fill="none"
+                            stroke="rgba(16,185,129,0.3)"
+                            strokeWidth="1.5"
+                            vectorEffect="non-scaling-stroke"
+                          />
+                        );
+                      })}
                     </svg>
                   </div>
 
@@ -686,17 +692,19 @@ export default function Home() {
                         </div>
                       ))}
                     </div>
+                  </div>
 
-                    <div className="flex flex-col relative lg:absolute bottom-0 lg:bottom-[48px] w-full mt-10 lg:mt-0 items-center lg:items-end text-center lg:text-right">
-                      <div className="text-[9px] font-mono text-zinc-500 tracking-tight">
-                        4,456 sources → 682 relevant
-                      </div>
-                      <div className="w-full max-w-[200px] h-[2px] bg-zinc-800 rounded-full overflow-hidden mt-2 mb-2">
-                        <div className="w-[15%] h-full bg-emerald-500 rounded-full shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
-                      </div>
-                      <div className="text-[9px] font-mono text-zinc-600/70 tracking-tight w-full max-w-[200px] text-right">
-                        Fig. 1.1
-                      </div>
+                  {/* Centered Bottom Metric - Connection Point for All SVG Lines */}
+                  <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex flex-col items-center z-20 hidden lg:flex">
+                    <div className="w-[6px] h-[6px] rounded-full bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.6)] mb-4" />
+                    <div className="text-[11px] font-mono text-zinc-400 tracking-tight mb-2">
+                      4,456 sources → 682 relevant
+                    </div>
+                    <div className="w-[240px] h-[2px] bg-zinc-800 rounded-full overflow-hidden mb-2">
+                      <div className="w-[15%] h-full bg-emerald-500 rounded-full shadow-[0_0_8px_rgba(16,185,129,0.5)]" />
+                    </div>
+                    <div className="text-[9px] font-mono text-zinc-600/70 tracking-tight">
+                      Fig. 1.1
                     </div>
                   </div>
                 </div>

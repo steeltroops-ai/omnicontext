@@ -1,140 +1,64 @@
-# OmniContext Documentation
-
-**Version**: v0.14.0  
-**Last Updated**: March 9, 2026
-
-Complete documentation for the OmniContext semantic code search engine.
-
+---
+title: Introduction
+description: Welcome to OmniContext documentation
+category: Getting Started
+order: 0
 ---
 
-## Quick Navigation
+# Introduction
 
-```mermaid
-graph LR
-    A[New User] --> B[Getting Started]
-    A --> C[User Guide]
-    D[Developer] --> E[Contributing]
-    D --> F[Architecture]
-    G[Integration] --> H[API Reference]
-    
-    style A fill:#e1f5ff
-    style D fill:#fff3e0
-    style G fill:#f3e5f5
-```
+OmniContext is a natively-compiled semantic code search engine that provides AI agents with structured codebase context through the Model Context Protocol (MCP). All processing runs locally without external APIs.
 
----
+## What is OmniContext?
 
-## Getting Started
+OmniContext indexes your codebase using AST parsing, semantic chunking, and vector embeddings to enable fast, accurate code search. It exposes 16 MCP tools that AI agents can use to understand your code, navigate dependencies, and assemble relevant context.
 
-New to OmniContext? Start here:
+## Key features
 
-- **[Installation](./getting-started/installation.md)** - Install OmniContext on your system
-- **[Quick Start](../README.md#quick-start)** - Get up and running in 5 minutes
+- **Hybrid search**: Combines keyword matching with semantic vector search for accurate retrieval
+- **AST-aware parsing**: Understands code structure across 16+ languages using tree-sitter
+- **Graph reranking**: Boosts results based on dependency relationships and import patterns
+- **Local execution**: All embeddings and indexing run on your machine (no cloud APIs)
+- **MCP integration**: Native support for Claude Desktop, Cursor, Windsurf, and other MCP clients
+- **Real-time updates**: File watcher detects changes and incrementally updates the index
 
----
+## How it works
 
-## User Guide
+1. **Parse**: Tree-sitter extracts AST structure from source files
+2. **Chunk**: Semantic chunking splits code into meaningful units
+3. **Embed**: ONNX-based model generates vector embeddings locally
+4. **Index**: SQLite + HNSW vector index stores chunks for fast retrieval
+5. **Search**: Hybrid engine combines keyword and vector search with graph reranking
+6. **Serve**: MCP server exposes tools to AI agents via stdio or SSE transport
 
-Learn how to use OmniContext:
+## Performance
 
-- **[Features](./user-guide/features.md)** - Complete feature documentation
-- **[Supported Languages](./reference/supported-languages.md)** - 16 supported programming languages
+OmniContext is optimized for speed:
 
----
+- **Indexing**: > 500 files/sec
+- **Embedding**: > 800 chunks/sec on CPU
+- **Search**: < 50ms P99 latency (100k chunk index)
+- **Memory**: < 2KB per indexed chunk
 
-## API Reference
+## Supported languages
 
-Integrate OmniContext with AI agents:
+Full AST parsing support for:
 
-- **[API Overview](./api-reference/overview.md)** - CLI and MCP interface
-- **[MCP Tools](./api-reference/mcp-tools.md)** - 6 MCP tools for AI agents
-
----
+- JavaScript, TypeScript, JSX, TSX
+- Python, Ruby, PHP
+- Rust, Go, C, C++, C#
+- Java, Kotlin, Swift
+- CSS, HTML, Markdown
 
 ## Architecture
 
-Understand the system design:
+OmniContext is a Cargo workspace with four crates:
 
-- **[Intelligence Layer](./architecture/intelligence.md)** - Search and ranking architecture
-- **[Concurrency](./architecture/concurrency.md)** - Concurrency patterns
-- **[Error Handling](./architecture/error-handling.md)** - Error recovery strategies
-- **[ADR](./architecture/adr.md)** - Architecture Decision Records
+- `omni-core`: Core library (indexing, search, embeddings)
+- `omni-cli`: Command-line interface
+- `omni-daemon`: Background process with IPC
+- `omni-mcp`: MCP server for AI agent integration
 
----
+## Get started
 
-## Contributing
-
-Help improve OmniContext:
-
-- **[Testing](./contributing/testing.md)** - Testing strategy and coverage
-- **[Commit Conventions](./contributing/commit-conventions.md)** - Commit message standards
-
----
-
-## Reference
-
-Technical references:
-
-- **[Supported Languages](./reference/supported-languages.md)** - Language support matrix
-- **[Project Status](./project-status.md)** - Implementation tracking (100% complete)
-- **[Roadmap](./roadmap.md)** - Future features and vision
-
----
-
-## Research
-
-Research documents and analysis:
-
-- **[Context Engine Research](./research/context-engine-2026.md)** - Intelligence layer research
-- **[Tech Stack Analysis](./research/tech-stack-2026.md)** - Technology stack decisions
-
----
-
-## Documentation Structure
-
-```mermaid
-graph TD
-    A[docs/] --> B[getting-started/]
-    A --> C[user-guide/]
-    A --> D[api-reference/]
-    A --> E[architecture/]
-    A --> F[contributing/]
-    A --> G[reference/]
-    A --> H[research/]
-    
-    B --> B1[installation.md]
-    C --> C1[features.md]
-    D --> D1[overview.md]
-    D --> D2[mcp-tools.md]
-    E --> E1[intelligence.md]
-    E --> E2[concurrency.md]
-    E --> E3[error-handling.md]
-    E --> E4[adr.md]
-    F --> F1[testing.md]
-    F --> F2[commit-conventions.md]
-    G --> G1[supported-languages.md]
-    H --> H1[context-engine-2026.md]
-    H --> H2[tech-stack-2026.md]
-    
-    style A fill:#4CAF50,color:#fff
-    style B fill:#2196F3,color:#fff
-    style C fill:#2196F3,color:#fff
-    style D fill:#2196F3,color:#fff
-    style E fill:#FF9800,color:#fff
-    style F fill:#9C27B0,color:#fff
-    style G fill:#607D8B,color:#fff
-    style H fill:#795548,color:#fff
-```
-
----
-
-## Support
-
-- **Issues**: [GitHub Issues](https://github.com/steeltroops-ai/omnicontext/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/steeltroops-ai/omnicontext/discussions)
-
----
-
-## License
-
-Apache License 2.0 - See [LICENSE](../LICENSE)
+Ready to index your first codebase? Follow the [Quickstart Guide](/docs/getting-started/quickstart) to get up and running in 5 minutes.

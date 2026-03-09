@@ -1,169 +1,90 @@
-# Quick Start Guide
-
-Get OmniContext running in 5 minutes.
-
+---
+title: Quickstart
+description: Get started with OmniContext in 5 minutes
+category: Getting Started
+order: 1
 ---
 
-## Installation
+# Quickstart
 
-Choose your platform:
+Index your first codebase and start serving context to AI agents in under 5 minutes.
 
-### Windows
+## Prerequisites
 
-```powershell
-irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install.ps1 | iex
-```
+- Rust 1.80+ installed
+- A codebase to index (any supported language)
+- An MCP-compatible AI client (Claude Desktop, Cursor, etc.)
 
-### macOS / Linux
+## Index your codebase
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install.sh | bash
-```
-
----
-
-## Basic Usage
-
-```mermaid
-graph LR
-    A[Install] --> B[Index Repository]
-    B --> C[Search Code]
-    C --> D[Integrate with AI]
-    
-    style A fill:#4CAF50,color:#fff
-    style B fill:#2196F3,color:#fff
-    style C fill:#FF9800,color:#fff
-    style D fill:#9C27B0,color:#fff
-```
-
-### 1. Index Your Repository
+Navigate to your project directory and run the indexer:
 
 ```bash
 cd /path/to/your/project
 omnicontext index .
 ```
 
-This creates:
-- SQLite database with code chunks
-- Vector embeddings for semantic search
-- Dependency graph for architectural context
+The indexer will:
+- Detect all supported languages automatically
+- Parse AST structures using tree-sitter
+- Generate embeddings with jina-embeddings-v2-base-code
+- Build HNSW vector index for fast retrieval
+- Store everything in `.omnicontext/` directory
 
-### 2. Search Your Code
+## Start the MCP server
 
-```bash
-omnicontext search "authentication middleware" --limit 5
-```
-
-Returns ranked results with:
-- Code chunks
-- File paths and line numbers
-- Relevance scores
-
-### 3. Start the Daemon (Optional)
-
-For MCP integration with AI agents:
+Launch the MCP server to expose tools to AI agents:
 
 ```bash
-omnicontext-daemon
+omnicontext-mcp
 ```
 
-The daemon:
-- Runs in the background
-- Auto-updates on file changes
-- Exposes MCP tools to AI agents
-
----
-
-## MCP Integration
-
-```mermaid
-graph LR
-    A[OmniContext Daemon] --> B[MCP Protocol]
-    B --> C[Claude Desktop]
-    B --> D[Cursor]
-    B --> E[Windsurf]
-    B --> F[Other AI IDEs]
-    
-    style A fill:#4CAF50,color:#fff
-    style B fill:#2196F3,color:#fff
-    style C fill:#FF9800,color:#fff
-    style D fill:#FF9800,color:#fff
-    style E fill:#FF9800,color:#fff
-    style F fill:#FF9800,color:#fff
-```
-
-### Auto-Configuration
-
-OmniContext automatically configures:
-- Claude Desktop (`claude_desktop_config.json`)
-- Cursor (`cursor.mcp/config.json`)
-- Windsurf (`mcp_config.json`)
-- Kiro (`.kiro/settings/mcp.json`)
-- Continue.dev (`config.json`)
-
-No manual setup required!
-
----
-
-## Verify Installation
+The server listens on stdio by default. For SSE transport:
 
 ```bash
-# Check version
-omnicontext --version
-
-# Check status
-omnicontext status
-
-# View help
-omnicontext --help
+omnicontext-mcp --transport sse --port 3000
 ```
 
----
+## Configure your AI client
 
-## Next Steps
+Add OmniContext to your MCP client configuration. For Claude Desktop, edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
-- **[Features](../user-guide/features.md)** - Learn about all capabilities
-- **[MCP Tools](../api-reference/mcp-tools.md)** - Integrate with AI agents
-- **[Supported Languages](../reference/supported-languages.md)** - Check language support
-
----
-
-## Troubleshooting
-
-### Index Not Created
-
-```bash
-# Check if directory is a git repository
-git status
-
-# Try with explicit path
-omnicontext index /full/path/to/project
+```json
+{
+  "mcpServers": {
+    "omnicontext": {
+      "command": "omnicontext-mcp",
+      "args": []
+    }
+  }
+}
 ```
 
-### Model Download Fails
+Restart Claude Desktop to load the MCP server.
 
-```bash
-# Check internet connection
-# Model is ~550MB, may take time
+## Test the integration
 
-# Retry download
-omnicontext setup model-download
-```
+Ask Claude to search your codebase:
 
-### Daemon Won't Start
+> "Search for authentication logic in my codebase"
 
-```bash
-# Check if port is available
-# Default: localhost:3000
+Claude will use the `search_code` tool to query your index and return relevant code snippets with context.
 
-# Check logs
-omnicontext-daemon --log-level debug
-```
+## Available MCP tools
 
----
+OmniContext exposes 16 MCP tools for semantic code search:
 
-## Support
+- `search_code` - Hybrid search across codebase
+- `context_window` - Assemble context for specific files
+- `get_symbol` - Resolve symbol definitions
+- `get_dependencies` - Analyze dependency graph
+- `get_architecture` - Generate architecture maps
+- `get_recent_changes` - Track git history
 
-- **[Installation Guide](./installation.md)** - Detailed installation instructions
-- **[GitHub Issues](https://github.com/steeltroops-ai/omnicontext/issues)** - Report bugs
-- **[Discussions](https://github.com/steeltroops-ai/omnicontext/discussions)** - Ask questions
+See [MCP Tools](/docs/api-reference/mcp-tools) for complete reference.
+
+## Next steps
+
+- [Configuration](/docs/configuration) - Customize indexing behavior
+- [Hybrid Search](/docs/search) - Understand the search engine
+- [Dependency Graph](/docs/dependency-graph) - Explore graph analysis
