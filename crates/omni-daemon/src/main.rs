@@ -19,7 +19,23 @@
 //!
 //! # The VS Code extension connects automatically via named pipe
 //! ```
+#![allow(
+    dead_code,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::expect_used,
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    clippy::manual_let_else,
+    clippy::doc_markdown,
+    clippy::unused_async
+)]
 
+mod backpressure;
+mod compression;
+mod event_dedup;
 mod ipc;
 mod metrics;
 mod prefetch;

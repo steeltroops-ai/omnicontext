@@ -67,6 +67,7 @@ petgraph = { workspace = true }
 # Concurrency
 dashmap = { workspace = true }
 lru = { workspace = true }
+parking_lot = { workspace = true }
 
 # Configuration
 toml = { workspace = true }

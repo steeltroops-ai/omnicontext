@@ -43,6 +43,7 @@ lru = { workspace = true }
 # Concurrency
 parking_lot = { workspace = true }
 tokio-util = { workspace = true }
+lz4 = { workspace = true }
 
 # Hashing (for pipe name derivation)
 sha2 = { workspace = true }

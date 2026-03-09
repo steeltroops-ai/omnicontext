@@ -193,7 +193,8 @@ impl EdgeExtractor {
                 reference.starts_with("new ") || reference.contains("new ")
             }
             Language::Python => {
-                reference.ends_with("()") && reference.chars().next().unwrap().is_uppercase()
+                reference.ends_with("()")
+                    && reference.chars().next().is_some_and(|c| c.is_uppercase())
             }
             Language::Java | Language::Kotlin => reference.starts_with("new "),
             Language::Rust => false, // Rust uses struct literals, not "new"
@@ -237,6 +238,7 @@ pub struct ImportResolver {
 }
 
 impl ImportResolver {
+    /// Create a new import resolver.
     pub fn new() -> Self {
         Self {
             module_to_file: HashMap::new(),
@@ -290,9 +292,9 @@ impl ImportResolver {
     /// Resolve a function/variable reference to a file path.
     pub fn resolve_reference(
         &self,
-        source_file: &Path,
+        _source_file: &Path,
         reference: &str,
-        language: Language,
+        _language: Language,
     ) -> Option<PathBuf> {
         // Extract module prefix if present (e.g., "module.function" -> "module")
         let module_name = reference.split('.').next()?;
@@ -347,14 +349,14 @@ impl ImportResolver {
     fn resolve_go_import(&self, _source_file: &Path, import_path: &str) -> Option<PathBuf> {
         // Go: "github.com/user/repo/package"
         // Extract package name (last component)
-        let package_name = import_path.split('/').last()?;
+        let package_name = import_path.split('/').next_back()?;
         self.module_to_file.get(package_name).cloned()
     }
 
     fn resolve_java_import(&self, _source_file: &Path, import_path: &str) -> Option<PathBuf> {
         // Java: "com.example.package.Class"
         // Extract class name (last component)
-        let class_name = import_path.split('.').last()?;
+        let class_name = import_path.split('.').next_back()?;
         self.module_to_file.get(class_name).cloned()
     }
 
@@ -492,7 +494,9 @@ fn to_snake_case(s: &str) -> String {
         if c.is_uppercase() && i > 0 {
             result.push('_');
         }
-        result.push(c.to_lowercase().next().unwrap());
+        if let Some(ch) = c.to_lowercase().next() {
+            result.push(ch);
+        }
     }
     result
 }

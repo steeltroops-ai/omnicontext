@@ -143,6 +143,36 @@ impl CommitEngine {
     }
 
     #[allow(clippy::missing_errors_doc)]
+    /// Get recent commits from the index.
+    pub fn recent_commits(index: &MetadataIndex, limit: usize) -> OmniResult<Vec<CommitInfo>> {
+        let conn = index.connection();
+        let mut stmt = conn.prepare(
+            "SELECT hash, message, author, timestamp, summary, files_changed
+             FROM commits
+             ORDER BY timestamp DESC
+             LIMIT ?1",
+        )?;
+
+        let commits = stmt
+            .query_map(rusqlite::params![limit], |row| {
+                let files_json: String = row.get(5)?;
+                let files: Vec<String> = serde_json::from_str(&files_json).unwrap_or_default();
+                Ok(CommitInfo {
+                    hash: row.get(0)?,
+                    message: row.get(1)?,
+                    author: row.get(2)?,
+                    timestamp: row.get(3)?,
+                    summary: row.get(4)?,
+                    files_changed: files,
+                })
+            })?
+            .filter_map(std::result::Result::ok)
+            .collect();
+
+        Ok(commits)
+    }
+
+    #[allow(clippy::missing_errors_doc)]
     /// Get recent commits that touched a specific file.
     pub fn commits_for_file(
         index: &MetadataIndex,

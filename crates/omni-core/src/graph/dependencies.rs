@@ -18,7 +18,7 @@
 //! - Enables graph-based navigation for AI agents
 //! - Complements semantic search with structural understanding
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
@@ -40,6 +40,7 @@ pub enum EdgeType {
 }
 
 impl EdgeType {
+    /// Convert edge type to string representation.
     pub fn as_str(&self) -> &'static str {
         match self {
             EdgeType::Imports => "imports",
@@ -50,7 +51,8 @@ impl EdgeType {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    /// Parse edge type from string representation.
+    pub fn parse(s: &str) -> Option<Self> {
         match s {
             "imports" => Some(EdgeType::Imports),
             "inherits" => Some(EdgeType::Inherits),
@@ -65,35 +67,50 @@ impl EdgeType {
 /// A directed edge in the file dependency graph.
 #[derive(Debug, Clone)]
 pub struct DependencyEdge {
+    /// Source file path.
     pub source: PathBuf,
+    /// Target file path.
     pub target: PathBuf,
+    /// Type of dependency relationship.
     pub edge_type: EdgeType,
+    /// Edge weight (importance score).
     pub weight: f32,
 }
 
 /// File node in the dependency graph.
 #[derive(Debug, Clone)]
 pub struct FileNode {
+    /// File path.
     pub path: PathBuf,
+    /// Programming language.
     pub language: String,
-    pub importance: f32, // Computed from in-degree and PageRank
+    /// Importance score computed from in-degree and PageRank.
+    pub importance: f32,
 }
 
 /// Architectural context for a file: all structurally connected files.
 #[derive(Debug, Clone)]
 pub struct ArchitecturalContext {
+    /// The focal file being analyzed.
     pub focal_file: PathBuf,
+    /// Neighboring files with dependency relationships.
     pub neighbors: Vec<NeighborFile>,
+    /// Total number of files in the graph.
     pub total_files: usize,
+    /// Maximum hops used for neighbor discovery.
     pub max_hops: usize,
 }
 
 /// A neighboring file in the architectural context.
 #[derive(Debug, Clone)]
 pub struct NeighborFile {
+    /// File path.
     pub path: PathBuf,
-    pub distance: usize, // Hops from focal file
+    /// Distance in hops from focal file.
+    pub distance: usize,
+    /// Types of dependency edges connecting to this file.
     pub edge_types: Vec<EdgeType>,
+    /// Importance score.
     pub importance: f32,
 }
 
@@ -139,7 +156,7 @@ impl FileDependencyGraph {
     }
 
     /// Add a dependency edge between two files.
-    pub fn add_edge(&self, edge: DependencyEdge) -> OmniResult<()> {
+    pub fn add_edge(&self, edge: &DependencyEdge) -> OmniResult<()> {
         let mut inner = self.inner.write().map_err(|e| {
             OmniError::Internal(format!("file dependency graph lock poisoned: {e}"))
         })?;
@@ -185,6 +202,9 @@ impl FileDependencyGraph {
     /// distances and edge types.
     ///
     /// Performance target: <10ms for 1-hop, <50ms for 3-hop.
+    ///
+    /// # Panics
+    /// May panic if importance scores contain NaN values during sorting.
     pub fn get_neighbors(&self, file: &Path, max_hops: usize) -> OmniResult<Vec<NeighborFile>> {
         let inner = self.inner.read().map_err(|e| {
             OmniError::Internal(format!("file dependency graph lock poisoned: {e}"))
@@ -250,11 +270,7 @@ impl FileDependencyGraph {
             .into_iter()
             .filter(|(path, _)| path != &file_path)
             .map(|(path, (distance, edge_types))| {
-                let importance = inner
-                    .nodes
-                    .get(&path)
-                    .map(|n| n.importance)
-                    .unwrap_or(1.0);
+                let importance = inner.nodes.get(&path).map(|n| n.importance).unwrap_or(1.0);
                 NeighborFile {
                     path,
                     distance,
@@ -266,9 +282,11 @@ impl FileDependencyGraph {
 
         // Sort by distance (closest first), then by importance (highest first)
         neighbors.sort_by(|a, b| {
-            a.distance
-                .cmp(&b.distance)
-                .then_with(|| b.importance.partial_cmp(&a.importance).unwrap())
+            a.distance.cmp(&b.distance).then_with(|| {
+                b.importance
+                    .partial_cmp(&a.importance)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
         });
 
         Ok(neighbors)
@@ -323,18 +341,15 @@ impl FileDependencyGraph {
         for _ in 0..10 {
             let mut new_scores: HashMap<PathBuf, f32> = HashMap::new();
 
-            for (path, node) in &inner.nodes {
+            for path in inner.nodes.keys() {
                 let mut score = (1.0 - damping) / num_nodes as f32;
 
                 // Add contributions from incoming edges
                 if let Some(incoming) = inner.incoming.get(path) {
                     for (source, _, _) in incoming {
                         if let Some(source_node) = inner.nodes.get(source) {
-                            let out_degree = inner
-                                .outgoing
-                                .get(source)
-                                .map(|v| v.len())
-                                .unwrap_or(1);
+                            let out_degree =
+                                inner.outgoing.get(source).map(|v| v.len()).unwrap_or(1);
                             score += damping * source_node.importance / out_degree as f32;
                         }
                     }
@@ -366,13 +381,7 @@ impl FileDependencyGraph {
     pub fn edge_count(&self) -> usize {
         self.inner
             .read()
-            .map(|inner| {
-                inner
-                    .outgoing
-                    .values()
-                    .map(|v| v.len())
-                    .sum()
-            })
+            .map(|inner| inner.outgoing.values().map(|v| v.len()).sum())
             .unwrap_or(0)
     }
 
@@ -410,7 +419,7 @@ mod tests {
             .expect("add file b");
 
         graph
-            .add_edge(DependencyEdge {
+            .add_edge(&DependencyEdge {
                 source: file_a.clone(),
                 target: file_b.clone(),
                 edge_type: EdgeType::Imports,
@@ -430,7 +439,7 @@ mod tests {
         let file_c = PathBuf::from("src/c.rs");
 
         graph
-            .add_edge(DependencyEdge {
+            .add_edge(&DependencyEdge {
                 source: file_a.clone(),
                 target: file_b.clone(),
                 edge_type: EdgeType::Imports,
@@ -439,7 +448,7 @@ mod tests {
             .expect("add edge a->b");
 
         graph
-            .add_edge(DependencyEdge {
+            .add_edge(&DependencyEdge {
                 source: file_a.clone(),
                 target: file_c.clone(),
                 edge_type: EdgeType::Calls,
@@ -466,7 +475,7 @@ mod tests {
         let file_c = PathBuf::from("src/c.rs");
 
         graph
-            .add_edge(DependencyEdge {
+            .add_edge(&DependencyEdge {
                 source: file_a.clone(),
                 target: file_b.clone(),
                 edge_type: EdgeType::Imports,
@@ -475,7 +484,7 @@ mod tests {
             .expect("add edge a->b");
 
         graph
-            .add_edge(DependencyEdge {
+            .add_edge(&DependencyEdge {
                 source: file_b.clone(),
                 target: file_c.clone(),
                 edge_type: EdgeType::Calls,
@@ -510,7 +519,7 @@ mod tests {
         let file_b = PathBuf::from("src/b.rs");
 
         graph
-            .add_edge(DependencyEdge {
+            .add_edge(&DependencyEdge {
                 source: file_a.clone(),
                 target: file_b.clone(),
                 edge_type: EdgeType::Imports,
@@ -537,7 +546,7 @@ mod tests {
 
         // Both a and c depend on b (b is more important)
         graph
-            .add_edge(DependencyEdge {
+            .add_edge(&DependencyEdge {
                 source: file_a.clone(),
                 target: file_b.clone(),
                 edge_type: EdgeType::Imports,
@@ -546,7 +555,7 @@ mod tests {
             .expect("add edge");
 
         graph
-            .add_edge(DependencyEdge {
+            .add_edge(&DependencyEdge {
                 source: file_c.clone(),
                 target: file_b.clone(),
                 edge_type: EdgeType::Imports,

@@ -30,7 +30,7 @@ fn bench_graph_queries(c: &mut Criterion) {
                 edge_type: EdgeType::Imports,
                 weight: 1.0,
             };
-            let _ = graph.add_edge(edge);
+            let _ = graph.add_edge(&edge);
         }
     }
 

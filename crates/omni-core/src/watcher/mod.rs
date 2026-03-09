@@ -11,6 +11,8 @@
 //! - Exclude patterns are checked against path components (not full globs)
 //! - Language detection uses file extension via `Language::from_extension`
 
+pub mod hash_cache;
+
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 

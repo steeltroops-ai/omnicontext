@@ -1468,9 +1468,7 @@ async fn handle_commit_context(
                 "message": c.message,
                 "author": c.author,
                 "timestamp": c.timestamp,
-                "files_changed": c.files_changed.len(),
-                "lines_added": c.lines_added,
-                "lines_deleted": c.lines_deleted
+                "files_changed": c.files_changed.len()
             })
         })
         .collect();

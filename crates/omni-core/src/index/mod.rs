@@ -668,6 +668,34 @@ impl MetadataIndex {
         Ok(result)
     }
 
+    /// Get ALL symbols in the index.
+    ///
+    /// Used for loading the dependency graph on startup.
+    pub fn get_all_symbols(&self) -> OmniResult<Vec<Symbol>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, fqn, kind, file_id, line, chunk_id
+             FROM symbols ORDER BY id",
+        )?;
+
+        let symbols = stmt.query_map([], |row| {
+            Ok(Symbol {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                fqn: row.get(2)?,
+                kind: parse_chunk_kind(&row.get::<_, String>(3)?),
+                file_id: row.get(4)?,
+                line: row.get(5)?,
+                chunk_id: row.get(6)?,
+            })
+        })?;
+
+        let mut result = Vec::new();
+        for s in symbols {
+            result.push(s?);
+        }
+        Ok(result)
+    }
+
     // -----------------------------------------------------------------------
     // FTS5 keyword search
     // -----------------------------------------------------------------------

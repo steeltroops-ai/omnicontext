@@ -19,6 +19,12 @@
     clippy::unnecessary_wraps
 )]
 
+pub mod attention;
+pub mod dependencies;
+pub mod edge_extractor;
+pub mod historical;
+pub mod queries;
+
 use crate::error::OmniResult;
 use crate::types::{DependencyEdge, DependencyKind};
 

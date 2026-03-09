@@ -155,34 +155,35 @@ impl Engine {
         let health_monitor = HealthMonitor::new();
         let embedder_breaker = CircuitBreaker::new(
             "embedder",
-            5, // failure threshold
+            5,                                  // failure threshold
             std::time::Duration::from_secs(60), // timeout
         );
-        let reranker_breaker = CircuitBreaker::new(
-            "reranker",
-            5,
-            std::time::Duration::from_secs(60),
-        );
-        let index_breaker = CircuitBreaker::new(
-            "index",
-            5,
-            std::time::Duration::from_secs(60),
-        );
-        let vector_breaker = CircuitBreaker::new(
-            "vector",
-            5,
-            std::time::Duration::from_secs(60),
-        );
+        let reranker_breaker =
+            CircuitBreaker::new("reranker", 5, std::time::Duration::from_secs(60));
+        let index_breaker = CircuitBreaker::new("index", 5, std::time::Duration::from_secs(60));
+        let vector_breaker = CircuitBreaker::new("vector", 5, std::time::Duration::from_secs(60));
 
         // Report initial health status
-        health_monitor.report_health("parser", crate::resilience::health_monitor::SubsystemHealth::Healthy);
-        health_monitor.report_health("embedder", if embedder.is_available() {
-            crate::resilience::health_monitor::SubsystemHealth::Healthy
-        } else {
-            crate::resilience::health_monitor::SubsystemHealth::Degraded
-        });
-        health_monitor.report_health("index", crate::resilience::health_monitor::SubsystemHealth::Healthy);
-        health_monitor.report_health("vector", crate::resilience::health_monitor::SubsystemHealth::Healthy);
+        health_monitor.report_health(
+            "parser",
+            crate::resilience::health_monitor::SubsystemHealth::Healthy,
+        );
+        health_monitor.report_health(
+            "embedder",
+            if embedder.is_available() {
+                crate::resilience::health_monitor::SubsystemHealth::Healthy
+            } else {
+                crate::resilience::health_monitor::SubsystemHealth::Degraded
+            },
+        );
+        health_monitor.report_health(
+            "index",
+            crate::resilience::health_monitor::SubsystemHealth::Healthy,
+        );
+        health_monitor.report_health(
+            "vector",
+            crate::resilience::health_monitor::SubsystemHealth::Healthy,
+        );
 
         // Initialize commit engine (max 10,000 commits)
         let commit_engine = CommitEngine::new(10_000);
@@ -948,9 +949,9 @@ impl Engine {
     /// - Bug-prone file identification
     /// - Author statistics
     pub fn index_commit_history(&self) -> OmniResult<usize> {
-        self.commit_engine.index_history(&self.config.repo_path, &self.index)
+        self.commit_engine
+            .index_history(&self.config.repo_path, &self.index)
     }
-
 
     /// Get a mutable reference to the branch tracker.
     pub fn branch_tracker(&mut self) -> &mut BranchTracker {
@@ -971,7 +972,7 @@ impl Engine {
         // self.index.clear()?;
         // self.vector_index.clear();
         // self.dep_graph.clear();
-        
+
         // Clear hash cache
         self.hash_cache.clear();
 
@@ -1069,16 +1070,16 @@ impl Engine {
     /// Persist vector index to disk.
     pub fn shutdown(&mut self) -> OmniResult<()> {
         self.vector_index.save()?;
-        
+
         // Prune missing files from hash cache before saving
         let pruned = self.hash_cache.prune_missing_files();
         if pruned > 0 {
             tracing::info!(pruned, "pruned missing files from hash cache");
         }
-        
+
         // Save hash cache
         self.hash_cache.save()?;
-        
+
         tracing::info!("engine shut down");
         Ok(())
     }

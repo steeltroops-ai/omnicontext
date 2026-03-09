@@ -73,11 +73,7 @@ impl HistoricalGraphEnhancer {
         let mut bug_fixes = 0;
 
         for commit in &commits {
-            let files: Vec<PathBuf> = commit
-                .files_changed
-                .iter()
-                .map(|f| PathBuf::from(f))
-                .collect();
+            let files: Vec<PathBuf> = commit.files_changed.iter().map(PathBuf::from).collect();
 
             // Detect co-changes: files modified in the same commit
             for i in 0..files.len() {
@@ -101,7 +97,8 @@ impl HistoricalGraphEnhancer {
             if is_bug_fix {
                 bug_fixes += 1;
                 for file in &files {
-                    *self.bug_prone_files.entry(file.clone()).or_insert(0_usize) += 1;
+                    let count = self.bug_prone_files.entry(file.clone()).or_insert(0_usize);
+                    *count += 1;
                 }
             }
         }
@@ -139,7 +136,7 @@ impl HistoricalGraphEnhancer {
                     edge_type: EdgeType::HistoricalCoChange,
                     weight,
                 };
-                graph.add_edge(edge)?;
+                graph.add_edge(&edge)?;
                 edges_added += 1;
             }
         }

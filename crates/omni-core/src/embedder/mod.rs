@@ -53,7 +53,7 @@ use ort::session::Session;
 use crate::config::EmbeddingConfig;
 use crate::error::{OmniError, OmniResult};
 
-pub use model_manager::{ModelSpec, DEFAULT_MODEL, FALLBACK_MODEL};
+pub use model_manager::{ModelSpec, DEFAULT_MODEL, RERANKER_MODEL};
 
 /// Embedding engine that uses ONNX Runtime for local inference.
 pub struct Embedder {

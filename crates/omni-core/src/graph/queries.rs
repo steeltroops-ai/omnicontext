@@ -14,9 +14,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::OmniResult;
-use crate::graph::dependencies::{
-    ArchitecturalContext, DependencyEdge, EdgeType, FileDependencyGraph, NeighborFile,
-};
+use crate::graph::dependencies::{ArchitecturalContext, EdgeType, FileDependencyGraph};
 
 /// High-level query interface for the file dependency graph.
 pub struct GraphQueryEngine {
@@ -136,7 +134,7 @@ impl GraphQueryEngine {
     /// - Identify core/central files in the architecture
     /// - Prioritize files for documentation
     /// - Focus code review on high-impact files
-    pub fn get_most_important_files(&self, limit: usize) -> OmniResult<Vec<(PathBuf, f32)>> {
+    pub fn get_most_important_files(&self, _limit: usize) -> OmniResult<Vec<(PathBuf, f32)>> {
         // Compute importance scores
         self.graph.compute_importance()?;
 
@@ -303,7 +301,7 @@ mod tests {
             .expect("add file c");
 
         graph
-            .add_edge(DependencyEdge {
+            .add_edge(&DependencyEdge {
                 source: file_a.clone(),
                 target: file_b.clone(),
                 edge_type: EdgeType::Imports,
@@ -312,7 +310,7 @@ mod tests {
             .expect("add edge a->b");
 
         graph
-            .add_edge(DependencyEdge {
+            .add_edge(&DependencyEdge {
                 source: file_b.clone(),
                 target: file_c.clone(),
                 edge_type: EdgeType::Calls,

@@ -79,6 +79,7 @@ pub mod parser;
 pub mod pipeline;
 #[allow(missing_docs)]
 pub mod reranker;
+pub mod resilience;
 pub mod search;
 pub mod vector;
 pub mod watcher;
