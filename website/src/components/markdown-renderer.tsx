@@ -1,11 +1,11 @@
 "use client";
 
-import React from "react";
+import React, { useId, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
-import { Copy, Check, Info, AlertTriangle, AlertCircle, CheckCircle } from "lucide-react";
+import { Copy, Check } from "lucide-react";
 import { MermaidDiagram } from "./mermaid-diagram";
 
 interface MarkdownRendererProps {
@@ -14,6 +14,13 @@ interface MarkdownRendererProps {
 
 export function MarkdownRenderer({ content }: MarkdownRendererProps) {
     const [copied, setCopied] = React.useState<string | null>(null);
+    const baseId = useId();
+
+    // Create stable ID generator that resets for each content change
+    const getCodeId = useMemo(() => {
+        let counter = 0;
+        return () => `${baseId}-code-${counter++}`;
+    }, [baseId, content]);
 
     const copyToClipboard = (text: string, id: string) => {
         navigator.clipboard.writeText(text);
@@ -75,7 +82,8 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
                 code: ({ inline, className, children, ...props }: any) => {
                     const match = /language-(\w+)/.exec(className || '');
                     const codeString = String(children).replace(/\n$/, '');
-                    const codeId = `code-${Math.random().toString(36).substr(2, 9)}`;
+                    // Use stable ID generator instead of Math.random()
+                    const codeId = getCodeId();
 
                     // Handle mermaid diagrams
                     if (!inline && match && match[1] === 'mermaid') {

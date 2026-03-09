@@ -4,9 +4,11 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import mermaid from "mermaid";
 import { ZoomIn, ZoomOut, Maximize2, RotateCcw } from "lucide-react";
 
+// Interactive mermaid diagram with zoom, pan, and fullscreen controls
+
 interface MermaidDiagramProps {
     chart: string;
-    id?: string;
+    id: string; // Make id required instead of optional
 }
 
 export function MermaidDiagram({ chart, id }: MermaidDiagramProps) {
@@ -16,6 +18,7 @@ export function MermaidDiagram({ chart, id }: MermaidDiagramProps) {
     const [isFullscreen, setIsFullscreen] = useState(false);
     const [svg, setSvg] = useState<string>("");
     const [isDragging, setIsDragging] = useState(false);
+    const [isFocused, setIsFocused] = useState(false);
     const [position, setPosition] = useState({ x: 0, y: 0 });
     const dragStart = useRef({ x: 0, y: 0 });
     const lastPosition = useRef({ x: 0, y: 0 });
@@ -49,8 +52,8 @@ export function MermaidDiagram({ chart, id }: MermaidDiagramProps) {
 
         const renderDiagram = async () => {
             try {
-                const uniqueId = id || `mermaid-${Math.random().toString(36).substr(2, 9)}`;
-                const { svg: renderedSvg } = await mermaid.render(uniqueId, chart);
+                // Use the provided stable ID instead of generating random one
+                const { svg: renderedSvg } = await mermaid.render(id, chart);
                 setSvg(renderedSvg);
             } catch (error) {
                 console.error("Mermaid rendering error:", error);
@@ -84,12 +87,15 @@ export function MermaidDiagram({ chart, id }: MermaidDiagramProps) {
     }, []);
 
     const handleWheel = useCallback((e: WheelEvent) => {
+        // Only zoom if diagram is focused (user has clicked on it)
+        if (!isFocused) return;
+
         e.preventDefault();
         e.stopPropagation();
 
         const delta = e.deltaY > 0 ? -0.1 : 0.1;
         setZoom((prev) => Math.max(0.5, Math.min(3, prev + delta)));
-    }, []);
+    }, [isFocused]);
 
     const handleMouseDown = useCallback((e: MouseEvent) => {
         // Only start dragging on left click
@@ -98,6 +104,8 @@ export function MermaidDiagram({ chart, id }: MermaidDiagramProps) {
         e.preventDefault();
         e.stopPropagation();
 
+        // Focus the diagram when clicked
+        setIsFocused(true);
         setIsDragging(true);
         dragStart.current = {
             x: e.clientX - lastPosition.current.x,
@@ -146,21 +154,30 @@ export function MermaidDiagram({ chart, id }: MermaidDiagramProps) {
             }
         };
 
+        // Handle clicks outside to unfocus
+        const handleClickOutside = (e: MouseEvent) => {
+            if (container && !container.contains(e.target as Node)) {
+                setIsFocused(false);
+            }
+        };
+
         document.addEventListener('mousemove', handleGlobalMouseMove);
         document.addEventListener('mouseup', handleGlobalMouseUp);
+        document.addEventListener('mousedown', handleClickOutside);
 
         return () => {
             container.removeEventListener('wheel', handleWheel);
             container.removeEventListener('mousedown', handleMouseDown);
             document.removeEventListener('mousemove', handleGlobalMouseMove);
             document.removeEventListener('mouseup', handleGlobalMouseUp);
+            document.removeEventListener('mousedown', handleClickOutside);
         };
     }, [handleWheel, handleMouseDown, handleMouseMove, handleMouseUp, isDragging]);
 
     return (
         <div
-            className={`relative bg-[#0E0E11] border border-white/5 rounded-xl overflow-hidden mb-8 select-none ${isFullscreen ? "fixed inset-4 z-50" : ""
-                }`}
+            className={`relative bg-[#0E0E11] border rounded-xl overflow-hidden mb-8 select-none transition-colors ${isFocused ? "border-emerald-500/50" : "border-white/5"
+                } ${isFullscreen ? "fixed inset-4 z-50" : ""}`}
         >
             {/* Controls */}
             <div className="absolute top-3 right-3 flex gap-2 z-10">
@@ -201,13 +218,14 @@ export function MermaidDiagram({ chart, id }: MermaidDiagramProps) {
 
             {/* Instructions */}
             <div className="absolute bottom-3 left-3 px-3 py-1.5 bg-zinc-900/90 border border-white/10 rounded-lg text-[11px] text-zinc-500 backdrop-blur-sm z-10">
-                Click & drag to pan • Scroll to zoom
+                {isFocused ? "Click & drag to pan • Scroll to zoom" : "Click to activate controls"}
             </div>
 
             {/* Diagram Container */}
             <div
                 ref={containerRef}
-                className={`overflow-hidden ${isDragging ? "cursor-grabbing" : "cursor-grab"}`}
+                className={`overflow-hidden ${isDragging ? "cursor-grabbing" : isFocused ? "cursor-grab" : "cursor-pointer"
+                    }`}
                 style={{
                     maxHeight: isFullscreen ? "calc(100vh - 2rem)" : "600px",
                     touchAction: "none",
