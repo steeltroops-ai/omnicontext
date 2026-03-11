@@ -36,7 +36,12 @@ let contextInjectionEnabled: boolean = true;
 let requestCounter = 0;
 const pendingRequests = new Map<
   number,
-  { resolve: (v: any) => void; reject: (e: Error) => void }
+  {
+    method: string;
+    startedAt: number;
+    resolve: (v: any) => void;
+    reject: (e: Error) => void;
+  }
 >();
 
 // IPC reconnection state
@@ -50,6 +55,10 @@ let eventTracker: EventTracker | null = null;
 let symbolExtractor: SymbolExtractor | null = null;
 let cacheStatsManager: CacheStatsManager | null = null;
 let sidebarRefreshInterval: NodeJS.Timeout | null = null;
+let healthCheckInterval: NodeJS.Timeout | null = null;
+const HEALTH_CHECK_INTERVAL_MS = 60_000;
+let consecutiveHealthFailures = 0;
+const MAX_HEALTH_FAILURES = 3;
 
 // ---------------------------------------------------------------------------
 // Circuit breaker: prevents sidebar and event tracker from hammering a
@@ -142,6 +151,9 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("omnicontext.cleanupIndexes", () =>
       runCleanupIndexes(),
     ),
+    vscode.commands.registerCommand("omnicontext.updateBinary", () =>
+      runUpdateBinary(),
+    ),
   );
 
   // Register the chat participant for context injection
@@ -195,23 +207,17 @@ export function activate(context: vscode.ExtensionContext) {
         if (config.get<boolean>("autoStartDaemon", true)) {
           await startDaemon(true);
         } else if (config.get<boolean>("autoIndex", true)) {
-          // Only auto-index if this workspace was previously indexed.
-          // For new/unindexed workspaces, prompt the user first.
+          // Auto-index: start indexing for any workspace with a valid root.
+          // Previously-indexed repos re-index silently; new repos are registered and indexed.
           const root = getWorkspaceRoot();
           if (root) {
-            const { isRepoIndexed } = await import("./repoRegistry");
-            if (isRepoIndexed(root)) {
-              await runIndex(true);
-            } else {
-              const answer = await vscode.window.showInformationMessage(
-                `Index "${path.basename(root)}" for AI context?`,
-                "Index Now",
-                "Not Now",
-              );
-              if (answer === "Index Now") {
-                await runIndex(false);
-              }
+            const { isRepoIndexed, registerRepo } =
+              await import("./repoRegistry");
+            if (!isRepoIndexed(root)) {
+              // New workspace: register it so subsequent activations skip the first-time path.
+              registerRepo(root, 0, 0);
             }
+            await runIndex(true);
           }
         }
 
@@ -244,7 +250,24 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor(scheduleSync),
-    vscode.workspace.onDidChangeWorkspaceFolders(scheduleSync),
+    vscode.workspace.onDidChangeWorkspaceFolders(async () => {
+      scheduleSync();
+
+      // Restart daemon for the new workspace root so we don't talk to a
+      // stale pipe connected to the old project.
+      const newRoot = getWorkspaceRoot();
+      if (newRoot && newRoot !== currentRepoRoot) {
+        outputChannel.appendLine(
+          `[workspace] root changed: ${currentRepoRoot} → ${newRoot}`,
+        );
+        stopDaemon();
+        const config = vscode.workspace.getConfiguration("omnicontext");
+        if (config.get<boolean>("autoStartDaemon", true)) {
+          await startDaemon(true);
+        }
+        sidebarProvider.refresh();
+      }
+    }),
   );
 }
 
@@ -253,6 +276,7 @@ export function deactivate() {
     clearInterval(sidebarRefreshInterval);
     sidebarRefreshInterval = null;
   }
+  stopHealthCheck();
   stopDaemon();
   eventTracker?.dispose();
   eventTracker = null;
@@ -454,6 +478,52 @@ async function runCleanupIndexes() {
   vscode.window.showInformationMessage(msg);
 }
 
+async function runUpdateBinary() {
+  const ctx = extensionContext;
+  if (!ctx) {
+    vscode.window.showErrorMessage(
+      "OmniContext: Extension context unavailable for update.",
+    );
+    return;
+  }
+
+  try {
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: "OmniContext Update",
+        cancellable: false,
+      },
+      async (progress) => {
+        bootstrapResult = await bootstrap(ctx, (status) => {
+          progress.report({
+            message: status.message,
+            increment: status.progressPercent,
+          });
+          outputChannel.appendLine(
+            `[update] ${status.phase}: ${status.message}`,
+          );
+        });
+      },
+    );
+
+    // Restart daemon to pick up any updated binaries.
+    stopDaemon();
+    const config = vscode.workspace.getConfiguration("omnicontext");
+    if (config.get<boolean>("autoStartDaemon", true)) {
+      await startDaemon(true);
+    }
+
+    // Ensure MCP clients are aligned to updated binary path.
+    await syncMcpSilent();
+
+    vscode.window.showInformationMessage("OmniContext engine update complete.");
+  } catch (err: any) {
+    outputChannel.appendLine(`[update] failed: ${err.message}`);
+    vscode.window.showErrorMessage(`OmniContext update failed: ${err.message}`);
+  }
+}
+
 // ... (existing helper functions) ...
 
 // ---------------------------------------------------------------------------
@@ -648,6 +718,26 @@ async function startDaemon(silent: boolean = false) {
         "Daemon binary not found, falling back to CLI indexing",
       );
     }
+    // Try CLI indexing — if that also fails, show an explicit error
+    const binary = getBinaryPath();
+    if (!binary) {
+      statusBarItem.text = "$(error) OmniContext: Not Installed";
+      statusBarItem.tooltip = "OmniContext binary not found. Click to search.";
+      vscode.window
+        .showErrorMessage(
+          "OmniContext binary not found. Install it or configure omnicontext.binaryPath.",
+          "Open Settings",
+        )
+        .then((choice) => {
+          if (choice === "Open Settings") {
+            vscode.commands.executeCommand(
+              "workbench.action.openSettings",
+              "omnicontext.binaryPath",
+            );
+          }
+        });
+      return;
+    }
     runIndex(silent);
     return;
   }
@@ -673,16 +763,40 @@ async function startDaemon(silent: boolean = false) {
       outputChannel.appendLine(`[daemon] ${data.toString().trim()}`);
     });
 
+    let daemonExitedEarly = false;
     daemonProcess.on("exit", (code) => {
       outputChannel.appendLine(`[daemon] exited with code ${code}`);
+      daemonExitedEarly = true;
+      rejectAllPendingRequests("Daemon process exited");
       daemonProcess = null;
       ipcClient = null;
+      isDaemonConnected = false;
       statusBarItem.text = "$(search) OmniContext";
     });
 
-    // Wait for daemon to initialize, then connect IPC
-    await new Promise((r) => setTimeout(r, 2000));
-    await connectIpc(root);
+    // Poll for daemon readiness instead of a fixed delay.
+    // The daemon needs time to create the named pipe before we can connect.
+    const maxWaitMs = 10_000;
+    const pollIntervalMs = 250;
+    let connected = false;
+    for (let waited = 0; waited < maxWaitMs; waited += pollIntervalMs) {
+      if (daemonExitedEarly) {
+        throw new Error(
+          "Daemon exited before IPC connection could be established",
+        );
+      }
+      try {
+        await connectIpc(root);
+        connected = true;
+        break;
+      } catch {
+        // Pipe not ready yet — wait and retry
+        await new Promise((r) => setTimeout(r, pollIntervalMs));
+      }
+    }
+    if (!connected) {
+      throw new Error("Daemon failed to become ready within 10 seconds");
+    }
 
     statusBarItem.text = "$(zap) OmniContext";
     statusBarItem.tooltip = "OmniContext: Daemon active, context injection ON";
@@ -713,6 +827,7 @@ function stopDaemon() {
   reconnectAttempts = 0;
   currentRepoRoot = null;
   isDaemonConnected = false;
+  stopHealthCheck();
 
   if (ipcClient) {
     try {
@@ -720,6 +835,7 @@ function stopDaemon() {
     } catch {
       // Ignore errors during shutdown
     }
+    rejectAllPendingRequests("Daemon stopped");
     ipcClient.destroy();
     ipcClient = null;
   }
@@ -747,8 +863,18 @@ async function connectIpc(repoRoot: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const client = net.createConnection(pipeName);
     let buffer = "";
+    let settled = false;
+    const connectTimeout = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      client.destroy();
+      reject(new Error("IPC connection timeout"));
+    }, 5000);
 
     client.on("connect", () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(connectTimeout);
       outputChannel.appendLine("[ipc] connected");
       ipcClient = client;
       isDaemonConnected = true;
@@ -759,6 +885,9 @@ async function connectIpc(repoRoot: string): Promise<void> {
         clearTimeout(reconnectTimer);
         reconnectTimer = null;
       }
+
+      // Start periodic health-check pings
+      startHealthCheck();
 
       resolve();
     });
@@ -788,32 +917,42 @@ async function connectIpc(repoRoot: string): Promise<void> {
     });
 
     client.on("error", (err) => {
+      const shouldReject = !settled;
+      if (shouldReject) {
+        settled = true;
+        clearTimeout(connectTimeout);
+      }
       outputChannel.appendLine(`[ipc] error: ${err.message}`);
+      rejectAllPendingRequests(`IPC error: ${err.message}`);
       ipcClient = null;
       isDaemonConnected = false;
 
       // Trigger reconnection on error
       scheduleReconnect();
 
-      reject(err);
+      if (shouldReject) {
+        reject(err);
+      }
     });
 
     client.on("close", () => {
+      const shouldReject = !settled;
+      if (shouldReject) {
+        settled = true;
+      }
+      clearTimeout(connectTimeout);
       outputChannel.appendLine("[ipc] disconnected");
+      rejectAllPendingRequests("IPC connection closed");
       ipcClient = null;
       isDaemonConnected = false;
 
       // Trigger reconnection on close
       scheduleReconnect();
-    });
 
-    // Timeout
-    setTimeout(() => {
-      if (!ipcClient) {
-        client.destroy();
-        reject(new Error("IPC connection timeout"));
+      if (shouldReject) {
+        reject(new Error("IPC connection closed"));
       }
-    }, 5000);
+    });
   });
 }
 
@@ -866,6 +1005,86 @@ function scheduleReconnect(): void {
   }, delay);
 }
 
+// ---------------------------------------------------------------------------
+// Health check: periodic ping to detect a silently-dead daemon.
+// ---------------------------------------------------------------------------
+function startHealthCheck(): void {
+  stopHealthCheck();
+  consecutiveHealthFailures = 0;
+
+  healthCheckInterval = setInterval(async () => {
+    if (!isDaemonConnected) return;
+
+    // Don't treat long-running index/history calls as daemon health failures.
+    if (hasLongRunningRequestInFlight()) {
+      consecutiveHealthFailures = 0;
+      return;
+    }
+
+    try {
+      await sendIpcRequest("system_status", {});
+      consecutiveHealthFailures = 0;
+    } catch {
+      consecutiveHealthFailures++;
+      outputChannel.appendLine(
+        `[health] ping failed (${consecutiveHealthFailures}/${MAX_HEALTH_FAILURES})`,
+      );
+
+      if (consecutiveHealthFailures >= MAX_HEALTH_FAILURES) {
+        outputChannel.appendLine("[health] daemon unresponsive, restarting...");
+        stopHealthCheck();
+        await stopDaemon();
+        await startDaemon(true);
+      }
+    }
+  }, HEALTH_CHECK_INTERVAL_MS);
+}
+
+function stopHealthCheck(): void {
+  if (healthCheckInterval) {
+    clearInterval(healthCheckInterval);
+    healthCheckInterval = null;
+  }
+  consecutiveHealthFailures = 0;
+}
+
+function getIpcTimeoutMs(method: string): number {
+  switch (method) {
+    case "index":
+    case "history/index_commits":
+      // Full indexing and commit-history indexing can take minutes on large repos.
+      return 10 * 60 * 1000;
+    case "clear_index":
+      return 60 * 1000;
+    case "preflight":
+      return 15 * 1000;
+    case "search":
+    case "context_window":
+      return 20 * 1000;
+    default:
+      return 5 * 1000;
+  }
+}
+
+function hasLongRunningRequestInFlight(): boolean {
+  for (const pending of pendingRequests.values()) {
+    if (
+      pending.method === "index" ||
+      pending.method === "history/index_commits"
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function rejectAllPendingRequests(reason: string): void {
+  for (const [id, pending] of pendingRequests.entries()) {
+    pending.reject(new Error(reason));
+    pendingRequests.delete(id);
+  }
+}
+
 function sendIpcRequest(method: string, params: any): Promise<any> {
   return new Promise((resolve, reject) => {
     if (!ipcClient) {
@@ -881,7 +1100,12 @@ function sendIpcRequest(method: string, params: any): Promise<any> {
       params,
     };
 
-    pendingRequests.set(id, { resolve, reject });
+    pendingRequests.set(id, {
+      method,
+      startedAt: Date.now(),
+      resolve,
+      reject,
+    });
 
     const payload = JSON.stringify(request) + "\n";
 
@@ -902,9 +1126,7 @@ function sendIpcRequest(method: string, params: any): Promise<any> {
       reject(new Error("IPC write buffer full"));
     }
 
-    // Short timeout for status/metrics requests (3s); longer for user-initiated preflight (15s).
-    // This prevents stacked timed-out promises from freezing the sidebar.
-    const timeoutMs = method === "preflight" ? 15000 : 3000;
+    const timeoutMs = getIpcTimeoutMs(method);
     setTimeout(() => {
       if (pendingRequests.has(id)) {
         pendingRequests.delete(id);
@@ -1075,9 +1297,16 @@ async function runIndex(silent: boolean = false) {
       }
 
       if (!silent) {
+        const failed = result.files_failed ?? 0;
+        const failedText = failed > 0 ? `, ${failed} failed` : "";
+        const embeddingFailures = result.embedding_failures ?? 0;
+        const embeddingFailureText =
+          embeddingFailures > 0
+            ? `, ${embeddingFailures} embedding flush error(s)`
+            : "";
         vscode.window.showInformationMessage(
           `OmniContext: Indexed ${result.files_processed} files, ` +
-            `${result.chunks_created} chunks in ${result.elapsed_ms}ms`,
+            `${result.chunks_created} chunks, ${result.embeddings_generated ?? 0} embeddings${failedText}${embeddingFailureText} in ${result.elapsed_ms}ms`,
         );
       }
       return;
@@ -1091,7 +1320,29 @@ async function runIndex(silent: boolean = false) {
   // Fallback to CLI
   const binary = getBinaryPath();
   const root = getWorkspaceRoot();
-  if (!binary || !root) return;
+  if (!binary || !root) {
+    if (!binary) {
+      vscode.window
+        .showErrorMessage(
+          "OmniContext: Cannot index — daemon binary not found. Check the omnicontext.binaryPath setting.",
+          "Open Settings",
+        )
+        .then((action) => {
+          if (action === "Open Settings") {
+            vscode.commands.executeCommand(
+              "workbench.action.openSettings",
+              "omnicontext.binaryPath",
+            );
+          }
+        });
+    }
+    if (!root) {
+      vscode.window.showWarningMessage(
+        "OmniContext: No workspace folder open.",
+      );
+    }
+    return;
+  }
 
   if (!silent) {
     statusBarItem.text = "$(sync~spin) Indexing...";
@@ -1111,10 +1362,18 @@ async function runIndex(silent: boolean = false) {
     registerRepo(root, data.files_processed, data.chunks_created);
 
     if (!silent) {
+      const failed = data.files_failed ?? 0;
+      const failedText = failed > 0 ? `, ${failed} failed` : "";
+      const embeddingFailures = data.embedding_failures ?? 0;
+      const embeddingFailureText =
+        embeddingFailures > 0
+          ? `, ${embeddingFailures} embedding flush error(s)`
+          : "";
       vscode.window.showInformationMessage(
         `OmniContext: Indexed ${data.files_processed} files, ` +
-          `${data.chunks_created} chunks, ${data.symbols_extracted} symbols ` +
-          `in ${data.elapsed_ms}ms`,
+          `${data.chunks_created} chunks, ${data.symbols_extracted} symbols, ` +
+          `${data.embeddings_generated ?? 0} embeddings${failedText} ` +
+          `${embeddingFailureText} in ${data.elapsed_ms}ms`,
       );
     }
   } catch (err: any) {
@@ -1246,7 +1505,29 @@ async function runStatus() {
 async function startMcp() {
   const binary = getBinaryPath();
   const root = getWorkspaceRoot();
-  if (!binary || !root) return;
+  if (!binary || !root) {
+    if (!binary) {
+      vscode.window
+        .showErrorMessage(
+          "OmniContext: Cannot start MCP — daemon binary not found. Check the omnicontext.binaryPath setting.",
+          "Open Settings",
+        )
+        .then((action) => {
+          if (action === "Open Settings") {
+            vscode.commands.executeCommand(
+              "workbench.action.openSettings",
+              "omnicontext.binaryPath",
+            );
+          }
+        });
+    }
+    if (!root) {
+      vscode.window.showWarningMessage(
+        "OmniContext: No workspace folder open.",
+      );
+    }
+    return;
+  }
 
   const mcpBinary = deriveMcpBinaryPath(binary);
 

@@ -104,6 +104,26 @@ function tryRunVersion(binPath: string): string | null {
   }
 }
 
+function parseSemver(versionText: string | null): string | null {
+  if (!versionText) {
+    return null;
+  }
+  const match = versionText.match(/(\d+)\.(\d+)\.(\d+)/);
+  return match ? `${match[1]}.${match[2]}.${match[3]}` : null;
+}
+
+function compareSemver(a: string, b: string): number {
+  const aa = a.split(".").map((v) => parseInt(v, 10));
+  const bb = b.split(".").map((v) => parseInt(v, 10));
+  for (let i = 0; i < 3; i++) {
+    const av = aa[i] ?? 0;
+    const bv = bb[i] ?? 0;
+    if (av > bv) return 1;
+    if (av < bv) return -1;
+  }
+  return 0;
+}
+
 // ---------------------------------------------------------------------------
 // Candidate resolution (ordered by preference)
 // ---------------------------------------------------------------------------
@@ -495,6 +515,8 @@ export async function bootstrap(
   context: vscode.ExtensionContext,
   onStatus: StatusCallback,
 ): Promise<BootstrapResult> {
+  const expectedVersion = String(context.extension.packageJSON.version || "");
+
   onStatus({
     phase: "checking",
     message: "Checking for OmniContext engine...",
@@ -503,28 +525,49 @@ export async function bootstrap(
   // Step 1: Try to resolve from known locations
   const existing = await resolveBinaries(context);
   if (existing) {
-    if (!existing.onnxDllPresent) {
-      // Active repair: download ONNX Runtime into the same directory as the binary
-      const binDir = path.dirname(existing.cliBinary);
+    const installedVersion = parseSemver(tryRunVersion(existing.cliBinary));
+    const versionRelation =
+      installedVersion && expectedVersion
+        ? compareSemver(installedVersion, expectedVersion)
+        : 0;
+
+    if (installedVersion && expectedVersion && versionRelation < 0) {
       onStatus({
-        phase: "downloading",
-        message: "Engine found. ONNX Runtime missing — downloading now...",
+        phase: "checking",
+        message: `Found OmniContext ${installedVersion}; updating to ${expectedVersion}...`,
       });
-      const ok = await downloadOnnxRuntime(binDir, onStatus);
-      if (ok) {
-        onStatus({ phase: "ready", message: "OmniContext engine is ready." });
-        return { ...existing, onnxDllPresent: true };
-      } else {
+      // Continue to download/install path below.
+    } else {
+      if (installedVersion && expectedVersion && versionRelation > 0) {
         onStatus({
-          phase: "ready",
-          message:
-            "ONNX Runtime download failed. Context injection may not work. Use Repair in sidebar.",
+          phase: "checking",
+          message: `Found newer OmniContext ${installedVersion}; keeping existing binary.`,
         });
       }
-    } else {
-      onStatus({ phase: "ready", message: "OmniContext engine is ready." });
+
+      if (!existing.onnxDllPresent) {
+        // Active repair: download ONNX Runtime into the same directory as the binary
+        const binDir = path.dirname(existing.cliBinary);
+        onStatus({
+          phase: "downloading",
+          message: "Engine found. ONNX Runtime missing — downloading now...",
+        });
+        const ok = await downloadOnnxRuntime(binDir, onStatus);
+        if (ok) {
+          onStatus({ phase: "ready", message: "OmniContext engine is ready." });
+          return { ...existing, onnxDllPresent: true };
+        } else {
+          onStatus({
+            phase: "ready",
+            message:
+              "ONNX Runtime download failed. Context injection may not work. Use Repair in sidebar.",
+          });
+        }
+      } else {
+        onStatus({ phase: "ready", message: "OmniContext engine is ready." });
+      }
+      return existing;
     }
-    return existing;
   }
 
   // Step 2: Auto-download from GitHub Releases

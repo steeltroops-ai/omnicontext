@@ -119,6 +119,24 @@ impl MetadataIndex {
         Ok(())
     }
 
+    /// Clear all indexed repository data while keeping schema and indexes intact.
+    pub fn clear_all(&self) -> OmniResult<()> {
+        let tx = self.conn.unchecked_transaction()?;
+
+        // Clear in dependency-safe order.
+        tx.execute("DELETE FROM dependencies", [])?;
+        tx.execute("DELETE FROM symbols", [])?;
+        tx.execute("DELETE FROM chunks", [])?;
+        tx.execute("DELETE FROM files", [])?;
+        tx.execute("DELETE FROM commits", [])?;
+
+        // Ensure FTS content is emptied as well.
+        tx.execute("DELETE FROM chunks_fts", [])?;
+
+        tx.commit()?;
+        Ok(())
+    }
+
     // -----------------------------------------------------------------------
     // File operations
     // -----------------------------------------------------------------------

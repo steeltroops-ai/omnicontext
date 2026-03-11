@@ -903,9 +903,11 @@ async fn handle_index(engine: Arc<Mutex<Engine>>) -> Result<serde_json::Value, (
 
             serde_json::json!({
                 "files_processed": result.files_processed,
+                "files_failed": result.files_failed,
                 "chunks_created": result.chunks_created,
                 "symbols_extracted": result.symbols_extracted,
                 "embeddings_generated": result.embeddings_generated,
+                "embedding_failures": result.embedding_failures,
                 "elapsed_ms": elapsed_ms,
             })
         })
@@ -1197,25 +1199,33 @@ async fn handle_reranker_metrics(
 ) -> Result<serde_json::Value, (i32, String)> {
     let eng = engine.lock().await;
 
-    // Get reranker availability
     let reranker = eng.reranker();
     let enabled = reranker.is_available();
+    let breaker_stats = eng.reranker_breaker().stats();
 
-    // Model name from config
     let model = if enabled {
         "jina-reranker-v2-base-multilingual"
     } else {
         "disabled"
     };
 
+    // Use known config defaults (Config is private on Engine)
     Ok(serde_json::json!({
         "enabled": enabled,
         "model": model,
-        "latency_ms": 15.0, // TODO: Track actual latency with metrics
-        "improvement_percent": 45.0, // Average 40-60% MRR improvement from benchmarks
-        "batch_size": 32,
+        "latency_ms": null,
+        "improvement_percent": null,
+        "batch_size": 16,
         "max_candidates": 100,
-        "rrf_weight": 0.35
+        "rrf_weight": 0.35,
+        "circuit_breaker": {
+            "state": format!("{:?}", breaker_stats.state).to_lowercase(),
+            "success_count": breaker_stats.success_count,
+            "failure_count": breaker_stats.failure_count,
+            "total_failures": breaker_stats.total_failures,
+            "rejected_count": breaker_stats.rejected_count,
+            "success_rate": breaker_stats.success_rate(),
+        }
     }))
 }
 
@@ -1247,9 +1257,9 @@ async fn handle_graph_metrics(
         "edges": status.graph_edges,
         "edge_types": {
             "imports": status.dep_edges,
-            "inherits": 0, // TODO: Track by type in DependencyGraph
-            "calls": 0,
-            "instantiates": 0
+            "inherits": null,
+            "calls": null,
+            "instantiates": null
         },
         "cycles": cycles,
         "pagerank_computed": status.graph_nodes > 0,
@@ -1347,40 +1357,48 @@ async fn handle_resilience_status(
             "embedder": {
                 "state": format!("{:?}", embedder_stats.state).to_lowercase(),
                 "failure_count": embedder_stats.failure_count,
-                "last_failure_time": null, // Not tracked in CircuitBreakerStats
-                "next_attempt_time": null
+                "total_failures": embedder_stats.total_failures,
+                "success_count": embedder_stats.success_count,
+                "rejected_count": embedder_stats.rejected_count,
+                "success_rate": embedder_stats.success_rate(),
             },
             "reranker": {
                 "state": format!("{:?}", reranker_stats.state).to_lowercase(),
                 "failure_count": reranker_stats.failure_count,
-                "last_failure_time": null,
-                "next_attempt_time": null
+                "total_failures": reranker_stats.total_failures,
+                "success_count": reranker_stats.success_count,
+                "rejected_count": reranker_stats.rejected_count,
+                "success_rate": reranker_stats.success_rate(),
             },
             "index": {
                 "state": format!("{:?}", index_stats.state).to_lowercase(),
                 "failure_count": index_stats.failure_count,
-                "last_failure_time": null,
-                "next_attempt_time": null
+                "total_failures": index_stats.total_failures,
+                "success_count": index_stats.success_count,
+                "rejected_count": index_stats.rejected_count,
+                "success_rate": index_stats.success_rate(),
             },
             "vector": {
                 "state": format!("{:?}", vector_stats.state).to_lowercase(),
                 "failure_count": vector_stats.failure_count,
-                "last_failure_time": null,
-                "next_attempt_time": null
+                "total_failures": vector_stats.total_failures,
+                "success_count": vector_stats.success_count,
+                "rejected_count": vector_stats.rejected_count,
+                "success_rate": vector_stats.success_rate(),
             }
         },
         "health_status": health_status,
         "deduplication": {
-            "events_processed": 0, // TODO: Connect to daemon's EventDeduplicator
-            "duplicates_skipped": 0,
-            "in_flight_count": 0,
-            "deduplication_rate": 0.0
+            "events_processed": null,
+            "duplicates_skipped": null,
+            "in_flight_count": null,
+            "deduplication_rate": null
         },
         "backpressure": {
-            "active_requests": 0, // TODO: Connect to daemon's BackpressureMonitor
-            "load_percent": 0.0,
-            "requests_rejected": 0,
-            "peak_load_percent": 0.0
+            "active_requests": null,
+            "load_percent": null,
+            "requests_rejected": null,
+            "peak_load_percent": null
         }
     }))
 }
@@ -1632,18 +1650,32 @@ async fn handle_embedder_metrics(
 ) -> Result<serde_json::Value, (i32, String)> {
     let eng = engine.lock().await;
 
-    // Get embedder metrics
     let embedder = eng.embedder();
+    let breaker_stats = eng.embedder_breaker().stats();
+    let status = eng.status().map_err(|e| {
+        (
+            error_codes::ENGINE_ERROR,
+            format!("failed to get status: {e}"),
+        )
+    })?;
 
     Ok(serde_json::json!({
-        "quantization_mode": "fp32", // TODO: Get actual quantization mode
-        "memory_usage_mb": 0.0, // TODO: Get actual memory usage
-        "memory_savings_percent": 0.0,
-        "throughput_chunks_per_sec": 0.0, // TODO: Calculate throughput
-        "batch_fill_rate": 0.0,
-        "batch_size": 32, // TODO: Get actual batch size
-        "batch_timeout_ms": 100,
-        "available": embedder.is_available()
+        "available": embedder.is_available(),
+        "model_fingerprint": embedder.model_fingerprint(),
+        "dimensions": embedder.dimensions(),
+        "pool_size": embedder.pool_size(),
+        "vectors_indexed": status.vectors_indexed,
+        "vector_memory_bytes": status.vector_memory_bytes,
+        "embedding_coverage_percent": status.embedding_coverage_percent,
+        "active_search_strategy": status.active_search_strategy,
+        "circuit_breaker": {
+            "state": format!("{:?}", breaker_stats.state).to_lowercase(),
+            "success_count": breaker_stats.success_count,
+            "failure_count": breaker_stats.failure_count,
+            "total_failures": breaker_stats.total_failures,
+            "rejected_count": breaker_stats.rejected_count,
+            "success_rate": breaker_stats.success_rate(),
+        }
     }))
 }
 
@@ -1661,26 +1693,51 @@ async fn handle_configure_embedder(
 
 /// Handle request for index pool metrics.
 async fn handle_index_pool_metrics(
-    _engine: Arc<Mutex<Engine>>,
+    engine: Arc<Mutex<Engine>>,
 ) -> Result<serde_json::Value, (i32, String)> {
-    // TODO: Implement pool metrics collection
+    let eng = engine.lock().await;
+    let breaker_stats = eng.index_breaker().stats();
+    let status = eng.status().map_err(|e| {
+        (
+            error_codes::ENGINE_ERROR,
+            format!("failed to get status: {e}"),
+        )
+    })?;
+
+    // Engine uses a single Connection (ConnectionPool not wired in yet)
     Ok(serde_json::json!({
         "active_connections": 1,
-        "max_pool_size": 10,
-        "utilization_percent": 10.0,
-        "total_queries": 0,
-        "avg_query_time_ms": 0.0
+        "max_pool_size": 1,
+        "utilization_percent": 100.0,
+        "files_indexed": status.files_indexed,
+        "chunks_indexed": status.chunks_indexed,
+        "symbols_indexed": status.symbols_indexed,
+        "hash_cache_entries": status.hash_cache_entries,
+        "circuit_breaker": {
+            "state": format!("{:?}", breaker_stats.state).to_lowercase(),
+            "success_count": breaker_stats.success_count,
+            "failure_count": breaker_stats.failure_count,
+            "success_rate": breaker_stats.success_rate(),
+        }
     }))
 }
 
 /// Handle request for compression statistics.
 async fn handle_compression_stats(
-    _engine: Arc<Mutex<Engine>>,
+    engine: Arc<Mutex<Engine>>,
 ) -> Result<serde_json::Value, (i32, String)> {
-    // TODO: Implement compression stats collection
+    let eng = engine.lock().await;
+    let status = eng.status().map_err(|e| {
+        (
+            error_codes::ENGINE_ERROR,
+            format!("failed to get status: {e}"),
+        )
+    })?;
+
+    // No quantization/compression applied yet — report raw sizes
     Ok(serde_json::json!({
-        "bytes_before": 0,
-        "bytes_after": 0,
+        "vectors_indexed": status.vectors_indexed,
+        "vector_memory_bytes": status.vector_memory_bytes,
         "compression_ratio": 1.0,
         "savings_percent": 0.0
     }))

@@ -292,6 +292,55 @@ impl CircuitBreaker {
             "circuit breaker manually reset"
         );
     }
+
+    /// Execute a **synchronous** protected operation.
+    ///
+    /// Same semantics as [`call`] but for non-async code paths.
+    pub fn call_sync<F, T, E>(&self, f: F) -> Result<T, CircuitBreakerError<E>>
+    where
+        F: FnOnce() -> Result<T, E>,
+    {
+        match self.state() {
+            CircuitState::Open => {
+                if self.should_attempt_recovery() {
+                    self.transition_to_half_open();
+                    match f() {
+                        Ok(v) => {
+                            self.on_recovery_success();
+                            Ok(v)
+                        }
+                        Err(e) => {
+                            self.on_recovery_failure();
+                            Err(CircuitBreakerError::OperationFailed(e))
+                        }
+                    }
+                } else {
+                    self.rejected_count.fetch_add(1, Ordering::Relaxed);
+                    Err(CircuitBreakerError::Open)
+                }
+            }
+            CircuitState::HalfOpen => match f() {
+                Ok(v) => {
+                    self.on_recovery_success();
+                    Ok(v)
+                }
+                Err(e) => {
+                    self.on_recovery_failure();
+                    Err(CircuitBreakerError::OperationFailed(e))
+                }
+            },
+            CircuitState::Closed => match f() {
+                Ok(v) => {
+                    self.on_success();
+                    Ok(v)
+                }
+                Err(e) => {
+                    self.on_failure();
+                    Err(CircuitBreakerError::OperationFailed(e))
+                }
+            },
+        }
+    }
 }
 
 /// Circuit breaker statistics.

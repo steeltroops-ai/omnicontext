@@ -201,6 +201,7 @@ async fn cmd_index(path: &str, _force: bool, json: bool) -> Result<()> {
             "chunks_created": result.chunks_created,
             "symbols_extracted": result.symbols_extracted,
             "embeddings_generated": result.embeddings_generated,
+            "embedding_failures": result.embedding_failures,
         });
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
@@ -211,6 +212,7 @@ async fn cmd_index(path: &str, _force: bool, json: bool) -> Result<()> {
         println!("  Chunks created:   {}", result.chunks_created);
         println!("  Symbols found:    {}", result.symbols_extracted);
         println!("  Embeddings:       {}", result.embeddings_generated);
+        println!("  Embed flush errs: {}", result.embedding_failures);
     }
 
     // Persist on shutdown

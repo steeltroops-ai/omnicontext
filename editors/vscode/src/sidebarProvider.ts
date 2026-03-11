@@ -63,7 +63,7 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
       params: any,
     ) => Promise<any>,
     private readonly isDaemonConnected: () => boolean = () => false,
-  ) { }
+  ) {}
 
   /**
    * Send a bootstrap status update directly to the sidebar webview.
@@ -152,18 +152,22 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
       // version info, and settings to the UI even if the backend is down.
     }
 
-    // Retrieve cache statistics
-    const cacheStats = isConnected
-      ? await this.cacheStatsManager.getStats()
-      : null;
-
-    // Retrieve system status
-    const systemStatus = isConnected ? await this.getSystemStatus() : null;
-
-    // Retrieve performance metrics
-    const performanceMetrics = isConnected
-      ? await this.getPerformanceMetrics()
-      : null;
+    // Fetch all IPC data in parallel when connected
+    const [
+      cacheStats,
+      systemStatus,
+      performanceMetrics,
+      rerankerMetrics,
+      graphMetrics,
+    ] = isConnected
+      ? await Promise.all([
+          this.cacheStatsManager.getStats(),
+          this.getSystemStatus(),
+          this.getPerformanceMetrics(),
+          this.getRerankerMetrics(),
+          this.getGraphMetrics(),
+        ])
+      : [null, null, null, null, null];
 
     // Get prefetch enabled state from configuration
     const config = vscode.workspace.getConfiguration("omnicontext.prefetch");
@@ -268,23 +272,19 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
       });
     }
 
-    // Phase 1: Fetch intelligence layer metrics
-    if (isConnected) {
-      const rerankerMetrics = await this.getRerankerMetrics();
-      if (rerankerMetrics) {
-        this._view.webview.postMessage({
-          type: "updateRerankerMetrics",
-          metrics: rerankerMetrics,
-        });
-      }
+    // Phase 1: Send intelligence layer metrics (already fetched in parallel)
+    if (rerankerMetrics) {
+      this._view.webview.postMessage({
+        type: "updateRerankerMetrics",
+        metrics: rerankerMetrics,
+      });
+    }
 
-      const graphMetrics = await this.getGraphMetrics();
-      if (graphMetrics) {
-        this._view.webview.postMessage({
-          type: "updateGraphMetrics",
-          metrics: graphMetrics,
-        });
-      }
+    if (graphMetrics) {
+      this._view.webview.postMessage({
+        type: "updateGraphMetrics",
+        metrics: graphMetrics,
+      });
     }
 
     // Auto-discover repos indexed via CLI that aren't in registry.json yet.
@@ -456,11 +456,27 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
         break;
 
       case "updateBinary":
-        vscode.commands.executeCommand("omnicontext.repair");
+        vscode.commands.executeCommand("omnicontext.updateBinary");
         break;
 
       case "syncMcpConfig":
         vscode.commands.executeCommand("omnicontext.syncMcp");
+        break;
+
+      case "resetCircuitBreakers":
+        await this.handleResetCircuitBreakers();
+        break;
+
+      case "showDependencyGraph":
+        await this.handleShowDependencyGraph();
+        break;
+
+      case "exploreArchitecturalContext":
+        await this.handleExploreArchitecturalContext();
+        break;
+
+      case "findCircularDependencies":
+        await this.handleFindCircularDependencies();
         break;
 
       default:
@@ -514,8 +530,25 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
         async (progress) => {
           progress.report({ increment: 0, message: "Starting indexing..." });
 
-          // Trigger re-index via IPC
-          const result = await this.sendIpcRequest("index", {});
+          let result: any;
+          try {
+            // Trigger re-index via daemon IPC when connected.
+            result = await this.sendIpcRequest("index", {});
+          } catch (ipcErr: any) {
+            // Fallback to extension command which can use CLI path.
+            this.logActivity(
+              "Re-index",
+              "warning",
+              `IPC indexing failed, falling back to command: ${ipcErr.message}`,
+            );
+            await vscode.commands.executeCommand("omnicontext.index");
+            result = {
+              files_processed: 0,
+              chunks_created: 0,
+              elapsed_ms: 0,
+              fallback: true,
+            };
+          }
 
           progress.report({ increment: 100, message: "Complete!" });
 
@@ -529,7 +562,9 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
             );
           }
 
-          const message = `Re-indexed ${result.files_processed} files, ${result.chunks_created} chunks in ${result.elapsed_ms}ms`;
+          const message = result.fallback
+            ? "Re-index completed via fallback path."
+            : `Re-indexed ${result.files_processed} files, ${result.chunks_created} chunks, ${result.embeddings_generated ?? 0} embeddings${result.files_failed ? `, ${result.files_failed} failed` : ""}${result.embedding_failures ? `, ${result.embedding_failures} embedding flush error(s)` : ""} in ${result.elapsed_ms}ms`;
           vscode.window.showInformationMessage(message);
           this.logActivity("Re-index", "success", message);
         },
@@ -804,7 +839,7 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
     if (index >= 0 && index < this.activityLog.length) {
       const activity =
         this.activityLog[
-        this.activityLog.length - this.maxActivityEntries + index
+          this.activityLog.length - this.maxActivityEntries + index
         ];
       if (activity) {
         vscode.window
@@ -818,6 +853,115 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
             }
           });
       }
+    }
+  }
+
+  private async handleResetCircuitBreakers(): Promise<void> {
+    try {
+      await this.sendIpcRequest("resilience/reset_circuit_breaker", {
+        subsystem: "all",
+      });
+      vscode.window.showInformationMessage(
+        "OmniContext: All circuit breakers reset",
+      );
+      this.logActivity(
+        "Reset Circuit Breakers",
+        "success",
+        "All circuit breakers reset",
+      );
+      await this.refresh();
+    } catch (err: any) {
+      vscode.window.showErrorMessage(
+        `Failed to reset circuit breakers: ${err.message}`,
+      );
+      this.logActivity(
+        "Reset Circuit Breakers",
+        "error",
+        `Failed: ${err.message}`,
+      );
+    }
+  }
+
+  private async handleShowDependencyGraph(): Promise<void> {
+    try {
+      const result = await this.sendIpcRequest("graph/get_metrics", {});
+      const doc = await vscode.workspace.openTextDocument({
+        content: JSON.stringify(result, null, 2),
+        language: "json",
+      });
+      await vscode.window.showTextDocument(doc);
+      this.logActivity("Dependency Graph", "success", "Graph metrics opened");
+    } catch (err: any) {
+      vscode.window.showErrorMessage(
+        `Failed to get dependency graph: ${err.message}`,
+      );
+      this.logActivity("Dependency Graph", "error", `Failed: ${err.message}`);
+    }
+  }
+
+  private async handleExploreArchitecturalContext(): Promise<void> {
+    try {
+      const activeEditor = vscode.window.activeTextEditor;
+      if (!activeEditor) {
+        vscode.window.showWarningMessage(
+          "Open a file first to explore its architectural context.",
+        );
+        return;
+      }
+      const filePath = activeEditor.document.uri.fsPath;
+      const result = await this.sendIpcRequest(
+        "graph/get_architectural_context",
+        { file_path: filePath, max_hops: 2 },
+      );
+      const doc = await vscode.workspace.openTextDocument({
+        content: JSON.stringify(result, null, 2),
+        language: "json",
+      });
+      await vscode.window.showTextDocument(doc);
+      this.logActivity(
+        "Architectural Context",
+        "success",
+        `Context for ${filePath}`,
+      );
+    } catch (err: any) {
+      vscode.window.showErrorMessage(
+        `Failed to get architectural context: ${err.message}`,
+      );
+      this.logActivity(
+        "Architectural Context",
+        "error",
+        `Failed: ${err.message}`,
+      );
+    }
+  }
+
+  private async handleFindCircularDependencies(): Promise<void> {
+    try {
+      const result = await this.sendIpcRequest("graph/find_cycles", {});
+      if (result.cycle_count === 0) {
+        vscode.window.showInformationMessage(
+          "OmniContext: No circular dependencies detected!",
+        );
+      } else {
+        const doc = await vscode.workspace.openTextDocument({
+          content: JSON.stringify(result, null, 2),
+          language: "json",
+        });
+        await vscode.window.showTextDocument(doc);
+        vscode.window.showWarningMessage(
+          `OmniContext: ${result.cycle_count} circular dependency cycle(s) found.`,
+        );
+      }
+      this.logActivity(
+        "Find Cycles",
+        "success",
+        `${result.cycle_count} cycle(s) found`,
+      );
+    } catch (err: any) {
+      vscode.window.showErrorMessage(
+        `Failed to find circular dependencies: ${err.message}`,
+      );
+      this.logActivity("Find Cycles", "error", `Failed: ${err.message}`);
     }
   }
 
@@ -2113,12 +2257,14 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
             if (status.deduplication) {
                 const dedupRateElement = document.getElementById('dedup-rate');
                 if (dedupRateElement) {
-                    dedupRateElement.textContent = (status.deduplication.deduplication_rate * 100).toFixed(1);
+                const dedupRate = status.deduplication.deduplication_rate ?? 0;
+                dedupRateElement.textContent = (dedupRate * 100).toFixed(1);
                 }
                 
                 const inFlightElement = document.getElementById('in-flight');
                 if (inFlightElement) {
-                    inFlightElement.textContent = status.deduplication.in_flight_count.toString();
+                const inFlight = status.deduplication.in_flight_count ?? 0;
+                inFlightElement.textContent = inFlight.toString();
                 }
             }
             
@@ -2126,12 +2272,14 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
             if (status.backpressure) {
                 const loadElement = document.getElementById('load-percent');
                 if (loadElement) {
-                    loadElement.textContent = status.backpressure.load_percent.toFixed(1);
+                const loadPercent = status.backpressure.load_percent ?? 0;
+                loadElement.textContent = loadPercent.toFixed(1);
                 }
                 
                 const rejectedElement = document.getElementById('requests-rejected');
                 if (rejectedElement) {
-                    rejectedElement.textContent = status.backpressure.requests_rejected.toString();
+                const rejected = status.backpressure.requests_rejected ?? 0;
+                rejectedElement.textContent = rejected.toString();
                 }
             }
         }

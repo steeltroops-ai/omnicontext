@@ -40,7 +40,7 @@ use crate::graph::DependencyGraph;
 use crate::index::MetadataIndex;
 use crate::parser;
 use crate::reranker::Reranker;
-use crate::resilience::circuit_breaker::CircuitBreaker;
+use crate::resilience::circuit_breaker::{CircuitBreaker, CircuitBreakerError};
 use crate::resilience::health_monitor::HealthMonitor;
 use crate::search::SearchEngine;
 use crate::types::{
@@ -313,6 +313,7 @@ impl Engine {
                             &mut result.embeddings_generated,
                         ) {
                             tracing::error!(error = %e, "batch embedding flush failed");
+                            result.embedding_failures += 1;
                         }
                     }
                 }
@@ -341,6 +342,7 @@ impl Engine {
             self.flush_pending_embeddings(&mut pending_embeddings, &mut result.embeddings_generated)
         {
             tracing::error!(error = %e, "final embedding flush failed");
+            result.embedding_failures += 1;
         }
 
         // Persist vector index to disk
@@ -363,6 +365,7 @@ impl Engine {
             chunks = result.chunks_created,
             symbols = result.symbols_extracted,
             embeddings = result.embeddings_generated,
+            embedding_failures = result.embedding_failures,
             failed = result.files_failed,
             "indexing complete"
         );
@@ -489,7 +492,15 @@ impl Engine {
         stats.symbols = symbols.len();
 
         // Atomic reindex: delete old chunks/symbols, insert new
-        let (_fid, chunk_ids) = self.index.reindex_file(&file_info, &chunks, &symbols)?;
+        let (_fid, chunk_ids) = self
+            .index_breaker
+            .call_sync(|| self.index.reindex_file(&file_info, &chunks, &symbols))
+            .map_err(|e| match e {
+                CircuitBreakerError::Open => OmniError::Internal(
+                    "index circuit breaker is open — too many recent failures".into(),
+                ),
+                CircuitBreakerError::OperationFailed(inner) => inner,
+            })?;
 
         // Stage for batch embedding
         if self.embedder.is_available() && !chunks.is_empty() {
@@ -684,16 +695,25 @@ impl Engine {
         } else {
             Some(self.config.search.reranker.clone())
         };
-        self.search_engine.search(
-            query,
-            limit,
-            &self.index,
-            &self.vector_index,
-            &self.embedder,
-            Some(&self.dep_graph),
-            Some(&self.reranker),
-            reranker_config.as_ref(),
-        )
+        self.index_breaker
+            .call_sync(|| {
+                self.search_engine.search(
+                    query,
+                    limit,
+                    &self.index,
+                    &self.vector_index,
+                    &self.embedder,
+                    Some(&self.dep_graph),
+                    Some(&self.reranker),
+                    reranker_config.as_ref(),
+                )
+            })
+            .map_err(|e| match e {
+                CircuitBreakerError::Open => OmniError::Internal(
+                    "search circuit breaker is open — too many recent failures".into(),
+                ),
+                CircuitBreakerError::OperationFailed(inner) => inner,
+            })
     }
 
     /// Execute a search and assemble a token-budget-aware context window.
@@ -839,14 +859,27 @@ impl Engine {
                 if let Some(embedding) = maybe_embedding {
                     if i < chunk_ids.len() {
                         if let Ok(vector_id) = u64::try_from(chunk_ids[i]) {
-                            if let Err(e) = self.vector_index.add(vector_id, &embedding) {
-                                tracing::warn!(
-                                    chunk_id = chunk_ids[i],
-                                    error = %e,
-                                    "failed to add vector"
-                                );
-                                failed += 1;
-                                continue;
+                            let add_result = self
+                                .vector_breaker
+                                .call_sync(|| self.vector_index.add(vector_id, &embedding));
+                            match add_result {
+                                Err(CircuitBreakerError::Open) => {
+                                    tracing::warn!(
+                                        "vector circuit breaker open, skipping remaining vectors"
+                                    );
+                                    failed += chunk_ids.len() - i;
+                                    break;
+                                }
+                                Err(CircuitBreakerError::OperationFailed(e)) => {
+                                    tracing::warn!(
+                                        chunk_id = chunk_ids[i],
+                                        error = %e,
+                                        "failed to add vector"
+                                    );
+                                    failed += 1;
+                                    continue;
+                                }
+                                Ok(()) => {}
                             }
                             if let Err(e) = self.index.set_chunk_vector_id(chunk_ids[i], vector_id)
                             {
@@ -960,21 +993,26 @@ impl Engine {
 
     /// Clear the index (metadata, vectors, and graph).
     /// This removes all indexed data but keeps the database structure intact.
-    ///
-    /// Note: Currently this is a no-op placeholder. Full implementation would require:
-    /// - MetadataIndex::clear() to truncate all tables
-    /// - VectorIndex::clear() to remove all vectors
-    /// - DependencyGraph::clear() to remove all nodes/edges
     pub fn clear_index(&mut self) -> OmniResult<()> {
-        tracing::warn!("clear_index is not fully implemented yet - this is a placeholder");
+        // 1) Clear SQL metadata and FTS contents.
+        self.index.clear_all()?;
 
-        // TODO: Implement actual clearing logic:
-        // self.index.clear()?;
-        // self.vector_index.clear();
-        // self.dep_graph.clear();
+        // 2) Clear in-memory graphs.
+        self.dep_graph.clear();
+        self.file_dep_graph.clear();
 
-        // Clear hash cache
+        // 3) Recreate vector index from scratch by replacing on-disk file.
+        let vector_path = self.config.data_dir().join("vectors.bin");
+        if vector_path.exists() {
+            std::fs::remove_file(&vector_path)?;
+        }
+        self.vector_index = VectorIndex::open(&vector_path, self.config.embedding.dimensions)?;
+
+        // 4) Clear hash cache so next index pass fully reprocesses files.
         self.hash_cache.clear();
+        self.hash_cache.save()?;
+
+        tracing::info!("index cleared successfully");
 
         Ok(())
     }
@@ -1046,17 +1084,31 @@ impl Engine {
 
         // Use parallel embedding for batches
         let embeddings = self.embedder.embed_batch_parallel(&texts);
+        let total_embeddings = embeddings.len();
 
         for (i, maybe_embedding) in embeddings.into_iter().enumerate() {
             if let Some(embedding) = maybe_embedding {
                 let chunk_id = pending[i].0;
                 if let Ok(vector_id) = u64::try_from(chunk_id) {
-                    if let Err(e) = self.vector_index.add(vector_id, &embedding) {
-                        tracing::warn!(error = %e, "failed to add vector to HNSW");
-                        continue;
+                    let add_result = self
+                        .vector_breaker
+                        .call_sync(|| self.vector_index.add(vector_id, &embedding));
+                    match add_result {
+                        Err(CircuitBreakerError::Open) => {
+                            let remaining = total_embeddings.saturating_sub(i);
+                            return Err(OmniError::Internal(format!(
+                                "vector circuit breaker open during flush; {remaining} embeddings left unprocessed"
+                            )));
+                        }
+                        Err(CircuitBreakerError::OperationFailed(e)) => {
+                            tracing::warn!(error = %e, "failed to add vector to HNSW");
+                            continue;
+                        }
+                        Ok(()) => {}
                     }
                     if let Err(e) = self.index.set_chunk_vector_id(chunk_id, vector_id) {
                         tracing::warn!(error = %e, "failed to update SQL vector pointer");
+                        continue;
                     }
                     *embeddings_count += 1;
                 }
@@ -1098,6 +1150,8 @@ pub struct IndexResult {
     pub symbols_extracted: usize,
     /// Total embeddings generated.
     pub embeddings_generated: usize,
+    /// Number of embedding flush failures encountered.
+    pub embedding_failures: usize,
 }
 
 /// Result of retrying failed embeddings.
