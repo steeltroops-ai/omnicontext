@@ -451,6 +451,26 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
         await this.handleRemoveIndexedRepo(message.hash);
         break;
 
+      case "openIndexedRepo":
+        await this.handleOpenIndexedRepo(message.hash);
+        break;
+
+      case "revealIndexedRepo":
+        await this.handleRevealIndexedRepo(message.hash);
+        break;
+
+      case "copyIndexedRepoPath":
+        await this.handleCopyIndexedRepoPath(message.repoPath);
+        break;
+
+      case "openRepoIndexData":
+        await this.handleOpenRepoIndexData(message.hash);
+        break;
+
+      case "viewIndexedRepoReport":
+        await this.handleViewIndexedRepoReport(message.hash);
+        break;
+
       case "cleanupOrphans":
         vscode.commands.executeCommand("omnicontext.cleanupIndexes");
         break;
@@ -747,6 +767,200 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
     }
 
     await this.refresh();
+  }
+
+  private getIndexedRepoByHash(hash: string): IndexedRepo | null {
+    if (!hash) {
+      return null;
+    }
+    return getIndexedRepos().find((repo) => repo.hash === hash) || null;
+  }
+
+  private async handleOpenIndexedRepo(hash: string): Promise<void> {
+    const repo = this.getIndexedRepoByHash(hash);
+    if (!repo) {
+      vscode.window.showWarningMessage("Repository entry no longer exists.");
+      return;
+    }
+    if (!repo.exists) {
+      vscode.window.showWarningMessage(
+        `Repository folder not found: ${repo.repoPath}`,
+      );
+      return;
+    }
+
+    try {
+      await vscode.commands.executeCommand(
+        "vscode.openFolder",
+        vscode.Uri.file(repo.repoPath),
+        true,
+      );
+      this.logActivity("Open Repo", "info", `Opened ${repo.repoPath}`);
+    } catch (err: any) {
+      vscode.window.showErrorMessage(`Failed to open repository: ${err.message}`);
+      this.logActivity("Open Repo", "error", `Failed: ${err.message}`);
+    }
+  }
+
+  private async handleRevealIndexedRepo(hash: string): Promise<void> {
+    const repo = this.getIndexedRepoByHash(hash);
+    if (!repo) {
+      vscode.window.showWarningMessage("Repository entry no longer exists.");
+      return;
+    }
+    if (!repo.exists) {
+      vscode.window.showWarningMessage(
+        `Repository folder not found: ${repo.repoPath}`,
+      );
+      return;
+    }
+
+    try {
+      await vscode.commands.executeCommand(
+        "revealFileInOS",
+        vscode.Uri.file(repo.repoPath),
+      );
+      this.logActivity("Reveal Repo", "info", `Revealed ${repo.repoPath}`);
+    } catch (err: any) {
+      vscode.window.showErrorMessage(
+        `Failed to reveal repository folder: ${err.message}`,
+      );
+      this.logActivity("Reveal Repo", "error", `Failed: ${err.message}`);
+    }
+  }
+
+  private async handleCopyIndexedRepoPath(repoPath: string): Promise<void> {
+    if (!repoPath) {
+      return;
+    }
+    try {
+      await vscode.env.clipboard.writeText(repoPath);
+      vscode.window.showInformationMessage(`Copied path: ${repoPath}`);
+      this.logActivity("Copy Repo Path", "success", repoPath);
+    } catch (err: any) {
+      vscode.window.showErrorMessage(`Failed to copy path: ${err.message}`);
+      this.logActivity("Copy Repo Path", "error", `Failed: ${err.message}`);
+    }
+  }
+
+  private async handleOpenRepoIndexData(hash: string): Promise<void> {
+    if (!hash) {
+      return;
+    }
+
+    const repoDir = path.join(getOmniReposDir(), hash);
+    if (!fs.existsSync(repoDir)) {
+      vscode.window.showWarningMessage(
+        `Index data directory not found for hash ${hash}`,
+      );
+      return;
+    }
+
+    try {
+      await vscode.commands.executeCommand(
+        "revealFileInOS",
+        vscode.Uri.file(repoDir),
+      );
+      this.logActivity("Open Index Data", "info", `Revealed ${repoDir}`);
+    } catch (err: any) {
+      vscode.window.showErrorMessage(
+        `Failed to reveal index data directory: ${err.message}`,
+      );
+      this.logActivity("Open Index Data", "error", `Failed: ${err.message}`);
+    }
+  }
+
+  private async handleViewIndexedRepoReport(hash: string): Promise<void> {
+    const repo = this.getIndexedRepoByHash(hash);
+    if (!repo) {
+      vscode.window.showWarningMessage("Repository entry no longer exists.");
+      return;
+    }
+
+    const repoDir = path.join(getOmniReposDir(), repo.hash);
+    const indexDbPath = path.join(repoDir, "index.db");
+    const vectorsPath = path.join(repoDir, "vectors.bin");
+    const workspaceFolders = vscode.workspace.workspaceFolders || [];
+    const inWorkspace = workspaceFolders.some(
+      (folder) =>
+        folder.uri.fsPath.replace(/\\/g, "/").toLowerCase() ===
+        repo.repoPath.replace(/\\/g, "/").toLowerCase(),
+    );
+
+    let artifactLines: string[] = [];
+    try {
+      const entries = fs.existsSync(repoDir)
+        ? fs.readdirSync(repoDir, { withFileTypes: true })
+        : [];
+      artifactLines = entries
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((entry) => {
+          const entryPath = path.join(repoDir, entry.name);
+          if (entry.isDirectory()) {
+            return `- dir: \`${entry.name}\``;
+          }
+          const size = fs.existsSync(entryPath)
+            ? this.formatBytes(fs.statSync(entryPath).size)
+            : "unknown";
+          return `- file: \`${entry.name}\` (${size})`;
+        });
+    } catch (err: any) {
+      artifactLines = [
+        `- Failed to inspect artifact directory: ${err.message || String(err)}`,
+      ];
+    }
+
+    const report = [
+      "# OmniContext Repository Report",
+      "",
+      `- Name: ${repo.name}`,
+      `- Hash: ${repo.hash}`,
+      `- Repository Path: ${repo.repoPath}`,
+      `- Exists on Disk: ${repo.exists ? "yes" : "no"}`,
+      `- In Current Workspace: ${inWorkspace ? "yes" : "no"}`,
+      `- Last Indexed: ${new Date(repo.lastIndexedAt).toISOString()}`,
+      `- Files Indexed: ${repo.filesIndexed}`,
+      `- Chunks Indexed: ${repo.chunksIndexed}`,
+      "",
+      "## Index Artifacts",
+      `- Index Directory: ${repoDir}`,
+      `- index.db present: ${fs.existsSync(indexDbPath) ? "yes" : "no"}`,
+      `- vectors.bin present: ${fs.existsSync(vectorsPath) ? "yes" : "no"}`,
+      ...(artifactLines.length > 0
+        ? artifactLines
+        : ["- No index artifacts found in this directory."]),
+      "",
+      `Generated at ${new Date().toISOString()}`,
+    ].join("\n");
+
+    try {
+      const doc = await vscode.workspace.openTextDocument({
+        content: report,
+        language: "markdown",
+      });
+      await vscode.window.showTextDocument(doc, { preview: false });
+      this.logActivity(
+        "Repo Report",
+        "success",
+        `Opened report for ${repo.name} (${repo.hash})`,
+      );
+    } catch (err: any) {
+      vscode.window.showErrorMessage(`Failed to open repo report: ${err.message}`);
+      this.logActivity("Repo Report", "error", `Failed: ${err.message}`);
+    }
+  }
+
+  private formatBytes(bytes: number): string {
+    if (bytes < 1024) {
+      return `${bytes} B`;
+    }
+    if (bytes < 1024 * 1024) {
+      return `${(bytes / 1024).toFixed(1)} KB`;
+    }
+    if (bytes < 1024 * 1024 * 1024) {
+      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    }
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
   }
 
   /**
@@ -1270,26 +1484,47 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
             color: var(--vscode-descriptionForeground);
             margin-bottom: 4px;
         }
+
+        .repo-item-path {
+          font-size: 10px;
+          font-family: var(--vscode-editor-font-family);
+          color: var(--vscode-descriptionForeground);
+          background: rgba(128, 128, 128, 0.08);
+          border-radius: 4px;
+          padding: 4px 6px;
+          margin-bottom: 6px;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
         
         .repo-item-actions {
             display: flex;
-            justify-content: flex-end;
+          flex-wrap: wrap;
+          gap: 4px;
         }
-        
-        .repo-item-remove {
-            background: none;
-            border: none;
-            color: var(--vscode-descriptionForeground);
+
+        .repo-item-action {
+          background: transparent;
+          border: 1px solid var(--vscode-panel-border);
+          color: var(--vscode-descriptionForeground);
             cursor: pointer;
             font-size: 10px;
-            padding: 2px 4px;
-            opacity: 0.6;
-            transition: opacity 0.2s, color 0.2s;
+          padding: 2px 6px;
+          border-radius: 4px;
+          opacity: 0.85;
+          transition: opacity 0.2s, color 0.2s, border-color 0.2s;
         }
-        
-        .repo-item-remove:hover {
+
+        .repo-item-action:hover {
             opacity: 1;
+          border-color: var(--vscode-textLink-foreground);
+          color: var(--vscode-textLink-foreground);
+        }
+
+        .repo-item-action.danger:hover {
             color: #f87171;
+          border-color: rgba(248, 113, 113, 0.4);
         }
         
         .activity-item:hover {
@@ -1886,6 +2121,30 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
             vscode.postMessage({ command: 'removeIndexedRepo', hash });
         }
 
+        function openIndexedRepo(hash) {
+          vscode.postMessage({ command: 'openIndexedRepo', hash });
+        }
+
+        function revealIndexedRepo(hash) {
+          vscode.postMessage({ command: 'revealIndexedRepo', hash });
+        }
+
+        function copyIndexedRepoPath(encodedRepoPath) {
+          const repoPath = decodeURIComponent(encodedRepoPath || '');
+          if (!repoPath) {
+            return;
+          }
+          vscode.postMessage({ command: 'copyIndexedRepoPath', repoPath });
+        }
+
+        function openRepoIndexData(hash) {
+          vscode.postMessage({ command: 'openRepoIndexData', hash });
+        }
+
+        function viewIndexedRepoReport(hash) {
+          vscode.postMessage({ command: 'viewIndexedRepoReport', hash });
+        }
+
         // -- Message listener --
         window.addEventListener('message', event => {
             const message = event.data;
@@ -2001,9 +2260,7 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
         
         function updateRepositoryInfo(repoPath) {
             if (!repoPath) return;
-            const parts = repoPath.split(/[\\\\/]/);
-            const folderName = parts[parts.length - 1] || repoPath;
-            document.getElementById('repo-path').textContent = folderName;
+          document.getElementById('repo-path').textContent = repoPath;
             document.getElementById('repo-path').title = repoPath;
         }
         
@@ -2077,6 +2334,23 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
             }
             
             const normalizedActive = (activeRepoPath || '').replace(/\\\\/g, '/').toLowerCase();
+
+            function escapeHtml(value) {
+              return String(value || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+            }
+
+            function compactPath(pathText) {
+              const text = String(pathText || '');
+              if (text.length <= 72) {
+                return text;
+              }
+              return text.slice(0, 26) + '...' + text.slice(-42);
+            }
             
             container.innerHTML = repos.map(repo => {
                 const normalizedRepo = repo.repoPath.replace(/\\\\/g, '/').toLowerCase();
@@ -2095,22 +2369,42 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
                 }
                 
                 const indexedAgo = formatRelativeTimeMs(repo.lastIndexedAt);
+                const displayName = escapeHtml(repo.name);
+                const displayPath = escapeHtml(repo.repoPath);
+                const compactDisplayPath = escapeHtml(compactPath(repo.repoPath));
+                const encodedRepoPath = encodeURIComponent(repo.repoPath);
                 
                 return \`
-                    <div class="repo-item \${statusClass}" title="\${repo.repoPath}">
-                        <div class="repo-item-header">
-                            <span class="repo-item-name">\${repo.name}</span>
-                            <span class="repo-item-badge \${statusClass}">\${badgeText}</span>
-                        </div>
-                        <div class="repo-item-meta">
-                            \${repo.filesIndexed} files, \${repo.chunksIndexed} chunks -- \${indexedAgo}
-                        </div>
-                        <div class="repo-item-actions">
-                            <button class="repo-item-remove" onclick="removeIndexedRepo('\${repo.hash}')" title="Remove from registry">
-                                <i class="codicon codicon-close"></i> Remove
-                            </button>
-                        </div>
+                  <div class="repo-item \${statusClass}" title="\${displayPath}">
+                    <div class="repo-item-header">
+                      <span class="repo-item-name">\${displayName}</span>
+                      <span class="repo-item-badge \${statusClass}">\${badgeText}</span>
                     </div>
+                    <div class="repo-item-meta">
+                      \${repo.filesIndexed} files, \${repo.chunksIndexed} chunks -- \${indexedAgo}
+                    </div>
+                    <div class="repo-item-path" title="\${displayPath}">\${compactDisplayPath}</div>
+                    <div class="repo-item-actions">
+                      <button class="repo-item-action" onclick="copyIndexedRepoPath('\${encodedRepoPath}')" title="Copy repository folder path">
+                        Copy Path
+                      </button>
+                      <button class="repo-item-action" onclick="revealIndexedRepo('\${repo.hash}')" title="Reveal repository folder in system explorer">
+                        Reveal
+                      </button>
+                      <button class="repo-item-action" onclick="openIndexedRepo('\${repo.hash}')" title="Open repository in a new window">
+                        Open
+                      </button>
+                      <button class="repo-item-action" onclick="openRepoIndexData('\${repo.hash}')" title="Reveal OmniContext index data folder">
+                        Index Data
+                      </button>
+                      <button class="repo-item-action" onclick="viewIndexedRepoReport('\${repo.hash}')" title="Open per-repo report">
+                        Report
+                      </button>
+                      <button class="repo-item-action danger" onclick="removeIndexedRepo('\${repo.hash}')" title="Remove from registry">
+                        <i class="codicon codicon-close"></i> Remove
+                      </button>
+                    </div>
+                  </div>
                 \`;
             }).join('');
         }
