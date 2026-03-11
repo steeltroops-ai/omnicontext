@@ -4,6 +4,11 @@ All notable changes to OmniContext are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.2] - 2026-03-11
+
+### Fixed
+- Harden index pipeline and extension daemon lifecycle ([57b67e5](https://github.com/steeltroops-ai/omnicontext/commit/57b67e566abfd76984da5b09d2b254e458d5a01a))
+
 ## [1.1.1] - 2026-03-09
 
 ### Fixed

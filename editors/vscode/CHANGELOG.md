@@ -2,6 +2,13 @@
 
 All notable changes to the OmniContext VS Code extension are documented here.
 
+## [1.1.2] - 2026-03-11
+
+
+- harden index pipeline and extension daemon lifecycle ([57b67e5](https://github.com/steeltroops-ai/omnicontext/commit/57b67e5))
+
+
+
 ## [1.1.1] - 2026-03-09
 
 _No direct changes in this release._
