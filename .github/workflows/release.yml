@@ -523,6 +523,7 @@ jobs:
             desc "Universal code context engine for AI coding agents"
             homepage "https://github.com/steeltroops-ai/omnicontext"
             version "${version}"
+            license "Apache-2.0"
 
             on_macos do
               if Hardware::CPU.arm?
@@ -539,10 +540,30 @@ jobs:
               sha256 "${sha_linux}"
             end
 
+            # Pre-built binary — no compilation needed
+            bottle :unneeded
+
             def install
               bin.install "omnicontext"
               bin.install "omnicontext-mcp"
               bin.install "omnicontext-daemon" if File.exist?("omnicontext-daemon")
+            end
+
+            def post_install
+              # Auto-configure MCP for all detected AI clients
+              system "#{bin}/omnicontext", "setup", "--all" rescue nil
+            end
+
+            def caveats
+              <<~EOS
+                To configure OmniContext for all your AI coding clients, run:
+                  omnicontext setup --all
+
+                Quick start:
+                  cd /path/to/your/project
+                  omnicontext index .
+                  omnicontext search "your query"
+              EOS
             end
 
             test do
@@ -572,6 +593,7 @@ jobs:
               }
             },
             "bin": ["omnicontext.exe", "omnicontext-mcp.exe", "omnicontext-daemon.exe"],
+            "post_install": "& \"\$dir\\\\omnicontext.exe\" setup --all 2>\$null",
             "checkver": {
               "github": "https://github.com/steeltroops-ai/omnicontext"
             },
@@ -584,7 +606,8 @@ jobs:
               "hash": {
                 "url": "\$url.sha256"
               }
-            }
+            },
+            "notes": "Run 'omnicontext setup --all' to configure MCP for all AI coding clients."
           }
           SCOOP_EOF
 
