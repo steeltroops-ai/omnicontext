@@ -4,6 +4,12 @@ All notable changes to OmniContext are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.1] - 2026-03-12
+
+### Fixed
+- Restore distribution enhancements stripped by release automation ([e28640f](https://github.com/steeltroops-ai/omnicontext/commit/e28640f3f893e073c8f8550870371a92caea76a6))
+- Use platform config variables to avoid unused-variable errors on Linux ([116c6ca](https://github.com/steeltroops-ai/omnicontext/commit/116c6ca3e0e139093a21be75f548e992ad79889c))
+
 ## [1.2.0] - 2026-03-12
 
 ### Added
