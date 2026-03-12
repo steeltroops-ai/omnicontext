@@ -1,16 +1,15 @@
 {
-  "version": "1.1.2",
+  "version": "1.2.0",
   "description": "Universal code context engine for AI coding agents",
   "homepage": "https://github.com/steeltroops-ai/omnicontext",
   "license": "Apache-2.0",
   "architecture": {
     "64bit": {
-      "url": "https://github.com/steeltroops-ai/omnicontext/releases/download/v1.1.2/omnicontext-1.1.2-x86_64-pc-windows-msvc.zip",
-      "hash": "730CA75D08986D7D499EBD8A42F9277C51D57AE9FB7E736C307C4BD27A95C904"
+      "url": "https://github.com/steeltroops-ai/omnicontext/releases/download/v1.2.0/omnicontext-1.2.0-x86_64-pc-windows-msvc.zip",
+      "hash": "D211A28B6C30D5A9E1D9611AF7E3EF4C041C08C0F13D0E7A1F0B4CBBB26CE810"
     }
   },
   "bin": ["omnicontext.exe", "omnicontext-mcp.exe", "omnicontext-daemon.exe"],
-  "post_install": "& \"$dir\\omnicontext.exe\" setup --all 2>$null",
   "checkver": {
     "github": "https://github.com/steeltroops-ai/omnicontext"
   },
@@ -23,6 +22,5 @@
     "hash": {
       "url": "$url.sha256"
     }
-  },
-  "notes": "Run 'omnicontext setup --all' to configure MCP for all AI coding clients."
+  }
 }
