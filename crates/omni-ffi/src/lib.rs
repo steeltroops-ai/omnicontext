@@ -301,6 +301,7 @@ mod tests {
 
     /// Passing a null query to `omni_search` (valid engine) must return null.
     #[test]
+    #[ignore = "requires ONNX model download (~550 MB)"]
     fn test_null_pointer_handling_search_null_query() {
         let (_dir, engine) = make_engine_with_tempdir();
         // SAFETY: engine is valid; null query must be handled gracefully.
@@ -348,6 +349,7 @@ mod tests {
     /// Create an engine pointing at a real (temporary) directory, verify the
     /// returned pointer is non-null, and then cleanly free it.
     #[test]
+    #[ignore = "requires ONNX model download (~550 MB)"]
     fn test_engine_lifecycle() {
         let (_dir, engine) = make_engine_with_tempdir();
         assert!(
@@ -373,6 +375,7 @@ mod tests {
     /// Create an engine, call `omni_status`, and verify the result is valid JSON
     /// that contains the mandatory top-level fields defined by `EngineStatus`.
     #[test]
+    #[ignore = "requires ONNX model download (~550 MB)"]
     fn test_status_returns_json() {
         let (_dir, engine) = make_engine_with_tempdir();
         assert!(!engine.is_null(), "engine creation failed");
@@ -419,6 +422,7 @@ mod tests {
     /// JSON array (possibly empty if the tiny test file isn't semantically
     /// similar enough, but the structure must be correct).
     #[test]
+    #[ignore = "requires ONNX model download (~550 MB)"]
     fn test_search_returns_json() {
         let (_dir, engine) = make_engine_with_tempdir();
         assert!(!engine.is_null(), "engine creation failed");
