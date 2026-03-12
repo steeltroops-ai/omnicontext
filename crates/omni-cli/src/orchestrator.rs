@@ -146,8 +146,7 @@ fn build_ide_targets() -> Vec<IdeTarget> {
         #[cfg(all(not(windows), not(target_os = "macos")))]
         IdeTarget {
             name: "Claude Desktop",
-            config_path: home
-                .join(".config")
+            config_path: app_support
                 .join("Claude")
                 .join("claude_desktop_config.json"),
             server_key: "mcpServers",
@@ -219,11 +218,7 @@ fn build_ide_targets() -> Vec<IdeTarget> {
         #[cfg(all(not(windows), not(target_os = "macos")))]
         IdeTarget {
             name: "VS Code",
-            config_path: home
-                .join(".config")
-                .join("Code")
-                .join("User")
-                .join("mcp.json"),
+            config_path: app_support.join("Code").join("User").join("mcp.json"),
             server_key: "servers",
         },
         // ----------------------------------------------------------------
@@ -250,8 +245,7 @@ fn build_ide_targets() -> Vec<IdeTarget> {
         #[cfg(all(not(windows), not(target_os = "macos")))]
         IdeTarget {
             name: "VS Code Insiders",
-            config_path: home
-                .join(".config")
+            config_path: app_support
                 .join("Code - Insiders")
                 .join("User")
                 .join("mcp.json"),
@@ -288,8 +282,7 @@ fn build_ide_targets() -> Vec<IdeTarget> {
         #[cfg(all(not(windows), not(target_os = "macos")))]
         IdeTarget {
             name: "Cline",
-            config_path: home
-                .join(".config")
+            config_path: app_support
                 .join("Code")
                 .join("User")
                 .join("globalStorage")
@@ -329,8 +322,7 @@ fn build_ide_targets() -> Vec<IdeTarget> {
         #[cfg(all(not(windows), not(target_os = "macos")))]
         IdeTarget {
             name: "RooCode",
-            config_path: home
-                .join(".config")
+            config_path: app_support
                 .join("Code")
                 .join("User")
                 .join("globalStorage")
@@ -386,11 +378,7 @@ fn build_ide_targets() -> Vec<IdeTarget> {
         #[cfg(all(not(windows), not(target_os = "macos")))]
         IdeTarget {
             name: "PearAI",
-            config_path: home
-                .join(".config")
-                .join("PearAI")
-                .join("User")
-                .join("mcp.json"),
+            config_path: app_support.join("PearAI").join("User").join("mcp.json"),
             server_key: "mcpServers",
         },
         // ----------------------------------------------------------------
@@ -416,7 +404,7 @@ fn build_ide_targets() -> Vec<IdeTarget> {
         #[cfg(all(not(windows), not(target_os = "macos")))]
         IdeTarget {
             name: "Trae",
-            config_path: home.join(".config").join("Trae").join("mcp_config.json"),
+            config_path: app_support.join("Trae").join("mcp_config.json"),
             server_key: "mcpServers",
         },
         // ----------------------------------------------------------------
@@ -442,8 +430,7 @@ fn build_ide_targets() -> Vec<IdeTarget> {
         #[cfg(all(not(windows), not(target_os = "macos")))]
         IdeTarget {
             name: "Antigravity",
-            config_path: home
-                .join(".config")
+            config_path: app_support
                 .join("Antigravity")
                 .join("User")
                 .join("mcp.json"),
@@ -495,8 +482,7 @@ fn build_ide_targets() -> Vec<IdeTarget> {
         #[cfg(all(not(windows), not(target_os = "macos")))]
         IdeTarget {
             name: "Augment Code",
-            config_path: home
-                .join(".config")
+            config_path: app_support
                 .join("Code")
                 .join("User")
                 .join("globalStorage")

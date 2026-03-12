@@ -700,7 +700,7 @@ fn detect_installed_ides(filter: Option<&str>) -> Vec<IdeTarget> {
         std::path::PathBuf::from,
     );
     #[cfg(not(windows))]
-    let appdata = home.join(".config"); // not really used on non-Windows
+    let appdata = home.join(".config"); // ~/.config on Linux/macOS
 
     let mut targets = Vec::new();
 
@@ -716,10 +716,7 @@ fn detect_installed_ides(filter: Option<&str>) -> Vec<IdeTarget> {
     targets.push(IdeTarget {
         name: "Claude Desktop",
         key: "claude",
-        config_path: home
-            .join(".config")
-            .join("Claude")
-            .join("claude_desktop_config.json"),
+        config_path: appdata.join("Claude").join("claude_desktop_config.json"),
         server_key: "mcpServers",
     });
 
@@ -756,11 +753,7 @@ fn detect_installed_ides(filter: Option<&str>) -> Vec<IdeTarget> {
     targets.push(IdeTarget {
         name: "VS Code",
         key: "vscode",
-        config_path: home
-            .join(".config")
-            .join("Code")
-            .join("User")
-            .join("mcp.json"),
+        config_path: appdata.join("Code").join("User").join("mcp.json"),
         server_key: "servers",
     });
 
@@ -831,11 +824,7 @@ fn detect_installed_ides(filter: Option<&str>) -> Vec<IdeTarget> {
     targets.push(IdeTarget {
         name: "Antigravity",
         key: "antigravity",
-        config_path: home
-            .join(".config")
-            .join("Antigravity")
-            .join("User")
-            .join("mcp.json"),
+        config_path: appdata.join("Antigravity").join("User").join("mcp.json"),
         server_key: "servers",
     });
 
