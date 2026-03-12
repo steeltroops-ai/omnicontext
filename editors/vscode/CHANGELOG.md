@@ -2,6 +2,14 @@
 
 All notable changes to the OmniContext VS Code extension are documented here.
 
+## [1.2.0] - 2026-03-12
+
+- add Antigravity IDE support, harden distribution scripts, and enhance MCP tools ([99dd59f](https://github.com/steeltroops-ai/omnicontext/commit/99dd59f))
+- improve indexed repo visibility and repo actions ([6645aa4](https://github.com/steeltroops-ai/omnicontext/commit/6645aa4))
+
+
+
+
 ## [1.1.2] - 2026-03-11
 
 

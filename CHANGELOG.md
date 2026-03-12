@@ -4,6 +4,15 @@ All notable changes to OmniContext are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-03-12
+
+### Added
+- Add Antigravity IDE support, harden distribution scripts, and enhance MCP tools ([99dd59f](https://github.com/steeltroops-ai/omnicontext/commit/99dd59fa2d87d491d22cbc5fd64308b40cd612f1))
+- Improve indexed repo visibility and repo actions ([6645aa4](https://github.com/steeltroops-ai/omnicontext/commit/6645aa496f5e8040aaafda9ccad702957c923f94))
+
+### Fixed
+- Mark ONNX-dependent FFI tests as #[ignore] ([d9f483e](https://github.com/steeltroops-ai/omnicontext/commit/d9f483e1158ca4b3e550e3a37e56caee53e611bc))
+
 ## [1.1.2] - 2026-03-11
 
 ### Fixed
