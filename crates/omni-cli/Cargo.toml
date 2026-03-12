@@ -35,6 +35,9 @@ tracing-subscriber = { workspace = true }
 # CLI
 clap = { workspace = true }
 
+# Platform directories
+dirs = { workspace = true }
+
 [dev-dependencies]
 tempfile = { workspace = true }
 

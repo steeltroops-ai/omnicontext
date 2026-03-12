@@ -9,6 +9,17 @@ use std::path::Path;
 use crate::error::{OmniError, OmniResult};
 use crate::index::MetadataIndex;
 
+/// A file that frequently co-changes with a focal file.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CoChangeFile {
+    /// File path.
+    pub path: String,
+    /// Number of shared commits.
+    pub frequency: usize,
+    /// Number of commits where both files changed together.
+    pub shared_commits: usize,
+}
+
 /// A parsed commit record.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CommitInfo {
@@ -206,6 +217,55 @@ impl CommitEngine {
             .collect();
 
         Ok(commits)
+    }
+
+    /// Find files that frequently change together with the given file.
+    ///
+    /// Scans all commits touching `file_path`, counts how often each
+    /// co-occurring file appears, filters by `min_frequency`, sorts by
+    /// frequency descending, and returns the top `limit` results.
+    #[allow(clippy::missing_errors_doc)]
+    pub fn co_change_files(
+        index: &MetadataIndex,
+        file_path: &str,
+        min_frequency: usize,
+        limit: usize,
+    ) -> OmniResult<Vec<CoChangeFile>> {
+        // Get all commits touching this file (up to 500 for reasonable analysis)
+        let commits = Self::commits_for_file(index, file_path, 500)?;
+        let total_commits = commits.len();
+
+        if total_commits == 0 {
+            return Ok(Vec::new());
+        }
+
+        // Count co-occurrences
+        let mut co_occurrences: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+
+        for commit in &commits {
+            for file in &commit.files_changed {
+                if file != file_path {
+                    *co_occurrences.entry(file.clone()).or_default() += 1;
+                }
+            }
+        }
+
+        // Filter and sort
+        let mut results: Vec<CoChangeFile> = co_occurrences
+            .into_iter()
+            .filter(|(_, count)| *count >= min_frequency)
+            .map(|(path, count)| CoChangeFile {
+                path,
+                frequency: count,
+                shared_commits: count,
+            })
+            .collect();
+
+        results.sort_by(|a, b| b.frequency.cmp(&a.frequency));
+        results.truncate(limit);
+
+        Ok(results)
     }
 
     #[allow(clippy::missing_errors_doc)]

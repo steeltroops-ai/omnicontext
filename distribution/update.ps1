@@ -217,7 +217,8 @@ $mcpPaths = @(
     "$env:APPDATA\Windsurf\User\globalStorage\codeium.windsurf\mcp_config.json",
     "$env:APPDATA\Code\User\globalStorage\rooveterinaryinc.roo-cline\settings\mcp_settings.json",
     "$env:APPDATA\Trae\User\globalStorage\trae-ide.trae-ai\mcp_settings.json",
-    "$env:USERPROFILE\.gemini\antigravity\mcp_config.json"
+    "$env:APPDATA\Antigravity\User\mcp.json",
+    "$env:USERPROFILE\.gemini\settings.json"
 )
 
 $backupDir = Join-Path $env:TEMP "omnicontext_mcp_backup_$(Get-Date -Format 'yyyyMMdd_HHmmss')"

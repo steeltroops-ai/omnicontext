@@ -205,6 +205,10 @@ pub struct ClearIndexParams {
     /// Whether to also clear the vector index.
     #[serde(default = "default_true")]
     pub clear_vectors: bool,
+    /// Confirmation token. Must be the literal string "CONFIRM_CLEAR" to proceed.
+    /// This prevents accidental index destruction from automated/malicious callers.
+    #[serde(default)]
+    pub confirm: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -276,6 +280,8 @@ pub mod error_codes {
     pub const ENGINE_ERROR: i32 = -32000;
     /// Server overloaded (503 Service Unavailable equivalent).
     pub const SERVER_OVERLOADED: i32 = -32001;
+    /// Feature not yet implemented.
+    pub const NOT_IMPLEMENTED: i32 = -32002;
 }
 
 /// Parameters for search intent classification.
@@ -474,6 +480,15 @@ pub struct BugProneFile {
     pub last_bug_date: Option<i64>,
     /// Bug frequency (bugs per total commits).
     pub bug_frequency: f64,
+}
+
+/// Parameters for plan auditing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditPlanParams {
+    /// The plan text to audit.
+    pub plan: String,
+    /// Maximum depth for blast radius analysis.
+    pub max_depth: Option<usize>,
 }
 
 // ---------------------------------------------------------------------------

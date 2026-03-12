@@ -6,138 +6,143 @@ order: 51
 
 # Pricing
 
-OmniContext is **100% free and open source** under the MIT License. There are no hidden costs, subscriptions, or usage limits.
+OmniContext is built on a **Free Core / Paid Cloud** model. The full engine — every feature, every language, every MCP tool — runs locally at zero cost. Cloud services and enterprise support are optional add-ons for teams that need them.
 
-## Open Source (Free Forever)
+## Free Core (Open Source, Forever)
 
-Everything you need to run OmniContext locally:
+The complete OmniContext engine, open source under the Apache 2.0 License. No trial, no seat limits, no telemetry.
 
-- ✅ Unlimited repositories
-- ✅ Unlimited file indexing
-- ✅ All 16 MCP tools
-- ✅ Full semantic search capabilities
-- ✅ Local ONNX embedding models
-- ✅ Real-time file watching
-- ✅ VS Code extension
-- ✅ Community support via GitHub
+| Feature | Included |
+|---------|----------|
+| Unlimited repositories | ✅ |
+| Unlimited file indexing | ✅ |
+| All 16 MCP tools | ✅ |
+| Hybrid semantic + keyword search | ✅ |
+| Local ONNX embedding models | ✅ |
+| Real-time file watching | ✅ |
+| Dependency graph & blast radius | ✅ |
+| Git history intelligence | ✅ |
+| VS Code extension | ✅ |
+| Universal IDE auto-configuration | ✅ |
+| Community support via GitHub | ✅ |
 
-**Cost**: $0/month
+**Cost**: $0 / month — forever.
+
+**Install in one line:**
+
+```bash
+# Linux / macOS
+curl -fsSL https://omnicontext.dev/install.sh | sh
+
+# Windows (PowerShell)
+irm https://omnicontext.dev/install.ps1 | iex
+
+# Cargo
+cargo install omnicontext
+```
 
 **Source Code**: [github.com/steeltroops-ai/omnicontext](https://github.com/steeltroops-ai/omnicontext)
 
-## Enterprise Support (Coming Soon)
+---
 
-For organizations that need additional support and features:
+## Paid Cloud (Coming Soon)
 
-### Enterprise Features
+For teams that want zero-infrastructure search across their entire org's codebase:
 
-- 🏢 Priority support (SLA-backed)
-- 🔒 Security audits and compliance documentation
-- 📊 Advanced analytics and monitoring
-- 🚀 Custom deployment assistance
-- 🎓 Team training and onboarding
-- 🔧 Custom feature development
-- 📞 Dedicated support channel
+### Cloud Starter — $29 / developer / month
+- Hosted multi-repo index (up to 10 repos)
+- Shared team search history
+- REST API access
+- Email support
 
-### Pricing
+### Cloud Team — $59 / developer / month
+- Unlimited repos
+- Cross-repo dependency analysis
+- Priority indexing queue
+- 4-hour support SLA
+- SSO (SAML 2.0 / OAuth 2.0)
 
-Enterprise pricing is customized based on your organization's needs. Contact us for a quote:
+### Cloud Enterprise — Custom Pricing
+- On-premise or private cloud deployment
+- RBAC, LDAP / Active Directory
+- SOC 2 Type II, GDPR compliance
+- Dedicated account manager
+- Custom SLA (up to 99.99% uptime)
 
-- **Email**: enterprise@omnicontext.dev
-- **GitHub**: [Open an issue](https://github.com/steeltroops-ai/omnicontext/issues)
+**The OSS core always remains free.** Cloud plans add shared hosting, team collaboration, and enterprise compliance on top of the same Rust engine.
 
-## Self-Hosted vs Cloud
+Contact: [enterprise@omnicontext.dev](mailto:enterprise@omnicontext.dev)
 
-OmniContext is designed to run **100% locally** on your machine. There is no cloud version because:
-
-1. **Privacy**: Your code never leaves your machine
-2. **Performance**: No network latency (sub-100ms queries)
-3. **Cost**: No cloud infrastructure costs
-4. **Security**: Zero data leakage risk
+---
 
 ## Comparison with Alternatives
 
-| Feature | OmniContext | Sourcegraph | GitHub Copilot |
-|---------|-------------|-------------|----------------|
-| **Cost** | Free | $99+/user/month | $10-19/user/month |
-| **Deployment** | Local | Cloud/Self-hosted | Cloud |
-| **Privacy** | 100% Local | Data sent to cloud | Data sent to cloud |
-| **Search Latency** | <50ms | 200-500ms | 300-1000ms |
-| **Open Source** | ✅ MIT License | ❌ Proprietary | ❌ Proprietary |
-| **MCP Support** | ✅ Native | ❌ No | ❌ No |
+| Feature | OmniContext Core | OmniContext Cloud | Sourcegraph | GitHub Copilot |
+|---------|-----------------|-------------------|-------------|----------------|
+| **Cost** | **Free** | From $29/dev/mo | $99+/dev/mo | $10–19/dev/mo |
+| **Deployment** | 100% Local | Hosted / On-prem | Cloud/Self-hosted | Cloud |
+| **Privacy** | 100% Local — no telemetry | Your VPC / private | Data sent to cloud | Data sent to cloud |
+| **Search Latency** | <50ms | <100ms | 200–500ms | 300–1000ms |
+| **Open Source** | ✅ Apache 2.0 | Engine is OSS | ❌ Proprietary | ❌ Proprietary |
+| **MCP Native** | ✅ 16 tools | ✅ 16 tools | ❌ No | ❌ No |
+| **Offline** | ✅ Always | ❌ Requires network | ❌ | ❌ |
+
+---
 
 ## Frequently Asked Questions
 
 ### Is OmniContext really free?
 
-Yes! OmniContext is open source under the MIT License. You can use it for personal or commercial purposes without any cost.
+Yes. The core engine is Apache 2.0 open source. You can use it for personal or commercial purposes, self-host it, modify it, and ship it in your own products — all at zero cost.
 
-### Will there be a paid version?
+### What does "Free Core / Paid Cloud" mean?
 
-The core OmniContext software will always remain free and open source. We may offer optional enterprise support and services in the future, but the software itself will never require payment.
+The Rust engine that runs on your machine (indexing, search, MCP server, daemon, FFI, VS Code extension) will **always** be free and open source. Paid Cloud plans add managed infrastructure — centralized multi-repo indexes, REST APIs, team dashboards — on top of that same engine.
 
 ### How do you make money?
 
-Currently, OmniContext is a community-driven open source project. Future revenue may come from:
-- Enterprise support contracts
-- Custom feature development
-- Training and consulting services
+Through optional Cloud and Enterprise plans. The OSS engine is our best marketing — it's also genuinely the best local code intelligence tool available.
 
 ### Can I use OmniContext commercially?
 
-Yes! The MIT License allows commercial use without restrictions.
-
-### Do I need to pay for cloud hosting?
-
-No! OmniContext runs entirely on your local machine. There are no cloud hosting costs.
+Yes. Apache 2.0 allows commercial use without restriction. You can even embed it in a commercial product.
 
 ### What about the embedding models?
 
-All embedding models are downloaded once and run locally on your machine. There are no API costs or usage limits.
+All models (Jina v2 base code, ~550 MB) are downloaded once and run entirely on your local hardware via ONNX Runtime. There are no API keys, no usage fees, and no data ever leaves your machine.
 
-## Support Options
+### Will the free tier ever be limited?
 
-### Community Support (Free)
+No. The local OSS core will never be paywalled. Cloud features are additive, not gating.
+
+---
+
+## Support
+
+### Community (Free)
 
 - GitHub Issues: [Report bugs or request features](https://github.com/steeltroops-ai/omnicontext/issues)
-- GitHub Discussions: [Ask questions and share ideas](https://github.com/steeltroops-ai/omnicontext/discussions)
+- GitHub Discussions: [Ask questions](https://github.com/steeltroops-ai/omnicontext/discussions)
 - Documentation: [omnicontext.dev/docs](https://omnicontext.dev/docs)
 
-### Enterprise Support (Paid)
+### Enterprise (Paid)
 
-Contact us for enterprise support options:
-- Email: enterprise@omnicontext.dev
-- Priority response times
-- Custom SLAs available
+- Email: [enterprise@omnicontext.dev](mailto:enterprise@omnicontext.dev)
+- Priority response SLA
+- Custom deployment assistance
 
-## Contributing
-
-OmniContext is open source and welcomes contributions! See our [Contributing Guide](/docs/contributing) to get started.
+---
 
 ## License
 
-OmniContext is licensed under the [MIT License](https://github.com/steeltroops-ai/omnicontext/blob/main/LICENSE).
+OmniContext is licensed under the [Apache License 2.0](https://github.com/steeltroops-ai/omnicontext/blob/main/LICENSE).
 
 ```
-MIT License
+Copyright (c) 2024–2026 OmniContext Contributors
 
-Copyright (c) 2024 OmniContext
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+    http://www.apache.org/licenses/LICENSE-2.0
 ```

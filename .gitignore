@@ -43,6 +43,8 @@ docs/reports/
 docs/local/
 docs/logs/
 docs/planning/
+docs/investors/
+docs/audits/
 
 # Junk files
 out.json
@@ -50,6 +52,7 @@ out2.json
 tests.log
 
 # Internal Planning & Agent Workspaces
+.claude/
 .agents/
 log/local/
 

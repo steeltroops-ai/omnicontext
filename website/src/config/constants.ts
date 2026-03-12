@@ -7,8 +7,8 @@
 
 // Version Information
 export const VERSION = {
-    current: "1.0.1",
-    displayFormat: "v1.0.1",
+    current: "1.1.1",
+    displayFormat: "v1.1.1",
 } as const;
 
 // Performance Metrics

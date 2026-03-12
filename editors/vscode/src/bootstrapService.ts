@@ -500,7 +500,7 @@ function findBinaryInExtracted(dir: string, name: string): string | null {
       if (found) {
         return found;
       }
-    } else if (entry.name === name) {
+    } else if (entry.name === name || entry.name.startsWith(name)) {
       return path.join(dir, entry.name);
     }
   }
@@ -693,5 +693,264 @@ export async function bootstrap(
     message: `OmniContext ${tag} installed and ready.`,
   });
 
+  // On first install (wasn't already resolved), run setup --all to configure
+  // all detected AI IDEs with the universal MCP entry.
+  if (!existing) {
+    runSetupAllSilent(result.cliBinary, onStatus);
+  }
+
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Auto-update: background check + silent upgrade
+// ---------------------------------------------------------------------------
+
+/**
+ * Check if a newer version is available on GitHub and silently update if so.
+ *
+ * Called once per VS Code session, 30 seconds after activation (so it doesn't
+ * block startup). Shows a notification if an update was applied.
+ *
+ * @param context - Extension context for globalStoragePath
+ * @param currentBinary - Path to the currently active CLI binary
+ * @param currentVersion - Semver string of installed binary (e.g., "1.1.1")
+ * @param onStatus - Status callback for progress reporting
+ */
+export async function checkAndApplyUpdate(
+  context: vscode.ExtensionContext,
+  currentBinary: string,
+  currentVersion: string,
+  onStatus: StatusCallback,
+): Promise<boolean> {
+  try {
+    onStatus({
+      phase: "checking",
+      message: "Checking for OmniContext updates...",
+    });
+
+    const latestTag = await fetchLatestReleaseTag();
+    const latestVersion = parseSemver(latestTag);
+
+    if (!latestVersion) {
+      return false;
+    }
+
+    if (compareSemver(latestVersion, currentVersion) <= 0) {
+      onStatus({
+        phase: "ready",
+        message: `OmniContext ${currentVersion} is up to date.`,
+      });
+      return false; // already current
+    }
+
+    onStatus({
+      phase: "downloading",
+      message: `Updating OmniContext ${currentVersion} → ${latestVersion}...`,
+      progressPercent: 0,
+    });
+
+    // Back up the current binary before downloading
+    const binDir = path.dirname(currentBinary);
+    const names = getBinNames();
+    const backups: Array<{ src: string; bak: string }> = [];
+
+    for (const nameKey of ["cli", "daemon", "mcp"] as const) {
+      const binPath = path.join(binDir, names[nameKey]);
+      const bakPath = `${binPath}.bak`;
+      if (fs.existsSync(binPath)) {
+        try {
+          fs.copyFileSync(binPath, bakPath);
+          backups.push({ src: binPath, bak: bakPath });
+        } catch {
+          // Non-fatal: proceed without backup
+        }
+      }
+    }
+
+    const downloadUrl = buildAssetUrl(latestTag);
+    const ext = process.platform === "win32" ? ".zip" : ".tar.gz";
+    const archivePath = path.join(context.globalStoragePath, `omnicontext-update${ext}`);
+    const extractDir = path.join(context.globalStoragePath, "update-extracted");
+
+    try {
+      await downloadFile(downloadUrl, archivePath, (percent) => {
+        onStatus({
+          phase: "downloading",
+          message: `Downloading OmniContext ${latestVersion}... ${percent}%`,
+          progressPercent: percent,
+        });
+      });
+
+      onStatus({ phase: "extracting", message: "Extracting update..." });
+
+      if (fs.existsSync(extractDir)) {
+        fs.rmSync(extractDir, { recursive: true, force: true });
+      }
+      await extractArchive(archivePath, extractDir);
+      fs.rmSync(archivePath, { force: true });
+
+      onStatus({ phase: "verifying", message: "Installing update..." });
+
+      for (const nameKey of ["cli", "daemon", "mcp"] as const) {
+        const name = names[nameKey];
+        const src = findBinaryInExtracted(extractDir, name);
+        if (src) {
+          const dest = path.join(binDir, name);
+          fs.copyFileSync(src, dest);
+          if (process.platform !== "win32") {
+            fs.chmodSync(dest, 0o755);
+          }
+        }
+      }
+
+      fs.rmSync(extractDir, { recursive: true, force: true });
+
+      // Clean up backups on success
+      for (const { bak } of backups) {
+        try { fs.unlinkSync(bak); } catch { /* non-fatal */ }
+      }
+
+      onStatus({
+        phase: "ready",
+        message: `OmniContext updated to ${latestVersion}.`,
+      });
+
+      // Re-run setup --all after update so any new IDE entries are applied
+      runSetupAllSilent(path.join(binDir, names.cli), onStatus);
+
+      vscode.window.showInformationMessage(
+        `OmniContext updated to v${latestVersion}. Restart VS Code to use the new version.`,
+        "Restart Now",
+      ).then((choice) => {
+        if (choice === "Restart Now") {
+          vscode.commands.executeCommand("workbench.action.reloadWindow");
+        }
+      });
+
+      return true;
+    } catch (err: any) {
+      // Restore backups on failure
+      for (const { src, bak } of backups) {
+        try {
+          if (fs.existsSync(bak)) fs.copyFileSync(bak, src);
+        } catch { /* non-fatal */ }
+      }
+      for (const { bak } of backups) {
+        try { fs.unlinkSync(bak); } catch { /* non-fatal */ }
+      }
+
+      onStatus({
+        phase: "ready",
+        message: `Update failed: ${err.message}. Keeping ${currentVersion}.`,
+      });
+
+      return false;
+    }
+  } catch {
+    // Network errors are non-fatal for update checks
+    return false;
+  }
+}
+
+/**
+ * Schedule a background update check 30 seconds after activation.
+ * Non-blocking — never delays extension startup.
+ */
+export function scheduleBackgroundUpdateCheck(
+  context: vscode.ExtensionContext,
+  currentBinary: string,
+  currentVersion: string,
+): void {
+  // Only check once per session, 30s after activation
+  const timer = setTimeout(async () => {
+    // Respect user preference
+    const config = vscode.workspace.getConfiguration("omnicontext");
+    if (config.get<boolean>("autoUpdate", true) === false) {
+      return;
+    }
+
+    const outputCh = vscode.window.createOutputChannel("OmniContext Updates");
+    try {
+      const updated = await checkAndApplyUpdate(
+        context,
+        currentBinary,
+        currentVersion,
+        (status) => {
+          if (status.phase !== "ready" && status.phase !== "checking") {
+            outputCh.appendLine(`[auto-update] ${status.phase}: ${status.message}`);
+          }
+        },
+      );
+      if (updated) {
+        outputCh.appendLine(`[auto-update] Updated successfully.`);
+      }
+    } catch {
+      // Swallow all errors — update check is best-effort
+    }
+  }, 30_000);
+
+  // Cancel the timer if extension is deactivated before it fires
+  context.subscriptions.push({ dispose: () => clearTimeout(timer) });
+}
+
+/**
+ * Run `omnicontext setup --all` silently in the background.
+ * Called after first install and after updates to wire all IDEs.
+ */
+function runSetupAllSilent(cliBinary: string, onStatus: StatusCallback): void {
+  try {
+    const { execFile } = require("child_process") as typeof import("child_process");
+    execFile(
+      cliBinary,
+      ["setup", "--all"],
+      { timeout: 30_000 },
+      (err: Error | null, stdout: string, stderr: string) => {
+        if (err) {
+          onStatus({
+            phase: "ready",
+            message: `IDE auto-configuration (setup --all) failed: ${err.message}`,
+          });
+        } else {
+          onStatus({
+            phase: "ready",
+            message: "All detected AI IDEs configured with OmniContext MCP.",
+          });
+          const linesConfigured = (stdout + stderr)
+            .split("\n")
+            .filter((l) => l.includes("✓ wired")).length;
+          if (linesConfigured > 0) {
+            vscode.window.showInformationMessage(
+              `OmniContext configured in ${linesConfigured} AI IDE(s). Restart them to activate.`,
+            );
+          }
+        }
+      },
+    );
+  } catch {
+    // Non-fatal
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Uninstall cleanup helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Remove all binaries installed by the extension into globalStoragePath/bin.
+ * Called from the extension's deactivate or a manual "Uninstall Engine" command.
+ * Does NOT remove binaries installed by the standalone install script
+ * (those are in ~/.omnicontext/bin and managed by the user).
+ */
+export function cleanupInstalledBinaries(
+  context: vscode.ExtensionContext,
+): void {
+  const downloadedBinDir = path.join(context.globalStoragePath, "bin");
+  if (fs.existsSync(downloadedBinDir)) {
+    try {
+      fs.rmSync(downloadedBinDir, { recursive: true, force: true });
+    } catch {
+      // Non-fatal
+    }
+  }
 }

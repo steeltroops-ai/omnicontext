@@ -135,7 +135,7 @@ impl Config {{
 /// Create an engine and run indexing on the test files.
 async fn create_indexed_engine() -> (Engine, TempDir) {
     let (mut engine, dir) = create_test_engine().await;
-    engine.run_index().await.expect("index test files");
+    engine.run_index(false).await.expect("index test files");
     (engine, dir)
 }
 
@@ -243,7 +243,7 @@ async fn test_reindex_is_idempotent() {
     let status1 = engine.status().expect("first status");
 
     // Re-index -- should not duplicate
-    engine.run_index().await.expect("re-index");
+    engine.run_index(false).await.expect("re-index");
     let status2 = engine.status().expect("second status");
 
     assert_eq!(

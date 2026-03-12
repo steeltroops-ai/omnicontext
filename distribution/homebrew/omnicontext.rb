@@ -2,6 +2,7 @@ class Omnicontext < Formula
   desc "Universal code context engine for AI coding agents"
   homepage "https://github.com/steeltroops-ai/omnicontext"
   version "1.1.2"
+  license "Apache-2.0"
 
   on_macos do
     if Hardware::CPU.arm?
@@ -18,10 +19,30 @@ class Omnicontext < Formula
     sha256 "1bb6a46f99376084f1d126a5a96f9bd09b9673e3f43cb88b5655f8a9738b064c"
   end
 
+  # Pre-built binary — no compilation needed
+  bottle :unneeded
+
   def install
     bin.install "omnicontext"
     bin.install "omnicontext-mcp"
     bin.install "omnicontext-daemon" if File.exist?("omnicontext-daemon")
+  end
+
+  def post_install
+    # Auto-configure MCP for all detected AI clients
+    system "#{bin}/omnicontext", "setup", "--all" rescue nil
+  end
+
+  def caveats
+    <<~EOS
+      To configure OmniContext for all your AI coding clients, run:
+        omnicontext setup --all
+
+      Quick start:
+        cd /path/to/your/project
+        omnicontext index .
+        omnicontext search "your query"
+    EOS
   end
 
   test do

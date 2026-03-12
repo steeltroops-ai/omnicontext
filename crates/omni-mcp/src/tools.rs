@@ -23,6 +23,72 @@ use tokio::sync::Mutex;
 use omni_core::Engine;
 
 // -----------------------------------------------------------------------
+// Input validation constants (hardened per MCP_DAEMON_AUDIT.md)
+// -----------------------------------------------------------------------
+
+/// Maximum results any tool can return.
+const MAX_LIMIT: usize = 200;
+/// Maximum query length in characters.
+const MAX_QUERY_LEN: usize = 10_000;
+/// Maximum graph traversal depth for `blast_radius` / `call_graph` / `module_map`.
+const MAX_GRAPH_DEPTH: usize = 20;
+/// Maximum commit count for recent changes.
+const MAX_COMMIT_COUNT: usize = 100;
+/// Maximum plan text length for `audit_plan`.
+const MAX_PLAN_LEN: usize = 500_000;
+
+/// Clamp a limit value to a safe range.
+fn clamp_limit(limit: Option<usize>, default: usize) -> usize {
+    limit.unwrap_or(default).clamp(1, MAX_LIMIT)
+}
+
+/// Clamp a depth value to a safe range.
+fn clamp_depth(depth: Option<usize>, default: usize) -> usize {
+    depth.unwrap_or(default).clamp(1, MAX_GRAPH_DEPTH)
+}
+
+/// Validate a query string is non-empty and within bounds.
+fn validate_query(query: &str) -> Result<(), McpError> {
+    if query.trim().is_empty() {
+        return Err(McpError::invalid_params("query must not be empty", None));
+    }
+    if query.len() > MAX_QUERY_LEN {
+        return Err(McpError::invalid_params(
+            format!("query exceeds maximum length of {MAX_QUERY_LEN} characters"),
+            None,
+        ));
+    }
+    Ok(())
+}
+
+/// Validate a path is safe (no parent traversal, no absolute paths pointing outside the repo).
+fn validate_relative_path(path: &str) -> Result<(), McpError> {
+    let p = std::path::Path::new(path);
+    // Reject absolute paths
+    if p.is_absolute() {
+        return Err(McpError::invalid_params(
+            "path must be relative to repository root",
+            None,
+        ));
+    }
+    // Reject parent traversal
+    for component in p.components() {
+        if matches!(component, std::path::Component::ParentDir) {
+            return Err(McpError::invalid_params(
+                "path must not contain '..' components",
+                None,
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Clamp `min_rerank_score` to [0.0, 1.0] range.
+fn clamp_rerank_score(score: Option<f32>) -> Option<f32> {
+    score.map(|s| s.clamp(0.0, 1.0))
+}
+
+// -----------------------------------------------------------------------
 // Parameter structs for each tool
 // -----------------------------------------------------------------------
 
@@ -86,6 +152,8 @@ pub struct ContextWindowParams {
     /// this threshold are demoted. Higher values produce fewer, more precise
     /// results. Default: no threshold.
     pub min_rerank_score: Option<f32>,
+    /// Whether to include architectural shadow headers on each chunk (default: from config).
+    pub shadow_headers: Option<bool>,
 }
 
 /// Parameters for `get_module_map` tool.
@@ -105,6 +173,8 @@ pub struct SearchByIntentParams {
     pub limit: Option<usize>,
     /// Token budget for context assembly (default: engine config).
     pub token_budget: Option<u32>,
+    /// Whether to include architectural shadow headers on each chunk (default: from config).
+    pub shadow_headers: Option<bool>,
 }
 
 /// Parameters for `set_workspace` tool.
@@ -152,6 +222,38 @@ pub struct GetBranchContextParams {
     pub include_diffs: Option<bool>,
 }
 
+/// Parameters for `get_co_changes` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetCoChangesParams {
+    /// File path to find co-change partners for.
+    pub file_path: String,
+    /// Minimum number of shared commits to consider (default: 2).
+    pub min_frequency: Option<usize>,
+    /// Maximum results to return (default: 10).
+    pub limit: Option<usize>,
+}
+
+/// Parameters for `audit_plan` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct AuditPlanParams {
+    /// The plan text to audit (markdown, numbered steps, bullet points).
+    pub plan: String,
+    /// Maximum dependency depth for blast radius analysis (default: 3).
+    pub max_depth: Option<usize>,
+}
+
+/// Parameters for `generate_manifest` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GenerateManifestParams {
+    /// Format: "claude" for CLAUDE.md, "json" for `.context_map.json`, "both" for both.
+    #[serde(default = "default_manifest_format")]
+    pub format: String,
+}
+
+fn default_manifest_format() -> String {
+    "claude".to_string()
+}
+
 // -----------------------------------------------------------------------
 // MCP Server
 // -----------------------------------------------------------------------
@@ -185,11 +287,13 @@ impl OmniContextServer {
     ) -> Result<CallToolResult, McpError> {
         use std::fmt::Write;
 
-        let limit = params.0.limit.unwrap_or(10);
+        validate_query(&params.0.query)?;
+        let limit = clamp_limit(params.0.limit, 10);
+        let min_score = clamp_rerank_score(params.0.min_rerank_score);
         let query = &params.0.query;
         let engine = self.engine.lock().await;
 
-        match engine.search_with_rerank_threshold(query, limit, params.0.min_rerank_score) {
+        match engine.search_with_rerank_threshold(query, limit, min_score) {
             Ok(results) => {
                 if results.is_empty() {
                     let hint = if let Ok(status) = engine.status() {
@@ -243,17 +347,25 @@ impl OmniContextServer {
     ) -> Result<CallToolResult, McpError> {
         use std::fmt::Write;
 
-        let limit = params.0.limit.unwrap_or(20);
+        validate_query(&params.0.query)?;
+        let limit = clamp_limit(params.0.limit, 20);
+        let min_score = clamp_rerank_score(params.0.min_rerank_score);
         let query = &params.0.query;
+        let want_shadow = params.0.shadow_headers;
         let engine = self.engine.lock().await;
 
         match engine.search_context_window_with_rerank_threshold(
             query,
             limit,
             params.0.token_budget,
-            params.0.min_rerank_score,
+            min_score,
         ) {
-            Ok(ctx) => {
+            Ok(mut ctx) => {
+                // Enrich with shadow headers if explicitly requested (overrides config)
+                if want_shadow == Some(true) {
+                    engine.enrich_shadow_headers(&mut ctx);
+                }
+
                 if ctx.is_empty() {
                     return Ok(CallToolResult::success(vec![Content::text(
                         "No results found. Make sure the repository has been indexed.",
@@ -285,9 +397,9 @@ impl OmniContextServer {
                         current_file = Some(&entry.file_path);
                     }
 
-                    write!(
+                    writeln!(
                         output,
-                        "### {} ({:?}, score: {:.4}){}\n```\n{}\n```\n\n",
+                        "### {} ({:?}, score: {:.4}){}",
                         entry.chunk.symbol_path,
                         entry.chunk.kind,
                         entry.score,
@@ -296,9 +408,13 @@ impl OmniContextServer {
                         } else {
                             ""
                         },
-                        entry.chunk.content,
                     )
                     .ok();
+                    // Include shadow header if present
+                    if let Some(ref header) = entry.shadow_header {
+                        writeln!(output, "{header}").ok();
+                    }
+                    write!(output, "```\n{}\n```\n\n", entry.chunk.content).ok();
                 }
 
                 Ok(CallToolResult::success(vec![Content::text(output)]))
@@ -320,8 +436,20 @@ impl OmniContextServer {
     ) -> Result<CallToolResult, McpError> {
         use std::fmt::Write;
 
+        let limit = clamp_limit(params.0.limit, 5);
         let name = &params.0.name;
-        let limit = params.0.limit.unwrap_or(5);
+        if name.trim().is_empty() {
+            return Err(McpError::invalid_params(
+                "symbol name must not be empty",
+                None,
+            ));
+        }
+        if name.len() > MAX_QUERY_LEN {
+            return Err(McpError::invalid_params(
+                format!("symbol name exceeds maximum length of {MAX_QUERY_LEN} characters"),
+                None,
+            ));
+        }
         let engine = self.engine.lock().await;
         let index = engine.metadata_index();
 
@@ -399,6 +527,8 @@ impl OmniContextServer {
         fn normalize_path_str(s: &str) -> &str {
             s.strip_prefix(r"\\?\").unwrap_or(s)
         }
+
+        validate_relative_path(&params.0.path)?;
 
         let path_str = &params.0.path;
         let engine = self.engine.lock().await;
@@ -591,6 +721,15 @@ impl OmniContextServer {
 
         let symbol_name = &params.0.symbol;
         let direction = params.0.direction.as_deref().unwrap_or("both");
+        // Validate direction parameter
+        if !matches!(direction, "upstream" | "downstream" | "both") {
+            return Err(McpError::invalid_params(
+                format!(
+                    "direction must be 'upstream', 'downstream', or 'both', got: '{direction}'"
+                ),
+                None,
+            ));
+        }
         let engine = self.engine.lock().await;
         let index = engine.metadata_index();
         let graph = engine.dep_graph();
@@ -734,7 +873,8 @@ impl OmniContextServer {
     ) -> Result<CallToolResult, McpError> {
         use std::fmt::Write;
 
-        let limit = params.0.limit.unwrap_or(5);
+        validate_query(&params.0.pattern)?;
+        let limit = clamp_limit(params.0.limit, 5);
         let pattern = &params.0.pattern;
         let engine = self.engine.lock().await;
 
@@ -951,7 +1091,7 @@ impl OmniContextServer {
     ) -> Result<CallToolResult, McpError> {
         use std::fmt::Write;
 
-        let max_depth = params.0.max_depth;
+        let max_depth = params.0.max_depth.map(|d| clamp_depth(Some(d), 10));
         let engine = self.engine.lock().await;
         let index = engine.metadata_index();
 
@@ -1014,7 +1154,7 @@ impl OmniContextServer {
         }
 
         let mut output = format!(
-            "## Module Map ({} modules, {} files)\\n\\n",
+            "## Module Map ({} modules, {} files)\n\n",
             modules.len(),
             files.len()
         );
@@ -1042,35 +1182,74 @@ impl OmniContextServer {
     ) -> Result<CallToolResult, McpError> {
         use std::fmt::Write;
 
+        validate_query(&params.0.query)?;
+        let limit = clamp_limit(params.0.limit, 10);
         let query = &params.0.query;
-        let limit = params.0.limit.unwrap_or(10);
+        let want_shadow = params.0.shadow_headers;
         let engine = self.engine.lock().await;
 
-        // Query expansion: extract key terms and add synonyms
+        // Use omni-core's intent classifier (not just static synonyms)
+        let intent = omni_core::search::QueryIntent::classify(query);
+        let strategy = intent.context_strategy();
+
+        // Query expansion: combine static synonyms with intent context
         let expanded_terms = expand_query(query);
         let expanded_query = expanded_terms.join(" ");
 
+        // The engine's search pipeline already uses HyDE + intent classification
+        // internally, so we leverage its full power here.
         match engine.search_context_window(&expanded_query, limit, params.0.token_budget) {
-            Ok(ctx) => {
+            Ok(mut ctx) => {
+                // Enrich with shadow headers if explicitly requested
+                if want_shadow == Some(true) {
+                    engine.enrich_shadow_headers(&mut ctx);
+                }
+
                 if ctx.is_empty() {
-                    // Fall back to original query
+                    // Fall back to original query (without synonym expansion)
                     match engine.search(query, limit) {
                         Ok(results) if results.is_empty() => {
                             return Ok(CallToolResult::success(vec![Content::text(format!(
-                                "No results found for: '{query}'\n\nExpanded to: '{expanded_query}'",
+                                "No results found for: '{query}'\n\n\
+                                 **Intent**: {intent:?}\n\
+                                 **Expanded to**: '{expanded_query}'\n\
+                                 **Strategy**: graph_depth={}, include_tests={}, include_architecture={}",
+                                strategy.graph_depth, strategy.include_tests, strategy.include_architecture,
                             ))]));
                         }
                         Ok(results) => {
                             let mut output = format!(
-                                "## Search by Intent\n**Query**: {query}\n**Expanded**: {expanded_query}\n**Results**: {}\n\n",
+                                "## Search by Intent\n\
+                                 **Query**: {query}\n\
+                                 **Intent**: {intent:?}\n\
+                                 **Expanded**: {expanded_query}\n\
+                                 **Strategy**: graph_depth={}, include_tests={}, include_arch={}\n\
+                                 **Results**: {}\n\n",
+                                strategy.graph_depth,
+                                strategy.include_tests,
+                                strategy.include_architecture,
                                 results.len()
                             );
                             for (i, r) in results.iter().enumerate() {
+                                let breakdown = &r.score_breakdown;
                                 write!(
                                     output,
-                                    "### {} (score: {:.4})\n**File**: {}\n**Symbol**: {} ({:?})\n```\n{}\n```\n\n",
+                                    "### {} (score: {:.4})\n\
+                                     **File**: {}\n\
+                                     **Symbol**: {} ({:?})\n\
+                                     **Score breakdown**: semantic_rank={}, keyword_rank={}, rrf={:.3}, \
+                                     reranker={:.3}, struct_w={:.2}, dep_boost={:.2}, recency={:.2}\n\
+                                     ```\n{}\n```\n\n",
                                     i + 1, r.score, r.file_path.display(),
-                                    r.chunk.symbol_path, r.chunk.kind, r.chunk.content,
+                                    r.chunk.symbol_path, r.chunk.kind,
+                                    breakdown.semantic_rank.map_or("N/A".to_string(), |r| r.to_string()),
+                                    breakdown.keyword_rank.map_or("N/A".to_string(), |r| r.to_string()),
+                                    breakdown.rrf_score,
+                                    breakdown.reranker_score.unwrap_or(0.0),
+                                    breakdown.structural_weight,
+                                    breakdown.dependency_boost,
+                                    breakdown.recency_boost,
+                                    r.chunk.content,
                                 )
                                 .ok();
                             }
@@ -1086,8 +1265,18 @@ impl OmniContextServer {
                 }
 
                 let mut output = format!(
-                    "## Search by Intent\n**Query**: {query}\n**Expanded**: {expanded_query}\n**Context**: {} entries, {}/{} tokens\n\n",
-                    ctx.len(), ctx.total_tokens, ctx.token_budget
+                    "## Search by Intent\n\
+                     **Query**: {query}\n\
+                     **Intent**: {intent:?}\n\
+                     **Expanded**: {expanded_query}\n\
+                     **Strategy**: graph_depth={}, include_tests={}, include_arch={}\n\
+                     **Context**: {} entries, {}/{} tokens\n\n",
+                    strategy.graph_depth,
+                    strategy.include_tests,
+                    strategy.include_architecture,
+                    ctx.len(),
+                    ctx.total_tokens,
+                    ctx.token_budget
                 );
                 output.push_str(&ctx.render());
 
@@ -1121,6 +1310,12 @@ impl OmniContextServer {
             ))]));
         }
 
+        if !std::path::Path::new(&new_path).is_dir() {
+            return Ok(CallToolResult::success(vec![Content::text(format!(
+                "Error: path is not a directory: {path_str}",
+            ))]));
+        }
+
         // Reject known non-project directories to prevent silent misbehavior.
         let path_lower = new_path.to_string_lossy().to_lowercase();
         let suspicious = path_lower.contains("program files")
@@ -1128,7 +1323,10 @@ impl OmniContextServer {
             || path_lower.contains("programs\\antigravity")
             || path_lower.contains("programs/antigravity")
             || path_lower.contains(".vscode")
-            || path_lower.contains(".gemini");
+            || path_lower.contains(".gemini")
+            || path_lower.contains(".ssh")
+            || path_lower.contains("etc/shadow")
+            || path_lower.contains("etc\\shadow");
         if suspicious {
             return Ok(CallToolResult::success(vec![Content::text(format!(
                 "Error: '{}' looks like an application directory, not a source code project. \
@@ -1167,7 +1365,7 @@ impl OmniContextServer {
         // Auto-index if needed
         if needs_index {
             let mut engine = self.engine.lock().await;
-            match engine.run_index().await {
+            match engine.run_index(false).await {
                 Ok(result) => {
                     return Ok(CallToolResult::success(vec![Content::text(format!(
                         "Workspace switched to: {}\nAuto-indexed: {} files, {} chunks, {} symbols",
@@ -1205,7 +1403,7 @@ impl OmniContextServer {
         use std::fmt::Write;
 
         let symbol_name = &params.0.symbol;
-        let max_depth = params.0.max_depth.unwrap_or(5);
+        let max_depth = clamp_depth(params.0.max_depth, 5);
         let engine = self.engine.lock().await;
         let index = engine.metadata_index();
         let graph = engine.dep_graph();
@@ -1299,12 +1497,91 @@ impl OmniContextServer {
     ) -> Result<CallToolResult, McpError> {
         use std::fmt::Write;
 
-        let commit_count = params.0.commit_count.unwrap_or(10);
+        let commit_count = params.0.commit_count.unwrap_or(10).min(MAX_COMMIT_COUNT);
         let include_diff = params.0.include_diff.unwrap_or(false);
         let engine = self.engine.lock().await;
         let repo_path = engine.repo_path();
 
-        // Execute git log to get recent changes
+        // Try CommitEngine first (indexed, enriched data with co-change analysis)
+        let indexed_commits =
+            omni_core::commits::CommitEngine::recent_commits(engine.metadata_index(), commit_count);
+
+        match indexed_commits {
+            Ok(commits) if !commits.is_empty() => {
+                let mut result = format!(
+                    "## Recent Changes ({} commits, from indexed history)\n\
+                     **Repository**: {}\n\n",
+                    commits.len(),
+                    repo_path.display()
+                );
+
+                for (i, commit) in commits.iter().enumerate() {
+                    let hash_short = &commit.hash[..8.min(commit.hash.len())];
+                    writeln!(
+                        result,
+                        "### {}. `{}` ({}) -- {}\n> {}",
+                        i + 1,
+                        hash_short,
+                        commit.timestamp,
+                        commit.author,
+                        commit.message,
+                    )
+                    .ok();
+
+                    // Show AI summary if available
+                    if let Some(summary) = &commit.summary {
+                        if !summary.is_empty() {
+                            writeln!(result, "\n**Summary**: {summary}").ok();
+                        }
+                    }
+
+                    // Show files changed
+                    if !commit.files_changed.is_empty() {
+                        writeln!(
+                            result,
+                            "\n**Files changed** ({}):",
+                            commit.files_changed.len()
+                        )
+                        .ok();
+                        for f in commit.files_changed.iter().take(20) {
+                            writeln!(result, "  - `{f}`").ok();
+                        }
+                        if commit.files_changed.len() > 20 {
+                            writeln!(
+                                result,
+                                "  - ... and {} more files",
+                                commit.files_changed.len() - 20
+                            )
+                            .ok();
+                        }
+                    }
+                    result.push('\n');
+                }
+
+                // Also get uncommitted changes (working tree) -- still via git
+                let status_output = std::process::Command::new("git")
+                    .args(["status", "--short"])
+                    .current_dir(repo_path)
+                    .output();
+
+                if let Ok(status) = status_output {
+                    if status.status.success() {
+                        let status_str = String::from_utf8_lossy(&status.stdout);
+                        if !status_str.is_empty() {
+                            writeln!(result, "### Uncommitted Changes\n```\n{status_str}```").ok();
+                        }
+                    }
+                }
+
+                return Ok(CallToolResult::success(vec![Content::text(result)]));
+            }
+            _ => {
+                // Fall back to raw git log when CommitEngine has no data
+                tracing::debug!("CommitEngine has no indexed commits, falling back to git log");
+            }
+        }
+
+        // Fallback: raw git log (original behavior)
         let diff_flag = if include_diff { "-p" } else { "--stat" };
         let git_output = std::process::Command::new("git")
             .args([
@@ -1328,7 +1605,9 @@ impl OmniContextServer {
                 }
 
                 let mut result = format!(
-                    "## Recent Changes ({} commits)\n**Repository**: {}\n\n",
+                    "## Recent Changes ({} commits, from git log)\n\
+                     **Repository**: {}\n\
+                     **Note**: Run `index_commits` first for enriched commit data with co-change analysis.\n\n",
                     commit_count,
                     repo_path.display()
                 );
@@ -1397,7 +1676,7 @@ impl OmniContextServer {
         use std::fmt::Write;
 
         let symbol_name = &params.0.symbol;
-        let depth = params.0.depth.unwrap_or(2);
+        let depth = clamp_depth(params.0.depth, 2);
         let as_mermaid = params.0.mermaid.unwrap_or(false);
         let engine = self.engine.lock().await;
         let index = engine.metadata_index();
@@ -1437,11 +1716,18 @@ impl OmniContextServer {
             // Generate Mermaid diagram
             let mut mermaid = String::from("```mermaid\ngraph TD\n");
 
-            // Sanitize node ID for mermaid
+            // Sanitize node ID for mermaid (replace chars that break node syntax)
             let sanitize = |s: &str| -> String { s.replace("::", "_").replace(['.', '-'], "_") };
+            // Sanitize label text for mermaid (prevent injection via double-quotes)
+            let sanitize_label = |s: &str| -> String { s.replace('"', "'") };
 
             let center_id = sanitize(&symbol.fqn);
-            writeln!(mermaid, "  {center_id}[\"{}\"]\n", symbol.fqn).ok();
+            writeln!(
+                mermaid,
+                "  {center_id}[\"{}\"]\n",
+                sanitize_label(&symbol.fqn)
+            )
+            .ok();
 
             // Style the center node
             writeln!(
@@ -1454,7 +1740,7 @@ impl OmniContextServer {
             for sym_id in &upstream {
                 if let Ok(Some(sym)) = index.get_symbol_by_id(*sym_id) {
                     let node_id = sanitize(&sym.fqn);
-                    writeln!(mermaid, "  {node_id}[\"{}\"]", sym.fqn).ok();
+                    writeln!(mermaid, "  {node_id}[\"{}\"]", sanitize_label(&sym.fqn)).ok();
                     writeln!(mermaid, "  {center_id} --> {node_id}").ok();
                 }
             }
@@ -1463,7 +1749,7 @@ impl OmniContextServer {
             for sym_id in &downstream {
                 if let Ok(Some(sym)) = index.get_symbol_by_id(*sym_id) {
                     let node_id = sanitize(&sym.fqn);
-                    writeln!(mermaid, "  {node_id}[\"{}\"]", sym.fqn).ok();
+                    writeln!(mermaid, "  {node_id}[\"{}\"]", sanitize_label(&sym.fqn)).ok();
                     writeln!(mermaid, "  {node_id} --> {center_id}").ok();
                 }
             }
@@ -1611,6 +1897,164 @@ impl OmniContextServer {
 
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
+
+    // -----------------------------------------------------------------------
+    // Phase A: Co-Change Activation
+    // -----------------------------------------------------------------------
+
+    #[tool(
+        name = "get_co_changes",
+        description = "Find files that frequently change together with a given file based on git commit history. Use this to discover hidden coupling between files that aren't connected through import/call dependencies."
+    )]
+    async fn get_co_changes(
+        &self,
+        params: Parameters<GetCoChangesParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use std::fmt::Write;
+
+        validate_relative_path(&params.0.file_path)?;
+        let file_path = &params.0.file_path;
+        let min_frequency = params.0.min_frequency.unwrap_or(2).clamp(1, 100);
+        let limit = clamp_limit(params.0.limit, 10);
+
+        let engine = self.engine.lock().await;
+        let index = engine.metadata_index();
+
+        match omni_core::commits::CommitEngine::co_change_files(
+            index, file_path, min_frequency, limit,
+        ) {
+            Ok(co_changes) => {
+                if co_changes.is_empty() {
+                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                        "No co-change partners found for `{file_path}` (min_frequency={min_frequency}).\n\n\
+                         This may mean the file has few commits or changes independently.\n\
+                         Try lowering `min_frequency` to 1."
+                    ))]));
+                }
+
+                let mut output = format!(
+                    "## Co-Change Partners for `{file_path}`\n\n\
+                     Files that frequently change together (min {min_frequency} shared commits):\n\n\
+                     | File | Shared Commits |\n\
+                     |------|---------------|\n"
+                );
+
+                for co in &co_changes {
+                    writeln!(output, "| `{}` | {} |", co.path, co.shared_commits).ok();
+                }
+
+                writeln!(
+                    output,
+                    "\n**{} co-change partners found.** These files may have hidden coupling.",
+                    co_changes.len()
+                )
+                .ok();
+
+                Ok(CallToolResult::success(vec![Content::text(output)]))
+            }
+            Err(e) => Err(McpError::internal_error(
+                format!("co-change analysis failed: {e}"),
+                None,
+            )),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase B: Plan Auditor
+    // -----------------------------------------------------------------------
+
+    #[tool(
+        name = "audit_plan",
+        description = "Analyze a task plan for architectural risks, blast radius, co-change warnings, and breaking changes. Send your plan text and get back a structural critique with risk levels and recommendations."
+    )]
+    async fn audit_plan(
+        &self,
+        params: Parameters<AuditPlanParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let plan_text = &params.0.plan;
+        let max_depth = clamp_depth(params.0.max_depth, 3);
+
+        if plan_text.len() > MAX_PLAN_LEN {
+            return Err(McpError::invalid_params(
+                format!("plan exceeds maximum length of {MAX_PLAN_LEN} characters"),
+                None,
+            ));
+        }
+
+        let engine = self.engine.lock().await;
+        let auditor = omni_core::plan_auditor::PlanAuditor::new(&engine);
+
+        match auditor.audit(plan_text, max_depth) {
+            Ok(critique) => {
+                let output = critique.to_markdown();
+                Ok(CallToolResult::success(vec![Content::text(output)]))
+            }
+            Err(e) => Err(McpError::internal_error(
+                format!("plan audit failed: {e}"),
+                None,
+            )),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase E: Proactive Manifests
+    // -----------------------------------------------------------------------
+
+    #[tool(
+        name = "generate_manifest",
+        description = "Auto-generate a CLAUDE.md project guide or .context_map.json from live index data. Use 'claude' format for a human/AI-readable project overview, 'json' for structured data, or 'both'."
+    )]
+    async fn generate_manifest(
+        &self,
+        params: Parameters<GenerateManifestParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let format = &params.0.format;
+        // Validate format parameter
+        if !matches!(format.as_str(), "claude" | "json" | "both") {
+            return Err(McpError::invalid_params(
+                format!("format must be 'claude', 'json', or 'both', got: '{format}'"),
+                None,
+            ));
+        }
+        let engine = self.engine.lock().await;
+
+        let mut output = String::new();
+
+        if format == "claude" || format == "both" {
+            match engine.generate_claude_md() {
+                Ok(claude_md) => {
+                    output.push_str(&claude_md);
+                }
+                Err(e) => {
+                    return Err(McpError::internal_error(
+                        format!("CLAUDE.md generation failed: {e}"),
+                        None,
+                    ));
+                }
+            }
+        }
+
+        if format == "json" || format == "both" {
+            if !output.is_empty() {
+                output.push_str("\n\n---\n\n");
+            }
+            match engine.generate_context_map() {
+                Ok(context_map) => {
+                    output.push_str("```json\n");
+                    output.push_str(&context_map);
+                    output.push_str("\n```");
+                }
+                Err(e) => {
+                    return Err(McpError::internal_error(
+                        format!("context_map.json generation failed: {e}"),
+                        None,
+                    ));
+                }
+            }
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
 }
 
 #[tool_handler]
@@ -1626,6 +2070,8 @@ impl ServerHandler for OmniContextServer {
                  get_blast_radius for impact analysis, get_call_graph for dependency visualization, \
                  get_recent_changes for git history, search_by_intent for NL queries, \
                  get_branch_context for per-branch diff awareness, \
+                 get_co_changes for co-change analysis, audit_plan for plan risk assessment, \
+                 generate_manifest for project documentation, \
                  and set_workspace to switch the active repository."
                     .into(),
             ),
@@ -1646,6 +2092,8 @@ impl ServerHandler for OmniContextServer {
 /// structural decomposition of the query.
 fn expand_query(query: &str) -> Vec<String> {
     let mut terms: Vec<String> = vec![query.to_string()];
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    seen.insert(query.to_string());
 
     // Static synonym expansions for common code concepts
     let synonyms: &[(&[&str], &[&str])] = &[
@@ -1714,7 +2162,7 @@ fn expand_query(query: &str) -> Vec<String> {
         if triggers.iter().any(|t| lower.contains(t)) {
             for exp in *expansions {
                 let term = (*exp).to_string();
-                if !terms.contains(&term) {
+                if seen.insert(term.clone()) {
                     terms.push(term);
                 }
             }
@@ -1724,7 +2172,7 @@ fn expand_query(query: &str) -> Vec<String> {
     // Extract potential symbol names (CamelCase, snake_case, paths with ::)
     for word in query.split_whitespace() {
         let clean = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '_' && c != ':');
-        if clean.len() > 2 && !terms.contains(&clean.to_string()) {
+        if clean.len() > 2 && seen.insert(clean.to_string()) {
             terms.push(clean.to_string());
         }
     }

@@ -106,6 +106,7 @@ impl IndexingConfig {
     fn default_excludes() -> Vec<String> {
         vec![
             ".git".into(),
+            ".vscode-test".into(),
             "node_modules".into(),
             "target".into(),
             "__pycache__".into(),
@@ -172,6 +173,11 @@ pub struct SearchConfig {
     /// Reranker configuration.
     #[serde(default)]
     pub reranker: RerankerConfig,
+
+    /// Whether to prepend architectural shadow headers to context window entries.
+    /// Shadow headers contain dependency counts, risk level, and co-change partners.
+    #[serde(default)]
+    pub shadow_headers: bool,
 }
 
 impl Default for SearchConfig {
@@ -182,6 +188,7 @@ impl Default for SearchConfig {
             rrf_k: Self::default_rrf_k(),
             token_budget: Self::default_token_budget(),
             reranker: RerankerConfig::default(),
+            shadow_headers: false,
         }
     }
 }
@@ -299,11 +306,11 @@ impl EmbeddingConfig {
         768
     } // jina-code v2 output dimensions
     fn default_batch_size() -> usize {
-        128
+        2
     }
     fn default_max_seq_length() -> usize {
-        512
-    } // practical limit for code chunks
+        256
+    } // practical limit for code chunks; reduces ONNX memory usage
 }
 
 /// File watcher configuration.

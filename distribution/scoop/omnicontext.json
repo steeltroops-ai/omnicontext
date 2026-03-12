@@ -10,6 +10,7 @@
     }
   },
   "bin": ["omnicontext.exe", "omnicontext-mcp.exe", "omnicontext-daemon.exe"],
+  "post_install": "& \"$dir\\omnicontext.exe\" setup --all 2>$null",
   "checkver": {
     "github": "https://github.com/steeltroops-ai/omnicontext"
   },
@@ -22,5 +23,6 @@
     "hash": {
       "url": "$url.sha256"
     }
-  }
+  },
+  "notes": "Run 'omnicontext setup --all' to configure MCP for all AI coding clients."
 }

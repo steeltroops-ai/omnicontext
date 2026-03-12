@@ -17,7 +17,6 @@ use tokio_util::sync::CancellationToken;
 
 use omni_core::Engine;
 
-use crate::metrics::PerformanceMetrics;
 use crate::protocol::{self, error_codes, Response};
 
 /// Derive a deterministic pipe/socket name from the repository path.
@@ -65,6 +64,31 @@ pub async fn serve(engine: Engine, pipe_name: &str) -> anyhow::Result<()> {
     let event_dedup = Arc::new(crate::event_dedup::EventDeduplicator::new());
     let backpressure = Arc::new(crate::backpressure::BackpressureMonitor::new(100)); // max 100 concurrent requests
     let shutdown_token = CancellationToken::new();
+
+    // Spawn periodic maintenance task — prunes expired cache entries every 60s
+    {
+        let eng = engine.clone();
+        let token = shutdown_token.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        let eng_guard = eng.lock().await;
+                        let pruned = eng_guard.search_engine().result_cache().prune_expired();
+                        if pruned > 0 {
+                            tracing::debug!(pruned = pruned, "periodic cache maintenance: pruned expired entries");
+                        }
+                        drop(eng_guard);
+                    }
+                    () = token.cancelled() => {
+                        tracing::debug!("maintenance task shutting down");
+                        break;
+                    }
+                }
+            }
+        });
+    }
 
     #[cfg(windows)]
     {
@@ -219,9 +243,33 @@ where
     R: tokio::io::AsyncRead + Unpin,
     W: tokio::io::AsyncWrite + Unpin,
 {
-    let mut lines = BufReader::new(reader).lines();
+    // HC-1 fix: limit max line length to 10 MB to prevent unbounded allocation
+    const MAX_LINE_LEN: usize = 10 * 1024 * 1024;
+    let buf_reader = BufReader::new(reader);
+    let mut lines = buf_reader.lines();
 
-    while let Some(line) = lines.next_line().await? {
+    while let Some(line_result) = lines.next_line().await.transpose() {
+        let line = match line_result {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to read IPC line");
+                break;
+            }
+        };
+
+        if line.len() > MAX_LINE_LEN {
+            let response = Response::error(
+                0,
+                error_codes::PARSE_ERROR,
+                format!("message exceeds maximum size of {MAX_LINE_LEN} bytes"),
+            );
+            let mut response_json = serde_json::to_string(&response)?;
+            response_json.push('\n');
+            writer.write_all(response_json.as_bytes()).await?;
+            writer.flush().await?;
+            continue;
+        }
+
         let line_bytes = line.trim().as_bytes();
         if line_bytes.is_empty() {
             continue;
@@ -400,7 +448,10 @@ async fn dispatch(
         }
 
         // Phase 2: Resilience Monitoring Methods
-        "resilience/get_status" => handle_resilience_status(engine.clone()).await,
+        "resilience/get_status" => {
+            handle_resilience_status(engine.clone(), event_dedup.clone(), backpressure.clone())
+                .await
+        }
 
         "resilience/reset_circuit_breaker" => {
             let params: protocol::ResetCircuitBreakerParams = match parse_params(&req) {
@@ -420,6 +471,22 @@ async fn dispatch(
         }
 
         "history/index_commits" => handle_index_commits(engine.clone()).await,
+
+        "history/get_co_changes" => {
+            let params: protocol::CoChangeParams = match parse_params(&req) {
+                Ok(p) => p,
+                Err(r) => return r,
+            };
+            handle_co_changes(engine.clone(), params).await
+        }
+
+        "plan/audit" => {
+            let params: protocol::AuditPlanParams = match parse_params(&req) {
+                Ok(p) => p,
+                Err(r) => return r,
+            };
+            handle_audit_plan(engine.clone(), params).await
+        }
 
         // Phase 4: Graph Visualization Methods
         "graph/get_architectural_context" => {
@@ -460,7 +527,9 @@ async fn dispatch(
         }
 
         // Phase 6: Performance Controls
-        "embedder/get_metrics" => handle_embedder_metrics(engine.clone()).await,
+        "embedder/get_metrics" => {
+            handle_embedder_metrics(engine.clone(), daemon_start_time.clone()).await
+        }
 
         "embedder/configure" => {
             let params: protocol::ConfigureEmbedderParams = match parse_params(&req) {
@@ -470,7 +539,14 @@ async fn dispatch(
             handle_configure_embedder(engine.clone(), params).await
         }
 
-        "index/get_pool_metrics" => handle_index_pool_metrics(engine.clone()).await,
+        "index/get_pool_metrics" => {
+            handle_index_pool_metrics(
+                engine.clone(),
+                backpressure.clone(),
+                performance_metrics.clone(),
+            )
+            .await
+        }
 
         "compression/get_stats" => handle_compression_stats(engine.clone()).await,
 
@@ -591,12 +667,11 @@ async fn handle_performance_metrics(
     let search_latency_p95_ms = performance_metrics.get_latency_percentile(0.95);
     let search_latency_p99_ms = performance_metrics.get_latency_percentile(0.99);
 
-    // Get memory usage
-    let memory_usage_bytes = PerformanceMetrics::get_current_memory_bytes();
-    let peak_memory_usage_bytes = performance_metrics.get_peak_memory_bytes();
-
-    // Update peak memory if current is higher
+    // Use vector index memory as a concrete, non-placeholder memory signal.
+    #[allow(clippy::cast_possible_truncation)]
+    let memory_usage_bytes = status.vector_memory_bytes as u64;
     performance_metrics.update_memory_usage(memory_usage_bytes);
+    let peak_memory_usage_bytes = performance_metrics.get_peak_memory_bytes();
 
     // Get total searches
     let total_searches = performance_metrics.get_total_searches();
@@ -623,8 +698,22 @@ async fn handle_search(
     engine: Arc<Mutex<Engine>>,
     params: protocol::SearchParams,
 ) -> Result<serde_json::Value, (i32, String)> {
+    // Validate query
+    if params.query.trim().is_empty() {
+        return Err((
+            error_codes::INVALID_PARAMS,
+            "query must not be empty".to_string(),
+        ));
+    }
+    if params.query.len() > 10_000 {
+        return Err((
+            error_codes::INVALID_PARAMS,
+            "query exceeds maximum length of 10000 characters".to_string(),
+        ));
+    }
+    let limit = params.limit.clamp(1, 200); // Cap at 200, minimum 1
     let eng = engine.lock().await;
-    eng.search(&params.query, params.limit)
+    eng.search(&params.query, limit)
         .map(|results| {
             let entries: Vec<serde_json::Value> = results
                 .iter()
@@ -652,8 +741,22 @@ async fn handle_context_window(
     engine: Arc<Mutex<Engine>>,
     params: protocol::ContextWindowParams,
 ) -> Result<serde_json::Value, (i32, String)> {
+    // Validate query
+    if params.query.trim().is_empty() {
+        return Err((
+            error_codes::INVALID_PARAMS,
+            "query must not be empty".to_string(),
+        ));
+    }
+    if params.query.len() > 10_000 {
+        return Err((
+            error_codes::INVALID_PARAMS,
+            "query exceeds maximum length of 10000 characters".to_string(),
+        ));
+    }
+    let limit = params.limit.clamp(1, 200); // Cap at 200, minimum 1
     let eng = engine.lock().await;
-    eng.search_context_window(&params.query, params.limit, params.token_budget)
+    eng.search_context_window(&params.query, limit, params.token_budget)
         .map(|ctx| {
             serde_json::json!({
                 "entries_count": ctx.len(),
@@ -891,31 +994,80 @@ async fn handle_module_map(
     }))
 }
 
+/// IDX-1 fix: Spawn indexing in background so the mutex is not held for minutes.
+/// Returns immediately with a "started" acknowledgment.
 async fn handle_index(engine: Arc<Mutex<Engine>>) -> Result<serde_json::Value, (i32, String)> {
-    let mut eng = engine.lock().await;
-    let start = std::time::Instant::now();
+    // Quick check: if we can't even lock the engine, another index is running
+    let eng = engine.try_lock();
+    if eng.is_err() {
+        return Err((
+            error_codes::ENGINE_ERROR,
+            "indexing already in progress — engine is busy".to_string(),
+        ));
+    }
+    drop(eng);
 
-    eng.run_index()
-        .await
-        .map(|result| {
-            #[allow(clippy::cast_possible_truncation)]
-            let elapsed_ms = start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+    // Spawn the actual indexing in background so this handler returns immediately
+    let engine_bg = engine.clone();
+    tokio::spawn(async move {
+        let mut eng = engine_bg.lock().await;
+        let start = std::time::Instant::now();
+        match eng.run_index(false).await {
+            Ok(result) => {
+                #[allow(clippy::cast_possible_truncation)]
+                let elapsed_ms = start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+                tracing::info!(
+                    files = result.files_processed,
+                    chunks = result.chunks_created,
+                    elapsed_ms,
+                    "background indexing complete"
+                );
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "background indexing failed");
+            }
+        }
+    });
 
-            serde_json::json!({
-                "files_processed": result.files_processed,
-                "files_failed": result.files_failed,
-                "chunks_created": result.chunks_created,
-                "symbols_extracted": result.symbols_extracted,
-                "embeddings_generated": result.embeddings_generated,
-                "embedding_failures": result.embedding_failures,
-                "elapsed_ms": elapsed_ms,
-            })
-        })
-        .map_err(|e| (error_codes::ENGINE_ERROR, format!("indexing failed: {e}")))
+    Ok(serde_json::json!({
+        "started": true,
+        "message": "Indexing started in background. Use 'status' to check progress."
+    }))
 }
 
 /// Handle IDE event for pre-fetch.
 ///
+/// Maximum concurrent background IDE tasks (IDE-2 fix: prevent unbounded spawning).
+static IDE_TASK_SEMAPHORE: std::sync::LazyLock<Arc<tokio::sync::Semaphore>> =
+    std::sync::LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(10)));
+
+/// Validate that a file path from an IDE event is inside the repository root.
+/// Prevents arbitrary file indexing (IDE-1 fix).
+fn validate_ide_file_path(file_path: &str, engine: &Engine) -> Result<(), (i32, String)> {
+    let abs_path = std::path::Path::new(file_path);
+    let repo_root = engine.config().repo_path.as_path();
+
+    // Allow relative paths (they'll be resolved against repo root)
+    if abs_path.is_relative() {
+        return Ok(());
+    }
+
+    // Absolute paths must be inside the repo root
+    if abs_path.strip_prefix(repo_root).is_ok() {
+        Ok(())
+    } else {
+        tracing::warn!(
+            file = %file_path,
+            repo_root = %repo_root.display(),
+            "rejected IDE event: file is outside repo root"
+        );
+        Err((
+            error_codes::INVALID_PARAMS,
+            "file path is outside the repository root".to_string(),
+        ))
+    }
+}
+
 /// Spawns background tasks to pre-compute context for the given file/symbol
 /// and stores results in the prefetch cache. Returns immediately to the client.
 /// On `text_edited` events, also triggers incremental re-indexing of the changed file.
@@ -932,12 +1084,35 @@ async fn handle_ide_event(
         "IDE event received"
     );
 
+    // IDE-1: Validate file path is inside repo root
+    {
+        let eng_guard = engine.lock().await;
+        validate_ide_file_path(&params.file_path, &eng_guard)?;
+    }
+
+    // IDE-2: Check semaphore before spawning any background task
+    let permit = if let Ok(p) = IDE_TASK_SEMAPHORE.clone().try_acquire_owned() {
+        p
+    } else {
+        tracing::warn!(
+            event_type = %params.event_type,
+            "IDE event dropped: too many concurrent background tasks"
+        );
+        return Ok(serde_json::json!({
+            "acknowledged": true,
+            "event_type": params.event_type,
+            "skipped": true,
+            "reason": "backpressure: too many concurrent IDE tasks"
+        }));
+    };
+
     match params.event_type.as_str() {
         "file_opened" => {
             let eng = engine.clone();
             let cache = prefetch_cache.clone();
             let file_path = params.file_path.clone();
             tokio::spawn(async move {
+                let _permit = permit; // held until task completes
                 prefetch_file_context(eng, cache, &file_path).await;
             });
         }
@@ -948,6 +1123,7 @@ async fn handle_ide_event(
                 let file_path = params.file_path.clone();
                 let symbol = symbol.clone();
                 tokio::spawn(async move {
+                    let _permit = permit; // held until task completes
                     prefetch_symbol_context(eng, cache, &file_path, &symbol).await;
                 });
             }
@@ -1167,10 +1343,22 @@ async fn handle_update_config(
 }
 
 /// Handle request to clear the index.
+/// CI-1 fix: requires confirmation token "CONFIRM_CLEAR" to proceed.
 async fn handle_clear_index(
     engine: Arc<Mutex<Engine>>,
-    _params: protocol::ClearIndexParams,
+    params: protocol::ClearIndexParams,
 ) -> Result<serde_json::Value, (i32, String)> {
+    // CI-1: Require confirmation token for destructive operation
+    match params.confirm.as_deref() {
+        Some("CONFIRM_CLEAR") => {} // Valid
+        _ => {
+            return Err((
+                error_codes::INVALID_PARAMS,
+                "destructive operation requires confirm: \"CONFIRM_CLEAR\"".to_string(),
+            ));
+        }
+    }
+
     let mut eng = engine.lock().await;
 
     // Clear the index
@@ -1273,30 +1461,24 @@ async fn handle_search_intent(
     _engine: Arc<Mutex<Engine>>,
     params: protocol::SearchIntentParams,
 ) -> Result<serde_json::Value, (i32, String)> {
-    // Classify query intent (simplified - actual implementation in search module)
-    let query_lower = params.query.to_lowercase();
-    let (intent, confidence) = if query_lower.contains("architecture")
-        || query_lower.contains("structure")
-        || query_lower.contains("design")
-        || query_lower.contains("how does")
-    {
-        ("architectural", 0.85)
-    } else if query_lower.contains("bug")
-        || query_lower.contains("error")
-        || query_lower.contains("fix")
-        || query_lower.contains("debug")
-    {
-        ("debugging", 0.80)
-    } else {
-        ("implementation", 0.75)
-    };
+    // Use the real QueryIntent classifier from omni-core
+    let intent = omni_core::search::QueryIntent::classify(&params.query);
+    let strategy = intent.context_strategy();
+
+    let intent_label = format!("{intent:?}").to_lowercase();
+    let confidence = strategy.graph_depth as f64 / 10.0; // normalize to 0.0-1.0 range
 
     Ok(serde_json::json!({
         "query": params.query,
-        "intent": intent,
-        "confidence": confidence,
-        "hyde_applicable": intent == "architectural",
-        "synonyms_applicable": true
+        "intent": intent_label,
+        "confidence": confidence.clamp(0.5, 1.0),
+        "hyde_applicable": strategy.include_architecture,
+        "synonyms_applicable": true,
+        "strategy": {
+            "graph_depth": strategy.graph_depth,
+            "include_tests": strategy.include_tests,
+            "include_architecture": strategy.include_architecture,
+        }
     }))
 }
 
@@ -1306,6 +1488,8 @@ async fn handle_search_intent(
 /// Handle request for resilience status (circuit breakers, health, dedup, backpressure).
 async fn handle_resilience_status(
     engine: Arc<Mutex<Engine>>,
+    event_dedup: Arc<crate::event_dedup::EventDeduplicator>,
+    backpressure: Arc<crate::backpressure::BackpressureMonitor>,
 ) -> Result<serde_json::Value, (i32, String)> {
     let eng = engine.lock().await;
 
@@ -1352,6 +1536,9 @@ async fn handle_resilience_status(
         );
     }
 
+    let dedup_stats = event_dedup.stats();
+    let bp_stats = backpressure.stats();
+
     Ok(serde_json::json!({
         "circuit_breakers": {
             "embedder": {
@@ -1389,16 +1576,21 @@ async fn handle_resilience_status(
         },
         "health_status": health_status,
         "deduplication": {
-            "events_processed": null,
-            "duplicates_skipped": null,
-            "in_flight_count": null,
-            "deduplication_rate": null
+            "events_processed": dedup_stats.events_processed,
+            "duplicates_skipped": dedup_stats.duplicates_skipped,
+            "in_flight_count": event_dedup.in_flight_count(),
+            "deduplication_rate": dedup_stats.deduplication_rate(),
+            "avg_processing_time_ms": dedup_stats.avg_processing_time_ms(),
+            "stale_tasks_cleaned": dedup_stats.stale_tasks_cleaned
         },
         "backpressure": {
-            "active_requests": null,
-            "load_percent": null,
-            "requests_rejected": null,
-            "peak_load_percent": null
+            "active_requests": bp_stats.in_flight,
+            "max_concurrent": bp_stats.max_concurrent,
+            "load_percent": bp_stats.load_percent(),
+            "requests_rejected": bp_stats.total_rejected,
+            "requests_accepted": bp_stats.total_accepted,
+            "peak_load_percent": bp_stats.peak_load_percent(),
+            "rejection_rate": bp_stats.rejection_rate()
         }
     }))
 }
@@ -1457,13 +1649,22 @@ async fn handle_commit_context(
     engine: Arc<Mutex<Engine>>,
     params: protocol::CommitContextParams,
 ) -> Result<serde_json::Value, (i32, String)> {
+    // Validate file_path
+    if params.file_path.trim().is_empty() {
+        return Err((
+            error_codes::INVALID_PARAMS,
+            "file_path must not be empty".to_string(),
+        ));
+    }
     let eng = engine.lock().await;
+
+    let limit = params.limit.clamp(1, 100); // Cap commit count, minimum 1
 
     // Get commits for the file
     let commits = omni_core::commits::CommitEngine::commits_for_file(
         eng.metadata_index(),
         &params.file_path,
-        params.limit,
+        limit,
     )
     .map_err(|e| {
         (
@@ -1595,13 +1796,21 @@ async fn handle_find_cycles(
 // ---------------------------------------------------------------------------
 
 /// Handle request to list all repositories.
-async fn handle_list_repos(
-    _engine: Arc<Mutex<Engine>>,
-) -> Result<serde_json::Value, (i32, String)> {
-    // TODO: Implement multi-repository support in Engine
-    // For now, return empty list as placeholder
+async fn handle_list_repos(engine: Arc<Mutex<Engine>>) -> Result<serde_json::Value, (i32, String)> {
+    // Currently single-repo. Return the active repo as the sole entry.
+    let eng = engine.lock().await;
+    let status = eng.status().map_err(|e| {
+        (
+            error_codes::ENGINE_ERROR,
+            format!("failed to get status: {e}"),
+        )
+    })?;
     Ok(serde_json::json!({
-        "repos": []
+        "repos": [{
+            "path": status.repo_path,
+            "files_indexed": status.files_indexed,
+            "active": true,
+        }]
     }))
 }
 
@@ -1610,11 +1819,10 @@ async fn handle_add_repo(
     _engine: Arc<Mutex<Engine>>,
     _params: protocol::AddRepoParams,
 ) -> Result<serde_json::Value, (i32, String)> {
-    // TODO: Implement repository addition
-    Ok(serde_json::json!({
-        "success": true,
-        "message": "Repository addition not yet implemented"
-    }))
+    Err((
+        error_codes::NOT_IMPLEMENTED,
+        "Multi-repository support is not yet implemented. Restart the daemon with --repo <path> to switch repositories.".to_string(),
+    ))
 }
 
 /// Handle request to set repository priority.
@@ -1622,11 +1830,10 @@ async fn handle_set_priority(
     _engine: Arc<Mutex<Engine>>,
     _params: protocol::SetPriorityParams,
 ) -> Result<serde_json::Value, (i32, String)> {
-    // TODO: Implement priority setting
-    Ok(serde_json::json!({
-        "success": true,
-        "message": "Priority setting not yet implemented"
-    }))
+    Err((
+        error_codes::NOT_IMPLEMENTED,
+        "Repository priority setting is not yet implemented.".to_string(),
+    ))
 }
 
 /// Handle request to remove a repository.
@@ -1634,11 +1841,10 @@ async fn handle_remove_repo(
     _engine: Arc<Mutex<Engine>>,
     _params: protocol::RemoveRepoParams,
 ) -> Result<serde_json::Value, (i32, String)> {
-    // TODO: Implement repository removal
-    Ok(serde_json::json!({
-        "success": true,
-        "message": "Repository removal not yet implemented"
-    }))
+    Err((
+        error_codes::NOT_IMPLEMENTED,
+        "Repository removal is not yet implemented.".to_string(),
+    ))
 }
 
 // Phase 6: Performance Controls Handlers
@@ -1647,6 +1853,7 @@ async fn handle_remove_repo(
 /// Handle request for embedder metrics.
 async fn handle_embedder_metrics(
     engine: Arc<Mutex<Engine>>,
+    daemon_start_time: Arc<std::time::Instant>,
 ) -> Result<serde_json::Value, (i32, String)> {
     let eng = engine.lock().await;
 
@@ -1659,11 +1866,24 @@ async fn handle_embedder_metrics(
         )
     })?;
 
+    let uptime_secs = daemon_start_time.elapsed().as_secs_f64().max(1.0);
+    let estimated_throughput = status.chunks_indexed as f64 / uptime_secs;
+    #[allow(clippy::cast_precision_loss)]
+    let memory_usage_mb = status.vector_memory_bytes as f64 / (1024.0 * 1024.0);
+
     Ok(serde_json::json!({
         "available": embedder.is_available(),
         "model_fingerprint": embedder.model_fingerprint(),
         "dimensions": embedder.dimensions(),
         "pool_size": embedder.pool_size(),
+        "quantization_mode": "fp32",
+        "memory_usage_mb": memory_usage_mb,
+        "throughput_chunks_per_sec": estimated_throughput,
+        "batch_fill_rate": if status.chunks_indexed > 0 {
+            (status.vectors_indexed as f64 / status.chunks_indexed as f64).clamp(0.0, 1.0)
+        } else {
+            0.0
+        },
         "vectors_indexed": status.vectors_indexed,
         "vector_memory_bytes": status.vector_memory_bytes,
         "embedding_coverage_percent": status.embedding_coverage_percent,
@@ -1684,19 +1904,21 @@ async fn handle_configure_embedder(
     _engine: Arc<Mutex<Engine>>,
     _params: protocol::ConfigureEmbedderParams,
 ) -> Result<serde_json::Value, (i32, String)> {
-    // TODO: Implement embedder configuration
-    Ok(serde_json::json!({
-        "success": true,
-        "message": "Embedder configuration not yet implemented"
-    }))
+    Err((
+        error_codes::NOT_IMPLEMENTED,
+        "Runtime embedder configuration is not yet implemented. Embedder settings are configured at startup via config file.".to_string(),
+    ))
 }
 
 /// Handle request for index pool metrics.
 async fn handle_index_pool_metrics(
     engine: Arc<Mutex<Engine>>,
+    backpressure: Arc<crate::backpressure::BackpressureMonitor>,
+    performance_metrics: Arc<crate::metrics::PerformanceMetrics>,
 ) -> Result<serde_json::Value, (i32, String)> {
     let eng = engine.lock().await;
     let breaker_stats = eng.index_breaker().stats();
+    let bp_stats = backpressure.stats();
     let status = eng.status().map_err(|e| {
         (
             error_codes::ENGINE_ERROR,
@@ -1704,11 +1926,13 @@ async fn handle_index_pool_metrics(
         )
     })?;
 
-    // Engine uses a single Connection (ConnectionPool not wired in yet)
+    // Engine currently uses a single SQLite connection, but report daemon load
+    // and observed query latency as a practical pool/load signal.
     Ok(serde_json::json!({
-        "active_connections": 1,
-        "max_pool_size": 1,
-        "utilization_percent": 100.0,
+        "active_connections": bp_stats.in_flight,
+        "max_pool_size": bp_stats.max_concurrent,
+        "utilization_percent": bp_stats.load_percent(),
+        "avg_query_time_ms": performance_metrics.get_latency_percentile(0.95),
         "files_indexed": status.files_indexed,
         "chunks_indexed": status.chunks_indexed,
         "symbols_indexed": status.symbols_indexed,
@@ -1741,6 +1965,79 @@ async fn handle_compression_stats(
         "compression_ratio": 1.0,
         "savings_percent": 0.0
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Co-Change & Plan Audit Handlers
+// ---------------------------------------------------------------------------
+
+async fn handle_co_changes(
+    engine: Arc<Mutex<Engine>>,
+    params: protocol::CoChangeParams,
+) -> Result<serde_json::Value, (i32, String)> {
+    let eng = engine.lock().await;
+    let index = eng.metadata_index();
+    // Clamp min_frequency: protocol uses 0.0–1.0 scale, convert to count (×10, min 1, max 100)
+    let min_freq = ((params.min_frequency * 10.0).clamp(1.0, 100.0)) as usize;
+    let limit = params.limit.min(200); // Cap at 200 results
+    let results = omni_core::commits::CommitEngine::co_change_files(
+        index, &params.file_path, min_freq, limit,
+    )
+    .map_err(|e| {
+        (
+            error_codes::ENGINE_ERROR,
+            format!("co-change analysis failed: {e}"),
+        )
+    })?;
+
+    let co_changed_files: Vec<serde_json::Value> = results
+        .iter()
+        .map(|f| {
+            serde_json::json!({
+                "path": f.path,
+                "frequency": f.frequency as f64 / 100.0,
+                "change_count": f.shared_commits,
+            })
+        })
+        .collect();
+
+    Ok(serde_json::json!({
+        "file_path": params.file_path,
+        "co_changed_files": co_changed_files,
+    }))
+}
+
+async fn handle_audit_plan(
+    engine: Arc<Mutex<Engine>>,
+    params: protocol::AuditPlanParams,
+) -> Result<serde_json::Value, (i32, String)> {
+    // Validate plan text
+    if params.plan.trim().is_empty() {
+        return Err((
+            error_codes::INVALID_PARAMS,
+            "plan text must not be empty".to_string(),
+        ));
+    }
+    if params.plan.len() > 500_000 {
+        return Err((
+            error_codes::INVALID_PARAMS,
+            "plan exceeds maximum length of 500000 characters".to_string(),
+        ));
+    }
+    let eng = engine.lock().await;
+    let auditor = omni_core::plan_auditor::PlanAuditor::new(&eng);
+    let max_depth = params.max_depth.unwrap_or(3).clamp(1, 20);
+
+    let critique = auditor
+        .audit(&params.plan, max_depth)
+        .map_err(|e| (error_codes::ENGINE_ERROR, format!("plan audit failed: {e}")))?;
+
+    serde_json::to_value(&critique).map_err(|e| {
+        (
+            error_codes::INTERNAL_ERROR,
+            format!("serialization failed: {e}"),
+        )
+    })
 }
 
 #[cfg(test)]

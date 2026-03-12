@@ -211,11 +211,15 @@ MCP_PATHS=(
     "${HOME}/.cursor/mcp.json"
     "${HOME}/.continue/config.json"
     "${HOME}/.kiro/settings/mcp.json"
-    "${HOME}/.windsurf/mcp_config.json"
-    "${HOME}/.cline/mcp_settings.json"
-    "${HOME}/.roo-cline/mcp_settings.json"
-    "${HOME}/.trae/mcp.json"
-    "${HOME}/.gemini/antigravity/mcp_config.json"
+    "${HOME}/.codeium/windsurf/mcp_config.json"
+    "${HOME}/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json"
+    "${HOME}/.config/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/mcp_settings.json"
+    "${HOME}/.gemini/settings.json"
+    "${HOME}/.aws/amazonq/mcp.json"
+    "${HOME}/.config/Trae/mcp_config.json"
+    "${HOME}/.config/Antigravity/User/mcp.json"
+    "${HOME}/.config/zed/settings.json"
+    "${HOME}/.config/PearAI/User/mcp.json"
 )
 
 BACKED_UP=0

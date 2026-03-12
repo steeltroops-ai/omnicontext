@@ -3,6 +3,8 @@
 //! Command-line interface for indexing, searching, and managing
 //! `OmniContext` indexes.
 
+mod orchestrator;
+
 use std::time::Instant;
 
 use anyhow::Result;
@@ -110,6 +112,32 @@ enum Commands {
         #[command(subcommand)]
         action: SetupAction,
     },
+
+    /// Auto-detect installed IDEs and inject MCP server configuration.
+    Autopilot {
+        /// Only configure a specific IDE (e.g., "cursor", "vscode", "claude").
+        #[arg(long)]
+        ide: Option<String>,
+
+        /// Show what would be configured without making changes.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Generate project manifest files (`CLAUDE.md` / `.context_map.json`).
+    Manifest {
+        /// Output format: "claude", "json", or "both".
+        #[arg(long, default_value = "claude")]
+        format: String,
+
+        /// Write output to file(s) in repo root instead of stdout.
+        #[arg(long)]
+        write: bool,
+
+        /// Path to the repository root.
+        #[arg(default_value = ".")]
+        path: String,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone, Copy)]
@@ -122,6 +150,17 @@ enum SetupAction {
     },
     /// Show the status of the embedding model.
     ModelStatus,
+    /// Auto-wire `OmniContext` into every detected AI IDE and agent.
+    ///
+    /// Injects a single universal `omnicontext` MCP server entry using
+    /// `--repo .` into all installed IDEs (Claude Desktop, Cursor, Windsurf,
+    /// VS Code, Cline, Continue.dev, Zed, `Kiro`, `PearAI`, Claude Code CLI).
+    /// Purges legacy project-specific entries automatically.
+    All {
+        /// Show what would be configured without writing any files.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[tokio::main]
@@ -169,13 +208,23 @@ async fn main() -> Result<()> {
         Commands::Setup { action } => {
             cmd_setup(action, cli.json)?;
         }
+        Commands::Autopilot { ide, dry_run } => {
+            cmd_autopilot(ide.as_deref(), dry_run)?;
+        }
+        Commands::Manifest {
+            format,
+            write,
+            path,
+        } => {
+            cmd_manifest(&path, &format, write, cli.json)?;
+        }
     }
 
     Ok(())
 }
 
 /// Index a repository.
-async fn cmd_index(path: &str, _force: bool, json: bool) -> Result<()> {
+async fn cmd_index(path: &str, force: bool, json: bool) -> Result<()> {
     let repo_path = std::path::PathBuf::from(path)
         .canonicalize()
         .unwrap_or_else(|_| std::path::PathBuf::from(path));
@@ -188,7 +237,7 @@ async fn cmd_index(path: &str, _force: bool, json: bool) -> Result<()> {
     let start = Instant::now();
 
     let mut engine = omni_core::Engine::new(&repo_path)?;
-    let result = engine.run_index().await?;
+    let result = engine.run_index(force).await?;
 
     let elapsed = start.elapsed();
 
@@ -583,6 +632,390 @@ fn cmd_setup(action: SetupAction, json: bool) -> Result<()> {
                 println!("  Dimensions:       {}", spec.dimensions);
                 println!("  Max Seq Length:   {}", spec.max_seq_length);
             }
+        }
+        SetupAction::All { dry_run } => {
+            cmd_setup_all(dry_run, json)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Run the Universal IDE Orchestrator (`setup --all`).
+fn cmd_setup_all(dry_run: bool, json: bool) -> Result<()> {
+    let result = orchestrator::orchestrate(dry_run)?;
+
+    if json {
+        let output = serde_json::json!({
+            "dry_run": dry_run,
+            "mcp_binary": result.mcp_binary.display().to_string(),
+            "detected": result.detected(),
+            "configured": result.configured(),
+            "total_purged": result.total_purged(),
+            "results": result.results.iter().map(|r| {
+                let (status_str, detail) = match &r.status {
+                    orchestrator::IdeStatus::Configured       => ("configured", String::new()),
+                    orchestrator::IdeStatus::AlreadyCurrent   => ("already_current", String::new()),
+                    orchestrator::IdeStatus::NotInstalled     => ("not_installed", String::new()),
+                    orchestrator::IdeStatus::PermissionDenied(e) => ("permission_denied", e.clone()),
+                    orchestrator::IdeStatus::Error(e)         => ("error", e.clone()),
+                };
+                serde_json::json!({
+                    "ide": r.name,
+                    "status": status_str,
+                    "detail": detail,
+                    "purged": r.purged,
+                })
+            }).collect::<Vec<_>>(),
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        orchestrator::print_orchestration_matrix(&result, dry_run);
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Phase D: Autopilot IDE Config
+// ---------------------------------------------------------------------------
+
+/// Supported IDE configuration target.
+struct IdeTarget {
+    name: &'static str,
+    /// Lowercase match key for --ide filter.
+    key: &'static str,
+    /// Config file path (with environment expansion).
+    config_path: std::path::PathBuf,
+    /// JSON key that holds the MCP server map.
+    server_key: &'static str,
+}
+
+#[allow(clippy::too_many_lines, clippy::vec_init_then_push)]
+fn detect_installed_ides(filter: Option<&str>) -> Vec<IdeTarget> {
+    let home = dirs::home_dir().unwrap_or_default();
+    #[cfg(windows)]
+    let appdata = std::env::var("APPDATA").map_or_else(
+        |_| home.join("AppData").join("Roaming"),
+        std::path::PathBuf::from,
+    );
+    #[cfg(not(windows))]
+    let appdata = home.join(".config"); // not really used on non-Windows
+
+    let mut targets = Vec::new();
+
+    // Claude Desktop
+    #[cfg(windows)]
+    targets.push(IdeTarget {
+        name: "Claude Desktop",
+        key: "claude",
+        config_path: appdata.join("Claude").join("claude_desktop_config.json"),
+        server_key: "mcpServers",
+    });
+    #[cfg(not(windows))]
+    targets.push(IdeTarget {
+        name: "Claude Desktop",
+        key: "claude",
+        config_path: home
+            .join(".config")
+            .join("Claude")
+            .join("claude_desktop_config.json"),
+        server_key: "mcpServers",
+    });
+
+    // Cursor
+    #[cfg(windows)]
+    targets.push(IdeTarget {
+        name: "Cursor",
+        key: "cursor",
+        config_path: appdata
+            .join("Cursor")
+            .join("User")
+            .join("globalStorage")
+            .join("cursor.mcp")
+            .join("config.json"),
+        server_key: "mcpServers",
+    });
+    #[cfg(not(windows))]
+    targets.push(IdeTarget {
+        name: "Cursor",
+        key: "cursor",
+        config_path: home.join(".cursor").join("mcp.json"),
+        server_key: "mcpServers",
+    });
+
+    // VS Code
+    #[cfg(windows)]
+    targets.push(IdeTarget {
+        name: "VS Code",
+        key: "vscode",
+        config_path: appdata.join("Code").join("User").join("mcp.json"),
+        server_key: "servers",
+    });
+    #[cfg(not(windows))]
+    targets.push(IdeTarget {
+        name: "VS Code",
+        key: "vscode",
+        config_path: home
+            .join(".config")
+            .join("Code")
+            .join("User")
+            .join("mcp.json"),
+        server_key: "servers",
+    });
+
+    // Windsurf
+    #[cfg(windows)]
+    targets.push(IdeTarget {
+        name: "Windsurf",
+        key: "windsurf",
+        config_path: appdata
+            .join("Windsurf")
+            .join("User")
+            .join("globalStorage")
+            .join("codeium.windsurf")
+            .join("mcp_config.json"),
+        server_key: "mcpServers",
+    });
+
+    // Zed
+    targets.push(IdeTarget {
+        name: "Zed",
+        key: "zed",
+        config_path: home.join(".config").join("zed").join("settings.json"),
+        server_key: "context_servers",
+    });
+
+    // Kiro
+    targets.push(IdeTarget {
+        name: "Kiro",
+        key: "kiro",
+        config_path: home.join(".kiro").join("settings").join("mcp.json"),
+        server_key: "mcpServers",
+    });
+
+    // Continue.dev
+    targets.push(IdeTarget {
+        name: "Continue.dev",
+        key: "continue",
+        config_path: home.join(".continue").join("config.json"),
+        server_key: "mcpServers",
+    });
+
+    // Cline
+    targets.push(IdeTarget {
+        name: "Cline",
+        key: "cline",
+        config_path: home.join(".cline").join("mcp_settings.json"),
+        server_key: "mcpServers",
+    });
+
+    // PearAI
+    #[cfg(windows)]
+    targets.push(IdeTarget {
+        name: "PearAI",
+        key: "pearai",
+        config_path: appdata.join("PearAI").join("User").join("mcp.json"),
+        server_key: "mcpServers",
+    });
+
+    // Antigravity (VS Code fork)
+    #[cfg(windows)]
+    targets.push(IdeTarget {
+        name: "Antigravity",
+        key: "antigravity",
+        config_path: appdata.join("Antigravity").join("User").join("mcp.json"),
+        server_key: "servers",
+    });
+    #[cfg(not(windows))]
+    targets.push(IdeTarget {
+        name: "Antigravity",
+        key: "antigravity",
+        config_path: home
+            .join(".config")
+            .join("Antigravity")
+            .join("User")
+            .join("mcp.json"),
+        server_key: "servers",
+    });
+
+    // Filter by --ide if specified
+    if let Some(f) = filter {
+        let f_lower = f.to_lowercase();
+        targets.retain(|t| t.key == f_lower || t.name.to_lowercase().contains(&f_lower));
+    }
+
+    // Only keep IDEs whose config directory exists (or whose config file exists)
+    targets.retain(|t| t.config_path.parent().is_some_and(std::path::Path::exists));
+
+    targets
+}
+
+fn find_mcp_binary() -> Result<std::path::PathBuf> {
+    let current_exe = std::env::current_exe()?;
+    let dir = current_exe.parent().unwrap_or(std::path::Path::new("."));
+
+    // Try omnicontext-mcp next to the current exe
+    let mcp = dir.join("omnicontext-mcp");
+    if mcp.exists() {
+        return Ok(mcp);
+    }
+
+    // Try with .exe on Windows
+    #[cfg(windows)]
+    {
+        let mcp_exe = dir.join("omnicontext-mcp.exe");
+        if mcp_exe.exists() {
+            return Ok(mcp_exe);
+        }
+    }
+
+    // Fall back to the current exe itself (the CLI delegates to MCP)
+    Ok(current_exe)
+}
+
+fn cmd_autopilot(ide_filter: Option<&str>, dry_run: bool) -> Result<()> {
+    let repo_path = std::env::current_dir()?;
+    let mcp_binary = find_mcp_binary()?;
+    let repo_hash = omni_core::normalize_repo_hash(&repo_path.display().to_string());
+    let entry_key = format!("omnicontext-{}", &repo_hash[..6.min(repo_hash.len())]);
+
+    let server_entry = serde_json::json!({
+        "command": mcp_binary.display().to_string(),
+        "args": ["--repo", repo_path.display().to_string()],
+        "env": { "OMNICONTEXT_REPO": repo_path.display().to_string() }
+    });
+
+    let ides = detect_installed_ides(ide_filter);
+
+    if ides.is_empty() {
+        println!("No supported IDEs detected.");
+        if ide_filter.is_some() {
+            println!("Try without --ide to see all available IDEs.");
+        }
+        return Ok(());
+    }
+
+    println!(
+        "OmniContext Autopilot - Configuring MCP server for: {}",
+        repo_path.display()
+    );
+    println!("---");
+
+    for ide in &ides {
+        if dry_run {
+            println!(
+                "[DRY RUN] Would configure {}: {}",
+                ide.name,
+                ide.config_path.display()
+            );
+        } else {
+            match merge_mcp_config(&ide.config_path, ide.server_key, &entry_key, &server_entry) {
+                Ok(()) => println!("  Configured {}", ide.name),
+                Err(e) => println!("  Failed to configure {}: {e}", ide.name),
+            }
+        }
+    }
+
+    if dry_run {
+        println!("\nRun without --dry-run to apply changes.");
+    } else {
+        println!("\nDone! Restart your IDE(s) to activate OmniContext.");
+    }
+
+    Ok(())
+}
+
+fn merge_mcp_config(
+    config_path: &std::path::Path,
+    server_key: &str,
+    entry_key: &str,
+    server_entry: &serde_json::Value,
+) -> Result<()> {
+    // Read existing or start fresh
+    let mut config: serde_json::Value = if config_path.exists() {
+        let content = std::fs::read_to_string(config_path)?;
+        serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    // Navigate to server key, create if missing
+    // Handle nested keys like "powers.mcpServers"
+    let parts: Vec<&str> = server_key.split('.').collect();
+    let mut current = &mut config;
+    for part in &parts {
+        if current.get(part).is_none() {
+            current[part] = serde_json::json!({});
+        }
+        current = current.get_mut(part).unwrap_or_else(|| unreachable!());
+    }
+
+    // Insert/update the entry
+    current[entry_key] = server_entry.clone();
+
+    // Write back with pretty-print
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let output = serde_json::to_string_pretty(&config)?;
+    std::fs::write(config_path, output)?;
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Phase E: Proactive Manifests
+// ---------------------------------------------------------------------------
+
+fn cmd_manifest(path: &str, format: &str, write_files: bool, json: bool) -> Result<()> {
+    let repo_path = std::path::PathBuf::from(path)
+        .canonicalize()
+        .unwrap_or_else(|_| std::path::PathBuf::from(path));
+
+    let engine = omni_core::Engine::new(&repo_path)?;
+
+    if format == "claude" || format == "both" {
+        match engine.generate_claude_md() {
+            Ok(content) => {
+                if write_files {
+                    let out_path = repo_path.join("CLAUDE.md");
+                    std::fs::write(&out_path, &content)?;
+                    if !json {
+                        println!("Wrote {}", out_path.display());
+                    }
+                } else if json {
+                    println!(
+                        "{}",
+                        serde_json::json!({ "format": "claude", "content": content })
+                    );
+                } else {
+                    println!("{content}");
+                }
+            }
+            Err(e) => eprintln!("Failed to generate CLAUDE.md: {e}"),
+        }
+    }
+
+    if format == "json" || format == "both" {
+        match engine.generate_context_map() {
+            Ok(content) => {
+                if write_files {
+                    let out_path = repo_path.join(".context_map.json");
+                    std::fs::write(&out_path, &content)?;
+                    if !json {
+                        println!("Wrote {}", out_path.display());
+                    }
+                } else if json {
+                    println!(
+                        "{}",
+                        serde_json::json!({ "format": "json", "content": content })
+                    );
+                } else {
+                    println!("{content}");
+                }
+            }
+            Err(e) => eprintln!("Failed to generate .context_map.json: {e}"),
         }
     }
 

@@ -5,6 +5,7 @@ members = [
     "crates/omni-mcp",
     "crates/omni-cli",
     "crates/omni-daemon",
+    "crates/omni-ffi",
 ]
 
 [workspace.package]

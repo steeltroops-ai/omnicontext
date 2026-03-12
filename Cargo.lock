@@ -2577,6 +2577,7 @@ version = "1.1.2"
 dependencies = [
  "anyhow",
  "clap",
+ "dirs",
  "omni-core",
  "serde_json",
  "tempfile",
@@ -2638,6 +2639,7 @@ dependencies = [
  "anyhow",
  "clap",
  "hex",
+ "libc",
  "lru",
  "lz4",
  "omni-core",
@@ -2651,6 +2653,18 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "omni-ffi"
+version = "1.1.2"
+dependencies = [
+ "omni-core",
+ "rusqlite",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

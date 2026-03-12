@@ -87,8 +87,10 @@ impl SessionPool {
 
         let effective_size = pool_size.max(1);
         let mut sessions = Vec::with_capacity(effective_size);
+        tracing::info!(effective_size, "starting session pool load");
 
         for i in 0..effective_size {
+            tracing::info!(session_idx = i, "building session");
             let num_cpus = std::thread::available_parallelism()
                 .map(|p| p.get())
                 .unwrap_or(4);
@@ -100,40 +102,25 @@ impl SessionPool {
                 )?;
                 builder = builder.with_intra_threads(num_cpus.max(2) - 1)?;
 
+                tracing::debug!("using CPU execution provider for session {}", i);
                 builder = builder.with_execution_providers([
-                    ort::execution_providers::TensorRTExecutionProvider::default().build(),
-                    ort::execution_providers::CUDAExecutionProvider::default().build(),
-                    ort::execution_providers::DirectMLExecutionProvider::default().build(),
-                    ort::execution_providers::CoreMLExecutionProvider::default().build(),
                     ort::execution_providers::CPUExecutionProvider::default().build(),
                 ])?;
 
+                tracing::info!("committing session {} from file...", i);
                 builder.commit_from_file(model_path)
             };
 
             match build_session() {
                 Ok(session) => {
                     sessions.push(session);
-                    tracing::debug!(
-                        session_idx = i,
-                        model = %model_path.display(),
-                        "loaded ONNX session for pool"
-                    );
+                    tracing::info!(session_idx = i, "loaded ONNX session successfully");
                 }
                 Err(e) => {
+                    tracing::error!(session_idx = i, error = %e, "failed to load session");
                     if i == 0 {
-                        // If the first session fails, the model is bad
-                        tracing::error!(
-                            error = %e,
-                            "failed to load first ONNX session, pool creation aborted"
-                        );
                         return Ok(None);
                     }
-                    tracing::warn!(
-                        session_idx = i,
-                        error = %e,
-                        "failed to load additional session, pool will be smaller"
-                    );
                     break;
                 }
             }

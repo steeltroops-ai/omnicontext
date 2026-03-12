@@ -53,6 +53,9 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
   /** Guards against rapid-fire refresh() calls (tab switches, events). */
   private _refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private _refreshPending = false;
+  private _daemonHealInFlight = false;
+  private _lastDaemonHealAttempt = 0;
+  private readonly _daemonHealCooldownMs = 60_000;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -147,6 +150,7 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
     const isConnected = this.isDaemonConnected();
 
     if (!isConnected) {
+      void this.maybeAutoHealDaemon();
       this._view.webview.postMessage({ type: "daemonOffline" });
       // We do NOT return early here, because we still need to send the repo list,
       // version info, and settings to the UI even if the backend is down.
@@ -159,6 +163,10 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
       performanceMetrics,
       rerankerMetrics,
       graphMetrics,
+      resilienceStatus,
+      embedderMetrics,
+      poolMetrics,
+      compressionStats,
     ] = isConnected
       ? await Promise.all([
           this.cacheStatsManager.getStats(),
@@ -166,8 +174,12 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
           this.getPerformanceMetrics(),
           this.getRerankerMetrics(),
           this.getGraphMetrics(),
+          this.getResilienceStatus(),
+          this.getEmbedderMetrics(),
+          this.getIndexPoolMetrics(),
+          this.getCompressionStats(),
         ])
-      : [null, null, null, null, null];
+      : [null, null, null, null, null, null, null, null, null];
 
     // Get prefetch enabled state from configuration
     const config = vscode.workspace.getConfiguration("omnicontext.prefetch");
@@ -241,6 +253,31 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
       });
     }
 
+    // Fallback: when daemon is offline, surface last known indexed counts from registry.
+    if (!systemStatus && !isConnected && currentRepoPath) {
+      const normalizedCurrent = currentRepoPath
+        .replace(/\\/g, "/")
+        .toLowerCase();
+      const repo = getIndexedRepos().find(
+        (r) =>
+          r.repoPath.replace(/\\/g, "/").toLowerCase() === normalizedCurrent,
+      );
+      if (repo) {
+        this._view.webview.postMessage({
+          type: "updateSystemStatus",
+          status: {
+            initialization_status:
+              repo.filesIndexed > 0 ? "ready" : "initializing",
+            connection_health: "disconnected",
+            last_index_time: Math.floor(repo.lastIndexedAt / 1000),
+            daemon_uptime_seconds: 0,
+            files_indexed: repo.filesIndexed,
+            chunks_indexed: repo.chunksIndexed,
+          },
+        });
+      }
+    }
+
     // Send system status update and auto-repair registry properties if connected
     if (systemStatus) {
       this._view.webview.postMessage({
@@ -287,6 +324,24 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
       });
     }
 
+    if (resilienceStatus) {
+      this._view.webview.postMessage({
+        type: "updateResilienceMetrics",
+        metrics: resilienceStatus,
+      });
+    }
+
+    if (embedderMetrics || poolMetrics || compressionStats) {
+      this._view.webview.postMessage({
+        type: "updatePerformanceControls",
+        metrics: {
+          embedder: embedderMetrics,
+          pool: poolMetrics,
+          compression: compressionStats,
+        },
+      });
+    }
+
     // Auto-discover repos indexed via CLI that aren't in registry.json yet.
     // We pass all known workspace folder paths so hashes can be resolved to names.
     const allWorkspacePaths = (vscode.workspace.workspaceFolders || []).map(
@@ -312,7 +367,10 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
       settings: {
         autoIndex: omniConfig.get<boolean>("autoIndex", true),
         autoStartDaemon: omniConfig.get<boolean>("autoStartDaemon", true),
-        autoSyncMcp: automationConfig.get<boolean>("autoSyncMcp", false),
+        autoSyncMcp: omniConfig.get<boolean>(
+          "autoSyncMcp",
+          automationConfig.get<boolean>("autoSyncMcp", true),
+        ),
       },
     });
 
@@ -340,6 +398,34 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
         ideVersion: vscode.version,
       },
     });
+  }
+
+  private async maybeAutoHealDaemon(): Promise<void> {
+    const now = Date.now();
+    if (this._daemonHealInFlight) return;
+    if (now - this._lastDaemonHealAttempt < this._daemonHealCooldownMs) return;
+
+    const config = vscode.workspace.getConfiguration("omnicontext");
+    if (!config.get<boolean>("autoStartDaemon", true)) return;
+
+    this._lastDaemonHealAttempt = now;
+    this._daemonHealInFlight = true;
+    try {
+      await vscode.commands.executeCommand("omnicontext.startDaemon", true);
+      this.logActivity(
+        "Daemon auto-heal",
+        "info",
+        "Attempted daemon restart after connection loss.",
+      );
+    } catch (err: any) {
+      this.logActivity(
+        "Daemon auto-heal",
+        "warning",
+        `Auto-heal attempt failed: ${err.message || String(err)}`,
+      );
+    } finally {
+      this._daemonHealInFlight = false;
+    }
   }
 
   /**
@@ -387,6 +473,60 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
       return result;
     } catch (err) {
       return null;
+    }
+  }
+
+  private async getResilienceStatus(): Promise<any | null> {
+    try {
+      return await this.sendIpcRequest("resilience/get_status", {});
+    } catch {
+      return null;
+    }
+  }
+
+  private async getEmbedderMetrics(): Promise<any | null> {
+    try {
+      return await this.sendIpcRequest("embedder/get_metrics", {});
+    } catch {
+      return null;
+    }
+  }
+
+  private async getIndexPoolMetrics(): Promise<any | null> {
+    try {
+      return await this.sendIpcRequest("index/get_pool_metrics", {});
+    } catch {
+      return null;
+    }
+  }
+
+  private async getCompressionStats(): Promise<any | null> {
+    try {
+      return await this.sendIpcRequest("compression/get_stats", {});
+    } catch {
+      return null;
+    }
+  }
+
+  private async sendIpcRequestWithRecovery(
+    method: string,
+    params: any,
+  ): Promise<any> {
+    try {
+      return await this.sendIpcRequest(method, params);
+    } catch (err: any) {
+      const msg = String(err?.message || err || "").toLowerCase();
+      const recoverable =
+        msg.includes("ipc not connected") ||
+        msg.includes("connection") ||
+        msg.includes("timeout");
+      if (!recoverable) {
+        throw err;
+      }
+
+      await vscode.commands.executeCommand("omnicontext.startDaemon");
+      await new Promise((r) => setTimeout(r, 1500));
+      return this.sendIpcRequest(method, params);
     }
   }
 
@@ -551,39 +691,37 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
           progress.report({ increment: 0, message: "Starting indexing..." });
 
           let result: any;
+          let usedFallback = false;
           try {
             // Trigger re-index via daemon IPC when connected.
-            result = await this.sendIpcRequest("index", {});
+            result = await this.sendIpcRequestWithRecovery("index", {});
           } catch (ipcErr: any) {
             // Fallback to extension command which can use CLI path.
+            usedFallback = true;
             this.logActivity(
               "Re-index",
               "warning",
               `IPC indexing failed, falling back to command: ${ipcErr.message}`,
             );
             await vscode.commands.executeCommand("omnicontext.index");
-            result = {
-              files_processed: 0,
-              chunks_created: 0,
-              elapsed_ms: 0,
-              fallback: true,
-            };
           }
 
           progress.report({ increment: 100, message: "Complete!" });
 
-          // Register in repo registry
           const workspaceFolders = vscode.workspace.workspaceFolders;
           if (workspaceFolders && workspaceFolders.length > 0) {
-            registerRepo(
-              workspaceFolders[0].uri.fsPath,
-              result.files_processed,
-              result.chunks_created,
-            );
+            // Never write fake zero counts to registry on fallback path.
+            if (!usedFallback && result) {
+              registerRepo(
+                workspaceFolders[0].uri.fsPath,
+                result.files_processed,
+                result.chunks_created,
+              );
+            }
           }
 
-          const message = result.fallback
-            ? "Re-index completed via fallback path."
+          const message = usedFallback
+            ? "Re-index command executed via fallback path. If live metrics are unavailable, daemon reconnection is in progress."
             : `Re-indexed ${result.files_processed} files, ${result.chunks_created} chunks, ${result.embeddings_generated ?? 0} embeddings${result.files_failed ? `, ${result.files_failed} failed` : ""}${result.embedding_failures ? `, ${result.embedding_failures} embedding flush error(s)` : ""} in ${result.elapsed_ms}ms`;
           vscode.window.showInformationMessage(message);
           this.logActivity("Re-index", "success", message);
@@ -603,7 +741,7 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
   private async handleClearIndex(): Promise<void> {
     try {
       // Clear the index by sending a clear_index IPC request
-      await this.sendIpcRequest("clear_index", {});
+      await this.sendIpcRequestWithRecovery("clear_index", {});
       vscode.window.showInformationMessage(
         "Index cleared successfully. Re-indexing recommended.",
       );
@@ -653,8 +791,14 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
    * Handle toggle auto-sync request.
    */
   private async handleToggleAutoSync(enabled: boolean): Promise<void> {
-    const config = vscode.workspace.getConfiguration("omnicontext.automation");
-    await config.update(
+    const topLevel = vscode.workspace.getConfiguration("omnicontext");
+    await topLevel.update(
+      "autoSyncMcp",
+      enabled,
+      vscode.ConfigurationTarget.Global,
+    );
+    const legacy = vscode.workspace.getConfiguration("omnicontext.automation");
+    await legacy.update(
       "autoSyncMcp",
       enabled,
       vscode.ConfigurationTarget.Global,
@@ -797,7 +941,9 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
       );
       this.logActivity("Open Repo", "info", `Opened ${repo.repoPath}`);
     } catch (err: any) {
-      vscode.window.showErrorMessage(`Failed to open repository: ${err.message}`);
+      vscode.window.showErrorMessage(
+        `Failed to open repository: ${err.message}`,
+      );
       this.logActivity("Open Repo", "error", `Failed: ${err.message}`);
     }
   }
@@ -945,7 +1091,9 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
         `Opened report for ${repo.name} (${repo.hash})`,
       );
     } catch (err: any) {
-      vscode.window.showErrorMessage(`Failed to open repo report: ${err.message}`);
+      vscode.window.showErrorMessage(
+        `Failed to open repo report: ${err.message}`,
+      );
       this.logActivity("Repo Report", "error", `Failed: ${err.message}`);
     }
   }
@@ -1072,9 +1220,12 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
 
   private async handleResetCircuitBreakers(): Promise<void> {
     try {
-      await this.sendIpcRequest("resilience/reset_circuit_breaker", {
-        subsystem: "all",
-      });
+      await this.sendIpcRequestWithRecovery(
+        "resilience/reset_circuit_breaker",
+        {
+          subsystem: "all",
+        },
+      );
       vscode.window.showInformationMessage(
         "OmniContext: All circuit breakers reset",
       );
@@ -1098,7 +1249,10 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
 
   private async handleShowDependencyGraph(): Promise<void> {
     try {
-      const result = await this.sendIpcRequest("graph/get_metrics", {});
+      const result = await this.sendIpcRequestWithRecovery(
+        "graph/get_metrics",
+        {},
+      );
       const doc = await vscode.workspace.openTextDocument({
         content: JSON.stringify(result, null, 2),
         language: "json",
@@ -1123,7 +1277,7 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
         return;
       }
       const filePath = activeEditor.document.uri.fsPath;
-      const result = await this.sendIpcRequest(
+      const result = await this.sendIpcRequestWithRecovery(
         "graph/get_architectural_context",
         { file_path: filePath, max_hops: 2 },
       );
@@ -1151,7 +1305,10 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
 
   private async handleFindCircularDependencies(): Promise<void> {
     try {
-      const result = await this.sendIpcRequest("graph/find_cycles", {});
+      const result = await this.sendIpcRequestWithRecovery(
+        "graph/find_cycles",
+        {},
+      );
       if (result.cycle_count === 0) {
         vscode.window.showInformationMessage(
           "OmniContext: No circular dependencies detected!",
@@ -1508,12 +1665,24 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
           background: transparent;
           border: 1px solid var(--vscode-panel-border);
           color: var(--vscode-descriptionForeground);
-            cursor: pointer;
-            font-size: 10px;
+          cursor: pointer;
+          font-size: 10px;
           padding: 2px 6px;
           border-radius: 4px;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 4px;
+          line-height: 1.2;
+          min-height: 20px;
+          white-space: nowrap;
           opacity: 0.85;
           transition: opacity 0.2s, color 0.2s, border-color 0.2s;
+        }
+
+        .repo-item-action .codicon {
+          font-size: 11px;
+          line-height: 1;
         }
 
         .repo-item-action:hover {
@@ -1926,7 +2095,7 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
             
             <div class="metric-row">
                 <span class="metric-label">Memory:</span>
-                <span class="metric-value"><span id="memory-usage">0</span>MB</span>
+                <span class="metric-value"><span id="embedder-memory-usage">0</span>MB</span>
             </div>
             
             <div class="metric-row">
@@ -2180,8 +2349,31 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
                 case 'updateGraphMetrics':
                     updateGraphMetrics(message.metrics);
                     break;
+                case 'updateResilienceMetrics':
+                  updateResilienceMetrics(message.metrics);
+                  break;
+                case 'updatePerformanceControls':
+                  updatePerformanceControls(message.metrics);
+                  break;
+                case 'daemonOffline':
+                  handleDaemonOffline();
+                  break;
+                case 'bootstrapStatus':
+                  handleBootstrapStatus(message);
+                  break;
             }
         });
+
+            function handleDaemonOffline() {
+              document.getElementById('connection-status').innerHTML =
+                '<span class="status-indicator red"></span><span>Disconnected</span>';
+            }
+
+            function handleBootstrapStatus(status) {
+              const text = status && status.message ? status.message : 'Initializing';
+              document.getElementById('init-status').innerHTML =
+                '<span class="status-indicator yellow pulsing"></span><span>' + text + '</span>';
+            }
         
         // -- Update functions --
         function updateCacheStats(data) {
@@ -2401,7 +2593,7 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
                         Report
                       </button>
                       <button class="repo-item-action danger" onclick="removeIndexedRepo('\${repo.hash}')" title="Remove from registry">
-                        <i class="codicon codicon-close"></i> Remove
+                        <i class="codicon codicon-close"></i><span>Remove</span>
                       </button>
                     </div>
                   </div>
@@ -2453,20 +2645,32 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
             
             // Update model name
             const modelElement = document.getElementById('reranker-model');
-            if (modelElement && metrics.model) {
-                modelElement.textContent = metrics.model;
+            if (modelElement) {
+              modelElement.textContent = metrics.model || 'unavailable';
             }
             
             // Update improvement percentage
             const improvementElement = document.getElementById('reranker-improvement');
-            if (improvementElement && metrics.improvement_percent !== undefined) {
-                improvementElement.textContent = metrics.improvement_percent.toFixed(0);
+            if (improvementElement) {
+              const improvement = Number(metrics.improvement_percent);
+              if (metrics.enabled === false) {
+                improvementElement.textContent = '--';
+              } else if (Number.isFinite(improvement)) {
+                improvementElement.textContent = improvement.toFixed(0);
+              } else {
+                improvementElement.textContent = '--';
+              }
             }
             
             // Update batch size
             const batchSizeElement = document.getElementById('reranker-batch-size');
-            if (batchSizeElement && metrics.batch_size !== undefined) {
-                batchSizeElement.textContent = metrics.batch_size.toString();
+            if (batchSizeElement) {
+              const batchSize = Number(metrics.batch_size);
+              batchSizeElement.textContent = (metrics.enabled === false)
+                ? '--'
+                : Number.isFinite(batchSize)
+                ? batchSize.toString()
+                : '--';
             }
         }
         
@@ -2485,8 +2689,11 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
             
             // Update edge types (imports)
             const importsElement = document.getElementById('graph-imports');
-            if (importsElement && metrics.edge_types && metrics.edge_types.imports !== undefined) {
-                importsElement.textContent = metrics.edge_types.imports.toString();
+            if (importsElement && metrics.edge_types) {
+              const imports = Number(metrics.edge_types.imports);
+              importsElement.textContent = Number.isFinite(imports)
+                ? imports.toString()
+                : '0';
             }
             
             // Update cycles indicator
@@ -2623,8 +2830,6 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
                 command: 'resetCircuitBreakers',
                 subsystem: 'all'
             });
-            
-            logActivity('Circuit breakers reset requested');
         }
 
         // Phase 3: Historical Context Functions
@@ -2654,27 +2859,41 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
         // Phase 6: Performance Controls Functions
         // ---------------------------------------------------------------------------
         
-        function updatePerformanceMetrics(metrics) {
+        function updatePerformanceControls(metrics) {
             if (!metrics) return;
             
             // Update embedder metrics
             if (metrics.embedder) {
                 const quantizationElement = document.getElementById('quantization-mode');
-                const memoryElement = document.getElementById('memory-usage');
+                const memoryElement = document.getElementById('embedder-memory-usage');
                 const throughputElement = document.getElementById('throughput');
                 const batchFillElement = document.getElementById('batch-fill');
+
+                const toFinite = (value) => {
+                  const parsed = Number(value);
+                  return Number.isFinite(parsed) ? parsed : null;
+                };
+
+                const memoryMb =
+                  toFinite(metrics.embedder.memory_usage_mb) ??
+                  ((toFinite(metrics.embedder.vector_memory_bytes) ?? 0) / (1024 * 1024));
+                const throughput =
+                  toFinite(metrics.embedder.throughput_chunks_per_sec) ??
+                  toFinite(metrics.embedder.estimated_throughput_chunks_per_sec);
+                const batchFillRate = toFinite(metrics.embedder.batch_fill_rate);
+                const quantization = metrics.embedder.quantization_mode || (metrics.embedder.available ? 'fp32' : 'degraded');
                 
                 if (quantizationElement) {
-                    quantizationElement.textContent = metrics.embedder.quantization_mode || 'fp32';
+                    quantizationElement.textContent = quantization;
                 }
                 if (memoryElement) {
-                    memoryElement.textContent = (metrics.embedder.memory_usage_mb || 0).toFixed(1);
+                    memoryElement.textContent = memoryMb.toFixed(1);
                 }
                 if (throughputElement) {
-                    throughputElement.textContent = (metrics.embedder.throughput_chunks_per_sec || 0).toFixed(0);
+                    throughputElement.textContent = throughput !== null ? throughput.toFixed(0) : '--';
                 }
                 if (batchFillElement) {
-                    batchFillElement.textContent = ((metrics.embedder.batch_fill_rate || 0) * 100).toFixed(0);
+                    batchFillElement.textContent = batchFillRate !== null ? (batchFillRate * 100).toFixed(0) : '--';
                 }
             }
             
@@ -2684,18 +2903,28 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
                 const poolMaxElement = document.getElementById('pool-max');
                 const poolUtilizationElement = document.getElementById('pool-utilization');
                 const avgQueryTimeElement = document.getElementById('avg-query-time');
+
+              const toFinite = (value) => {
+                const parsed = Number(value);
+                return Number.isFinite(parsed) ? parsed : null;
+              };
+
+              const activeConnections = toFinite(metrics.pool.active_connections);
+              const maxPoolSize = toFinite(metrics.pool.max_pool_size);
+              const utilization = toFinite(metrics.pool.utilization_percent);
+              const avgQueryTime = toFinite(metrics.pool.avg_query_time_ms);
                 
                 if (poolActiveElement) {
-                    poolActiveElement.textContent = (metrics.pool.active_connections || 0).toString();
+                poolActiveElement.textContent = activeConnections !== null ? activeConnections.toString() : '--';
                 }
                 if (poolMaxElement) {
-                    poolMaxElement.textContent = (metrics.pool.max_pool_size || 0).toString();
+                poolMaxElement.textContent = maxPoolSize !== null ? maxPoolSize.toString() : '--';
                 }
                 if (poolUtilizationElement) {
-                    poolUtilizationElement.textContent = (metrics.pool.utilization_percent || 0).toFixed(0);
+                poolUtilizationElement.textContent = utilization !== null ? utilization.toFixed(0) : '--';
                 }
                 if (avgQueryTimeElement) {
-                    avgQueryTimeElement.textContent = (metrics.pool.avg_query_time_ms || 0).toFixed(1);
+                avgQueryTimeElement.textContent = avgQueryTime !== null ? avgQueryTime.toFixed(1) : '--';
                 }
             }
         }

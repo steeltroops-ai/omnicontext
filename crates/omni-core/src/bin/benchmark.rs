@@ -220,7 +220,7 @@ fn bench_embedding_coverage(repo_path: &PathBuf) -> Result<(), Box<dyn std::erro
     let mut engine = Engine::with_config(config)?;
 
     let start = Instant::now();
-    let result = tokio::runtime::Runtime::new()?.block_on(engine.run_index())?;
+    let result = tokio::runtime::Runtime::new()?.block_on(engine.run_index(true))?;
     let duration = start.elapsed();
 
     println!("\n  Indexing Results:");

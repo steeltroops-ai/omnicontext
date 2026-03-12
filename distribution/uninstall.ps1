@@ -96,12 +96,6 @@ blank
 # ---------------------------------------------------------------------------
 # step 1 – terminate processes
 # ---------------------------------------------------------------------------
-# Priority: Use local build if available for stopping processes
-$LocalExe = Join-Path $PSScriptRoot "..\target\release\omnicontext.exe"
-if (Test-Path $LocalExe) {
-    # If we are in dev mode, we might want to stop the local build processes too
-}
-
 $procs = Get-Process -Name "omnicontext","omnicontext-mcp","omnicontext-daemon" -EA SilentlyContinue
 if ($procs) {
     $procs | Stop-Process -Force -EA SilentlyContinue
@@ -189,25 +183,52 @@ step "4/4" "Unlinking MCP configurations"
 
 if (-not $KeepConfig) {
 
+    # PS 5.1-compatible deep conversion of PSCustomObject → ordered hashtable
+    function ConvertTo-Hashtable($obj) {
+        if ($obj -is [System.Management.Automation.PSCustomObject]) {
+            $ht = [ordered]@{}
+            foreach ($prop in $obj.PSObject.Properties) {
+                $ht[$prop.Name] = ConvertTo-Hashtable $prop.Value
+            }
+            return $ht
+        }
+        return $obj
+    }
+
     function Remove-McpEntry {
-        param($Name, $Path, [bool]$Powers)
+        param($Name, $Path, [string]$TopKey)
         if (-not (Test-Path $Path)) { return }
         try {
             $raw = Get-Content $Path -Raw -EA SilentlyContinue
             if (-not $raw) { return }
-            $cfg = $raw | ConvertFrom-Json -AsHashtable -EA SilentlyContinue
+            $cfg = $raw | ConvertFrom-Json | ForEach-Object { ConvertTo-Hashtable $_ }
             if (-not $cfg) { return }
 
             $changed = $false
-            if ($Powers) {
-                if ($cfg["powers"] -and $cfg["powers"]["mcpServers"] -and $cfg["powers"]["mcpServers"]["omnicontext"]) {
-                    $cfg["powers"]["mcpServers"].Remove("omnicontext")
-                    $changed = $true
+            switch ($TopKey) {
+                "powers" {
+                    if ($cfg["powers"] -and $cfg["powers"]["mcpServers"] -and $cfg["powers"]["mcpServers"]["omnicontext"]) {
+                        $cfg["powers"]["mcpServers"].Remove("omnicontext")
+                        $changed = $true
+                    }
                 }
-            } else {
-                if ($cfg["mcpServers"] -and $cfg["mcpServers"]["omnicontext"]) {
-                    $cfg["mcpServers"].Remove("omnicontext")
-                    $changed = $true
+                "servers" {
+                    if ($cfg["servers"] -and $cfg["servers"]["omnicontext"]) {
+                        $cfg["servers"].Remove("omnicontext")
+                        $changed = $true
+                    }
+                }
+                "context_servers" {
+                    if ($cfg["context_servers"] -and $cfg["context_servers"]["omnicontext"]) {
+                        $cfg["context_servers"].Remove("omnicontext")
+                        $changed = $true
+                    }
+                }
+                default {
+                    if ($cfg["mcpServers"] -and $cfg["mcpServers"]["omnicontext"]) {
+                        $cfg["mcpServers"].Remove("omnicontext")
+                        $changed = $true
+                    }
                 }
             }
 
@@ -223,20 +244,26 @@ if (-not $KeepConfig) {
     }
 
     $mcpClients = @(
-        @{ Name = "Claude Desktop"; Path = "$env:APPDATA\Claude\claude_desktop_config.json";                                    Powers = $false },
-        @{ Name = "Claude Code CLI";Path = "$env:USERPROFILE\.claude.json";                                                      Powers = $false },
-        @{ Name = "Cursor";         Path = "$env:APPDATA\Cursor\User\globalStorage\cursor.mcp\config.json";                     Powers = $false },
-        @{ Name = "Cline (VS Code)";Path = "$env:APPDATA\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json"; Powers = $false },
-        @{ Name = "Continue.dev";   Path = "$env:USERPROFILE\.continue\config.json";                                            Powers = $false },
-        @{ Name = "Kiro";           Path = "$env:USERPROFILE\.kiro\settings\mcp.json";                                          Powers = $true  },
-        @{ Name = "Windsurf";       Path = "$env:APPDATA\Windsurf\User\globalStorage\codeium.windsurf\mcp_config.json";         Powers = $false },
-        @{ Name = "RooCode";        Path = "$env:APPDATA\Code\User\globalStorage\rooveterinaryinc.roo-cline\settings\mcp_settings.json"; Powers = $false },
-        @{ Name = "Trae";           Path = "$env:APPDATA\Trae\User\globalStorage\trae-ide.trae-ai\mcp_settings.json";           Powers = $false },
-        @{ Name = "Antigravity";    Path = "$env:USERPROFILE\.gemini\antigravity\mcp_config.json";                              Powers = $false }
+        @{ Name = "Claude Desktop"; Path = "$env:APPDATA\Claude\claude_desktop_config.json";                                                              TopKey = "mcpServers" },
+        @{ Name = "Claude Code CLI";Path = "$env:USERPROFILE\.claude.json";                                                                               TopKey = "mcpServers" },
+        @{ Name = "Cursor";         Path = "$env:APPDATA\Cursor\User\mcp.json";                                                                           TopKey = "mcpServers" },
+        @{ Name = "Windsurf";       Path = "$env:USERPROFILE\.codeium\windsurf\mcp_config.json";                                                          TopKey = "mcpServers" },
+        @{ Name = "VS Code";        Path = "$env:APPDATA\Code\User\mcp.json";                                                                             TopKey = "servers"    },
+        @{ Name = "Cline (VS Code)";Path = "$env:APPDATA\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json";                TopKey = "mcpServers" },
+        @{ Name = "RooCode";        Path = "$env:APPDATA\Code\User\globalStorage\rooveterinaryinc.roo-cline\settings\mcp_settings.json";                  TopKey = "mcpServers" },
+        @{ Name = "Continue.dev";   Path = "$env:USERPROFILE\.continue\config.json";                                                                      TopKey = "mcpServers" },
+        @{ Name = "Kiro";           Path = "$env:USERPROFILE\.kiro\settings\mcp.json";                                                                    TopKey = "powers"     },
+        @{ Name = "Trae";           Path = "$env:APPDATA\Trae\User\globalStorage\trae-ide.trae-ai\mcp_settings.json";                                     TopKey = "mcpServers" },
+        @{ Name = "Antigravity";    Path = "$env:APPDATA\Antigravity\User\mcp.json";                                                                      TopKey = "servers"    },
+        @{ Name = "Gemini CLI";     Path = "$env:USERPROFILE\.gemini\settings.json";                                                                      TopKey = "mcpServers" },
+        @{ Name = "Amazon Q CLI";   Path = "$env:USERPROFILE\.aws\amazonq\mcp.json";                                                                      TopKey = "mcpServers" },
+        @{ Name = "Augment Code";   Path = "$env:APPDATA\Code\User\globalStorage\augment.vscode-augment\mcp_settings.json";                               TopKey = "mcpServers" },
+        @{ Name = "PearAI";         Path = "$env:APPDATA\PearAI\User\mcp.json";                                                                           TopKey = "mcpServers" },
+        @{ Name = "Zed";            Path = "$env:APPDATA\Zed\settings.json";                                                                                TopKey = "context_servers" }
     )
 
     foreach ($client in $mcpClients) {
-        Remove-McpEntry -Name $client.Name -Path $client.Path -Powers $client.Powers
+        Remove-McpEntry -Name $client.Name -Path $client.Path -TopKey $client.TopKey
     }
 } else {
     ok ("MCP configurations preserved  " + $DIM + "(-KeepConfig)" + $RESET)

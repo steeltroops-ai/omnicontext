@@ -1,0 +1,29 @@
+PackageIdentifier: omnicontext
+PackageVersion: 1.1.1
+PackageName: OmniContext
+Publisher: steeltroops
+PublisherUrl: https://github.com/steeltroops-ai
+Author: Mayank
+License: Apache-2.0
+LicenseUrl: https://github.com/steeltroops-ai/omnicontext/blob/main/LICENSE
+ShortDescription: Universal code context engine for AI coding agents
+Description: >-
+  OmniContext is a local-first semantic code context engine that provides deep
+  code intelligence to AI coding agents via the Model Context Protocol (MCP).
+  It indexes source code with tree-sitter AST parsing, semantic chunking, and
+  local ONNX-based vector embeddings — no cloud APIs required.
+Tags:
+  - ai
+  - code-search
+  - context-engine
+  - mcp
+  - developer-tools
+  - semantic-search
+PackageUrl: https://github.com/steeltroops-ai/omnicontext
+Installers:
+  - Architecture: x64
+    InstallerType: zip
+    InstallerUrl: https://github.com/steeltroops-ai/omnicontext/releases/download/v1.1.1/omnicontext-1.1.1-x86_64-pc-windows-msvc.zip
+    InstallerSha256: c793381b6251cf153b71f1909ecf633e9e76f0a4f514216433d83880d1ae3ec0
+ManifestType: singleton
+ManifestVersion: 1.6.0

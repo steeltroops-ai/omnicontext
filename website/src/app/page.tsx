@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { ChevronRight, Terminal, Zap } from "lucide-react";
+import { ChevronRight, Terminal, Zap, Star, Copy } from "lucide-react";
 import Link from "next/link";
 import { siteConfig } from "@/config/site";
 import { VERSION, SECTIONS, CONTEXT_ENGINE_LEFT_COLUMN, CONTEXT_ENGINE_RIGHT_COLUMN, CONTEXT_ENGINE_SVG } from "@/config/constants";
@@ -9,7 +9,7 @@ import { DottedSurface } from "@/components/ui/dotted-surface";
 import { SiteNav } from "@/components/site-nav";
 import { SiteFooterFull } from "@/components/site-footer-full";
 import { Logo } from "@/components/icons";
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 
 const LABELS = [
   "feature-flags.ts",
@@ -239,6 +239,74 @@ const CanvasSphere = () => {
   );
 };
 
+// ---------------------------------------------------------------------------
+// InlineCLIInstall — one-liner install command with copy button
+// ---------------------------------------------------------------------------
+
+const INSTALL_COMMANDS = [
+  { label: "curl", cmd: "curl -fsSL https://omnicontext.dev/install.sh | sh" },
+  { label: "cargo", cmd: "cargo install omnicontext" },
+  { label: "powershell", cmd: "irm https://omnicontext.dev/install.ps1 | iex" },
+] as const;
+
+const InlineCLIInstall = () => {
+  const [active, setActive] = useState(0);
+  const [copied, setCopied] = useState(false);
+
+  const copy = useCallback(() => {
+    navigator.clipboard.writeText(INSTALL_COMMANDS[active].cmd).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    });
+  }, [active]);
+
+  return (
+    <div
+      className="flex flex-col gap-2 w-full max-w-[520px]"
+    >
+      {/* Tab row */}
+      <div className="flex items-center gap-1">
+        {INSTALL_COMMANDS.map((c, i) => (
+          <button
+            key={c.label}
+            onClick={() => setActive(i)}
+            className={`px-3 py-1 rounded-md text-[11px] font-mono font-medium transition-all ${
+              active === i
+                ? "bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+                : "text-zinc-500 hover:text-zinc-300"
+            }`}
+          >
+            {c.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Command box */}
+      <div
+        className="flex items-center gap-3 px-4 py-3 rounded-xl font-mono text-[12px] text-zinc-300 select-all cursor-text group"
+        style={{
+          background: "rgba(255,255,255,0.03)",
+          border: "1px solid rgba(255,255,255,0.08)",
+        }}
+      >
+        <span className="text-emerald-500 shrink-0 select-none">$</span>
+        <span className="flex-1 truncate text-zinc-200">{INSTALL_COMMANDS[active].cmd}</span>
+        <button
+          onClick={copy}
+          aria-label="Copy install command"
+          className="shrink-0 p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-white/5 transition-all text-zinc-500 hover:text-zinc-300"
+        >
+          {copied ? (
+            <span className="text-[10px] text-emerald-400 font-medium">✓</span>
+          ) : (
+            <Copy size={12} />
+          )}
+        </button>
+      </div>
+    </div>
+  );
+};
+
 export default function Home() {
   return (
     <>
@@ -306,8 +374,18 @@ export default function Home() {
                 >
                   {siteConfig.name} represents a fundamental shift in AI coding.
                   Universal dependency awareness, written in Rust, and executed
-                  flawlessly on your local machine.
+                  flawlessly on your local machine. Supports 15 AI IDEs.
                 </motion.p>
+
+                {/* CLI Install Command */}
+                <motion.div
+                  className="w-full sm:w-auto mb-5"
+                  initial={{ opacity: 0, y: 15 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.8, ease: [0.16, 1, 0.1, 1], delay: 0.25 }}
+                >
+                  <InlineCLIInstall />
+                </motion.div>
 
                 <motion.div
                   className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto justify-center lg:justify-start px-4 sm:px-0"
@@ -320,18 +398,38 @@ export default function Home() {
                   }}
                 >
                   <Link
-                    href="https://marketplace.visualstudio.com/items?itemName=steeltroops.omnicontext"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="w-full sm:w-auto px-6 sm:px-5 py-2.5 text-[13px] sm:text-[14px] font-medium rounded-full bg-zinc-100 text-black hover:scale-105 active:scale-95 transition-all duration-300 shadow-[0_0_40px_rgba(255,255,255,0.1)] flex items-center justify-center whitespace-nowrap"
-                  >
-                    Install Extension
-                  </Link>
-                  <Link
                     href="/docs"
                     className="w-full sm:w-auto px-6 sm:px-5 py-2.5 text-[13px] sm:text-[14px] font-medium rounded-full bg-zinc-900 text-white border border-white/10 hover:bg-zinc-800 transition-colors duration-300 flex items-center justify-center whitespace-nowrap"
                   >
                     Read Docs
+                  </Link>
+                  {/* GitHub Star Badge */}
+                  <Link
+                    href="https://github.com/steeltroops-ai/omnicontext"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full sm:w-auto px-4 sm:px-4 py-2.5 text-[13px] sm:text-[14px] font-medium rounded-full bg-zinc-900/80 text-zinc-300 border border-white/10 hover:bg-zinc-800 hover:text-white transition-colors duration-300 flex items-center justify-center gap-1.5 whitespace-nowrap"
+                  >
+                    <Star size={13} className="fill-zinc-400 text-zinc-400" />
+                    <span>Star on GitHub</span>
+                  </Link>
+                </motion.div>
+
+                {/* VS Code extension CTA */}
+                <motion.div
+                  className="mt-3 text-center lg:text-left px-4 sm:px-0"
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.8, ease: [0.16, 1, 0.1, 1], delay: 0.35 }}
+                >
+                  <span className="text-[12px] text-zinc-500">Or </span>
+                  <Link
+                    href="https://marketplace.visualstudio.com/items?itemName=steeltroops.omnicontext"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[12px] text-emerald-500 hover:text-emerald-400 transition-colors underline underline-offset-2"
+                  >
+                    install the VS Code extension
                   </Link>
                 </motion.div>
               </div>
@@ -511,6 +609,76 @@ export default function Home() {
                       </div>
                       <div className="text-zinc-600 text-[11px] mt-2">
                         Ready to serve 16 MCP tools to AI agents
+                      </div>
+                    </div>
+
+                    {/* Command 3 — setup --all */}
+                    <div className="mt-8 flex items-center gap-3 mb-4 font-semibold text-zinc-200">
+                      <span className="text-emerald-500 shrink-0">❯</span>
+                      <span className="truncate">omnicontext setup --all</span>
+                    </div>
+
+                    <div className="pl-4 border-l-2 border-emerald-500/20 ml-[5px] flex flex-col gap-1.5 my-5 text-[12px]">
+                      <div className="text-zinc-500 text-[11px] mb-2">
+                        OmniContext — Universal IDE Configuration
+                      </div>
+                      {/* Anthropic */}
+                      <div className="text-zinc-600 text-[10px] uppercase tracking-widest mt-1 mb-0.5">Anthropic</div>
+                      {[
+                        { name: "Claude Desktop", ok: true },
+                        { name: "Claude Code",    ok: true },
+                      ].map(({ name, ok }) => (
+                        <div key={name} className="flex items-center gap-2">
+                          <span className={ok ? "text-emerald-400" : "text-zinc-600"}>{ok ? "✓" : "—"}</span>
+                          <span className={`w-[130px] shrink-0 ${ok ? "text-zinc-300" : "text-zinc-600"}`}>{name}</span>
+                        </div>
+                      ))}
+                      {/* Editor-based */}
+                      <div className="text-zinc-600 text-[10px] uppercase tracking-widest mt-1 mb-0.5">Editors</div>
+                      {[
+                        { name: "Cursor",         ok: true, note: "2 legacy entries purged" },
+                        { name: "Windsurf",       ok: true },
+                        { name: "VS Code",        ok: true },
+                        { name: "VS Code Insiders", ok: true },
+                        { name: "Zed",            ok: true },
+                        { name: "PearAI",         ok: true },
+                        { name: "Trae",           ok: true },
+                      ].map(({ name, ok, note }) => (
+                        <div key={name} className="flex items-center gap-2">
+                          <span className={ok ? "text-emerald-400" : "text-zinc-600"}>{ok ? "✓" : "—"}</span>
+                          <span className={`w-[130px] shrink-0 ${ok ? "text-zinc-300" : "text-zinc-600"}`}>{name}</span>
+                          {note && <span className="text-zinc-600 text-[10px]">{note}</span>}
+                        </div>
+                      ))}
+                      {/* Extensions / Agents */}
+                      <div className="text-zinc-600 text-[10px] uppercase tracking-widest mt-1 mb-0.5">Extensions &amp; Agents</div>
+                      {[
+                        { name: "Cline",          ok: true },
+                        { name: "RooCode",        ok: true },
+                        { name: "Continue.dev",   ok: false, note: "not installed" },
+                        { name: "Kiro",           ok: true },
+                        { name: "Augment Code",   ok: true },
+                      ].map(({ name, ok, note }) => (
+                        <div key={name} className="flex items-center gap-2">
+                          <span className={ok ? "text-emerald-400" : "text-zinc-600"}>{ok ? "✓" : "—"}</span>
+                          <span className={`w-[130px] shrink-0 ${ok ? "text-zinc-300" : "text-zinc-600"}`}>{name}</span>
+                          {note && <span className="text-zinc-600 text-[10px]">{note}</span>}
+                        </div>
+                      ))}
+                      {/* CLI Agents */}
+                      <div className="text-zinc-600 text-[10px] uppercase tracking-widest mt-1 mb-0.5">CLI Agents</div>
+                      {[
+                        { name: "Gemini CLI",     ok: true },
+                        { name: "Amazon Q CLI",   ok: true },
+                      ].map(({ name, ok }) => (
+                        <div key={name} className="flex items-center gap-2">
+                          <span className={ok ? "text-emerald-400" : "text-zinc-600"}>{ok ? "✓" : "—"}</span>
+                          <span className={`w-[130px] shrink-0 ${ok ? "text-zinc-300" : "text-zinc-600"}`}>{name}</span>
+                        </div>
+                      ))}
+                      <div className="text-primary font-semibold tracking-wide mt-2 flex items-center gap-2">
+                        <Zap size={12} className="fill-primary/20 text-primary" />
+                        14 IDEs wired · 1 skipped · restart to activate
                       </div>
                     </div>
                   </div>
@@ -1038,7 +1206,7 @@ export default function Home() {
                   </li>
                   <li className="flex items-center gap-3 text-[14px] text-zinc-300 tracking-tight">
                     <div className="w-1 h-1 rounded-full bg-emerald-500" />{" "}
-                    Connects to Claude Code &amp; Cursor
+                    Works with 15+ AI IDEs and agents
                   </li>
                   <li className="flex items-center gap-3 text-[14px] text-zinc-300 tracking-tight">
                     <div className="w-1 h-1 rounded-full bg-emerald-500" />{" "}

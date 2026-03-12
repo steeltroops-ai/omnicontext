@@ -377,6 +377,31 @@ pub enum DependencyKind {
     Instantiates,
     /// Function A accesses a field of struct B.
     FieldAccess,
+
+    // --- Semantic Reasoning Edges (Phase 1 Intelligence) ---
+    /// Data flows from function A's return to function B's parameter.
+    ///
+    /// Tracks value propagation across function boundaries:
+    /// `let x = a(); b(x);` creates DataFlow(a → b).
+    /// Enables queries like "what functions receive data from X?"
+    DataFlow,
+    /// Error propagates from function A to function B.
+    ///
+    /// Tracks Result/Option/Error propagation:
+    /// `a()?.b()` or `a().map_err(|e| b(e))` creates ErrorFlow(a → b).
+    /// Enables queries like "where does this error get handled?"
+    ErrorFlow,
+    /// Type A flows through generic instantiation in B.
+    ///
+    /// Tracks generic type parameter binding:
+    /// `Vec<MyType>` creates TypeFlow(MyType → Vec).
+    /// Enables queries like "what types are used with this container?"
+    TypeFlow,
+    /// Historical co-change relationship mined from git history.
+    ///
+    /// Two symbols that frequently change in the same commit.
+    /// Higher weight = stronger correlation.
+    HistoricalCoChange,
 }
 
 impl DependencyKind {
@@ -390,6 +415,10 @@ impl DependencyKind {
             Self::UsesType => "uses_type",
             Self::Instantiates => "instantiates",
             Self::FieldAccess => "field_access",
+            Self::DataFlow => "data_flow",
+            Self::ErrorFlow => "error_flow",
+            Self::TypeFlow => "type_flow",
+            Self::HistoricalCoChange => "historical_co_change",
         }
     }
 
@@ -403,8 +432,25 @@ impl DependencyKind {
             "uses_type" => Self::UsesType,
             "instantiates" => Self::Instantiates,
             "field_access" => Self::FieldAccess,
+            "data_flow" => Self::DataFlow,
+            "error_flow" => Self::ErrorFlow,
+            "type_flow" => Self::TypeFlow,
+            "historical_co_change" => Self::HistoricalCoChange,
             _ => Self::Calls, // fallback
         }
+    }
+
+    /// Whether this is a semantic reasoning edge (vs structural).
+    pub fn is_semantic(&self) -> bool {
+        matches!(
+            self,
+            Self::DataFlow | Self::ErrorFlow | Self::TypeFlow | Self::HistoricalCoChange
+        )
+    }
+
+    /// Whether this edge type carries data-flow semantics.
+    pub fn is_flow_edge(&self) -> bool {
+        matches!(self, Self::DataFlow | Self::ErrorFlow | Self::TypeFlow)
     }
 }
 
@@ -469,6 +515,9 @@ pub struct ScoreBreakdown {
     pub dependency_boost: f64,
     /// Recency boost applied.
     pub recency_boost: f64,
+    /// PageRank-based symbol importance boost (0.0–1.0 percentile).
+    /// Higher means the symbol is structurally more central in the codebase.
+    pub pagerank_boost: f64,
 }
 
 // ---------------------------------------------------------------------------
@@ -588,6 +637,9 @@ pub struct ContextEntry {
     /// Priority level for this chunk.
     #[serde(default)]
     pub priority: Option<ChunkPriority>,
+    /// Shadow header with architectural metadata (populated when shadow_headers is enabled).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow_header: Option<String>,
 }
 
 impl ContextWindow {
@@ -603,6 +655,11 @@ impl ContextWindow {
                 }
                 out.push_str(&format!("// === {} ===\n", entry.file_path.display()));
                 current_file = Some(&entry.file_path);
+            }
+            // Prepend shadow header if present
+            if let Some(ref header) = entry.shadow_header {
+                out.push_str(header);
+                out.push('\n');
             }
             out.push_str(&entry.chunk.content);
             out.push('\n');

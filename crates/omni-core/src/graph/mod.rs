@@ -20,10 +20,14 @@
 )]
 
 pub mod attention;
+pub mod community;
+pub mod coverage;
+pub mod data_flow;
 pub mod dependencies;
 pub mod edge_extractor;
 pub mod historical;
 pub mod queries;
+pub mod reasoning;
 
 use crate::error::OmniResult;
 use crate::types::{DependencyEdge, DependencyKind};
@@ -537,6 +541,206 @@ impl DependencyGraph {
 
         edges
     }
+
+    /// Remove all edges (both incoming and outgoing) for the given symbol IDs.
+    ///
+    /// Used for incremental graph updates: before re-extracting edges for a
+    /// changed file, we strip the stale edges so only fresh edges remain.
+    /// Nodes are kept (they may still be referenced by other files' edges).
+    ///
+    /// Returns the number of edges removed.
+    pub fn remove_edges_for_symbols(&self, symbol_ids: &[i64]) -> usize {
+        let mut inner = match self.inner.write() {
+            Ok(w) => w,
+            Err(_) => return 0,
+        };
+
+        // Collect the NodeIndex set for fast lookup
+        let target_nodes: std::collections::HashSet<NodeIndex> = symbol_ids
+            .iter()
+            .filter_map(|id| inner.symbol_to_node.get(id).copied())
+            .collect();
+
+        if target_nodes.is_empty() {
+            return 0;
+        }
+
+        // Collect edge indices to remove (can't remove during iteration)
+        let edges_to_remove: Vec<petgraph::graph::EdgeIndex> = inner
+            .graph
+            .edge_indices()
+            .filter(|&edge_idx| {
+                if let Some((src, tgt)) = inner.graph.edge_endpoints(edge_idx) {
+                    target_nodes.contains(&src) || target_nodes.contains(&tgt)
+                } else {
+                    false
+                }
+            })
+            .collect();
+
+        let removed = edges_to_remove.len();
+
+        // Remove in reverse index order to avoid invalidation issues.
+        // petgraph swaps the last edge into the removed slot, so removing
+        // from highest index first is safe.
+        let mut sorted = edges_to_remove;
+        sorted.sort_by_key(|b| std::cmp::Reverse(b.index()));
+        for edge_idx in sorted {
+            inner.graph.remove_edge(edge_idx);
+        }
+
+        removed
+    }
+
+    /// Remove symbol nodes entirely from the graph.
+    ///
+    /// Only call this when a file is deleted and its symbols are gone for good.
+    /// For reindex (file changed), prefer `remove_edges_for_symbols` which keeps
+    /// nodes intact so cross-file edges pointing to these symbols still have a
+    /// target node.
+    ///
+    /// Returns the number of nodes removed.
+    pub fn remove_symbols(&self, symbol_ids: &[i64]) -> usize {
+        let mut inner = match self.inner.write() {
+            Ok(w) => w,
+            Err(_) => return 0,
+        };
+
+        let mut removed = 0;
+
+        // Sort nodes by descending index to avoid invalidation from petgraph's
+        // swap-remove behavior.
+        let mut nodes: Vec<(i64, NodeIndex)> = symbol_ids
+            .iter()
+            .filter_map(|&id| inner.symbol_to_node.get(&id).map(|&n| (id, n)))
+            .collect();
+        nodes.sort_by(|a, b| b.1.index().cmp(&a.1.index()));
+
+        for (sym_id, node) in nodes {
+            inner.graph.remove_node(node);
+            inner.symbol_to_node.remove(&sym_id);
+            removed += 1;
+
+            // petgraph swaps the last node into the removed slot, so we need to
+            // update the symbol_to_node mapping for the swapped node.
+            let swapped_index = node.index();
+            if swapped_index < inner.graph.node_count() {
+                // A node was swapped into this position
+                let swapped_sym_id = inner.graph[NodeIndex::new(swapped_index)];
+                inner
+                    .symbol_to_node
+                    .insert(swapped_sym_id, NodeIndex::new(swapped_index));
+            }
+        }
+
+        removed
+    }
+
+    /// Compute PageRank scores for all symbols in the graph.
+    ///
+    /// Uses a sparse iterative power method with:
+    /// - `damping` factor (typically 0.85)
+    /// - `iterations` (typically 20-50, convergence is fast on code graphs)
+    ///
+    /// Returns a map of `symbol_id → pagerank_score` (normalized so sum = 1.0).
+    pub fn compute_pagerank(&self, damping: f64, iterations: usize) -> HashMap<i64, f64> {
+        let inner = match self.inner.read() {
+            Ok(r) => r,
+            Err(_) => return HashMap::new(),
+        };
+
+        let n = inner.graph.node_count();
+        if n == 0 {
+            return HashMap::new();
+        }
+
+        let n_f64 = n as f64;
+        let initial = 1.0 / n_f64;
+        let teleport = (1.0 - damping) / n_f64;
+
+        // Build a dense mapping: NodeIndex → contiguous slot index.
+        // This is necessary because petgraph DiGraph may have non-contiguous
+        // node indices after removals (swap-remove semantics).
+        let node_indices: Vec<NodeIndex> = inner.graph.node_indices().collect();
+        let idx_to_slot: HashMap<NodeIndex, usize> = node_indices
+            .iter()
+            .enumerate()
+            .map(|(slot, &nidx)| (nidx, slot))
+            .collect();
+
+        // Initialize all scores equally
+        let mut scores: Vec<f64> = vec![initial; n];
+        let mut new_scores: Vec<f64> = vec![0.0; n];
+
+        for _ in 0..iterations {
+            // Reset new scores to teleport probability
+            new_scores.fill(teleport);
+
+            // Distribute scores through edges
+            for &node_idx in &node_indices {
+                let slot = idx_to_slot[&node_idx];
+                let out_degree = inner
+                    .graph
+                    .neighbors_directed(node_idx, Direction::Outgoing)
+                    .count();
+                if out_degree == 0 {
+                    // Dangling node: distribute evenly to all OTHER nodes
+                    let share = damping * scores[slot] / n_f64;
+                    for s in &mut new_scores {
+                        *s += share;
+                    }
+                } else {
+                    let share = damping * scores[slot] / out_degree as f64;
+                    for neighbor in inner
+                        .graph
+                        .neighbors_directed(node_idx, Direction::Outgoing)
+                    {
+                        if let Some(&nb_slot) = idx_to_slot.get(&neighbor) {
+                            new_scores[nb_slot] += share;
+                        }
+                    }
+                }
+            }
+
+            std::mem::swap(&mut scores, &mut new_scores);
+        }
+
+        // Build result map: symbol_id → pagerank score
+        let mut result = HashMap::with_capacity(n);
+        for (&sym_id, &node_idx) in &inner.symbol_to_node {
+            if let Some(&slot) = idx_to_slot.get(&node_idx) {
+                result.insert(sym_id, scores[slot]);
+            }
+        }
+
+        result
+    }
+
+    /// Compute PageRank percentiles for all symbols.
+    ///
+    /// Returns a map of `symbol_id → percentile` where percentile is in [0.0, 1.0].
+    /// A percentile of 0.95 means the symbol is more important than 95% of symbols.
+    pub fn compute_pagerank_percentiles(
+        &self,
+        damping: f64,
+        iterations: usize,
+    ) -> HashMap<i64, f64> {
+        let raw = self.compute_pagerank(damping, iterations);
+        if raw.is_empty() {
+            return raw;
+        }
+
+        // Sort by score to compute percentiles
+        let mut entries: Vec<(i64, f64)> = raw.into_iter().collect();
+        entries.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let n = entries.len() as f64;
+        let mut result = HashMap::with_capacity(entries.len());
+        for (rank, (sym_id, _score)) in entries.iter().enumerate() {
+            result.insert(*sym_id, rank as f64 / n);
+        }
+        result
+    }
 }
 
 impl Default for DependencyGraph {
@@ -787,5 +991,314 @@ mod tests {
 
         let radius_unknown = graph.blast_radius(999, 5).expect("blast radius");
         assert!(radius_unknown.is_empty());
+    }
+
+    #[test]
+    fn test_remove_edges_for_symbols() {
+        // Build: 1->2, 2->3, 4->2
+        let graph = DependencyGraph::new();
+        for id in [1, 2, 3, 4] {
+            graph.add_symbol(id).expect("add");
+        }
+        graph
+            .add_edge(&DependencyEdge {
+                source_id: 1,
+                target_id: 2,
+                kind: DependencyKind::Calls,
+            })
+            .expect("edge 1->2");
+        graph
+            .add_edge(&DependencyEdge {
+                source_id: 2,
+                target_id: 3,
+                kind: DependencyKind::Calls,
+            })
+            .expect("edge 2->3");
+        graph
+            .add_edge(&DependencyEdge {
+                source_id: 4,
+                target_id: 2,
+                kind: DependencyKind::Imports,
+            })
+            .expect("edge 4->2");
+
+        assert_eq!(graph.edge_count(), 3);
+
+        // Remove edges touching symbol 2 (should remove all 3 edges)
+        let removed = graph.remove_edges_for_symbols(&[2]);
+        assert_eq!(removed, 3);
+        assert_eq!(graph.edge_count(), 0);
+
+        // Nodes should still be present
+        assert_eq!(graph.node_count(), 4);
+    }
+
+    #[test]
+    fn test_remove_edges_partial() {
+        // Build: 1->2, 3->4
+        let graph = DependencyGraph::new();
+        for id in [1, 2, 3, 4] {
+            graph.add_symbol(id).expect("add");
+        }
+        graph
+            .add_edge(&DependencyEdge {
+                source_id: 1,
+                target_id: 2,
+                kind: DependencyKind::Calls,
+            })
+            .expect("edge");
+        graph
+            .add_edge(&DependencyEdge {
+                source_id: 3,
+                target_id: 4,
+                kind: DependencyKind::Calls,
+            })
+            .expect("edge");
+
+        // Remove edges for symbol 1 — should only remove 1->2
+        let removed = graph.remove_edges_for_symbols(&[1]);
+        assert_eq!(removed, 1);
+        assert_eq!(graph.edge_count(), 1);
+
+        // 3->4 edge should still work
+        let upstream = graph.upstream(3, 1).expect("upstream");
+        assert_eq!(upstream, vec![4]);
+    }
+
+    #[test]
+    fn test_remove_symbols() {
+        // Build: 1->2, 2->3
+        let graph = DependencyGraph::new();
+        for id in [1, 2, 3] {
+            graph.add_symbol(id).expect("add");
+        }
+        graph
+            .add_edge(&DependencyEdge {
+                source_id: 1,
+                target_id: 2,
+                kind: DependencyKind::Calls,
+            })
+            .expect("edge");
+        graph
+            .add_edge(&DependencyEdge {
+                source_id: 2,
+                target_id: 3,
+                kind: DependencyKind::Calls,
+            })
+            .expect("edge");
+
+        assert_eq!(graph.node_count(), 3);
+        assert_eq!(graph.edge_count(), 2);
+
+        // Remove symbol 2 (and its edges)
+        let edges_removed = graph.remove_edges_for_symbols(&[2]);
+        assert_eq!(edges_removed, 2);
+        let nodes_removed = graph.remove_symbols(&[2]);
+        assert_eq!(nodes_removed, 1);
+        assert_eq!(graph.node_count(), 2);
+        assert_eq!(graph.edge_count(), 0);
+
+        // Remaining symbols should still be queryable
+        let upstream = graph.upstream(1, 1).expect("upstream");
+        assert!(upstream.is_empty());
+    }
+
+    #[test]
+    fn test_remove_edges_empty_input() {
+        let graph = DependencyGraph::new();
+        graph.add_symbol(1).expect("add");
+        let removed = graph.remove_edges_for_symbols(&[]);
+        assert_eq!(removed, 0);
+
+        let removed = graph.remove_edges_for_symbols(&[999]);
+        assert_eq!(removed, 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // PageRank tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_pagerank_empty_graph() {
+        let graph = DependencyGraph::new();
+        let pr = graph.compute_pagerank(0.85, 30);
+        assert!(pr.is_empty());
+    }
+
+    #[test]
+    fn test_pagerank_single_node() {
+        let graph = DependencyGraph::new();
+        graph.add_symbol(1).expect("add");
+        let pr = graph.compute_pagerank(0.85, 30);
+        assert_eq!(pr.len(), 1);
+        // Single node gets all the probability mass → score ≈ 1.0
+        assert!((pr[&1] - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_pagerank_simple_chain() {
+        // Chain: 1 → 2 → 3
+        // Node 3 is a "sink" that receives links but has no outgoing.
+        // Node 3 should have the highest PageRank.
+        let graph = DependencyGraph::new();
+        graph
+            .add_edge(&DependencyEdge {
+                source_id: 1,
+                target_id: 2,
+                kind: DependencyKind::Calls,
+            })
+            .expect("edge");
+        graph
+            .add_edge(&DependencyEdge {
+                source_id: 2,
+                target_id: 3,
+                kind: DependencyKind::Calls,
+            })
+            .expect("edge");
+
+        let pr = graph.compute_pagerank(0.85, 30);
+        assert_eq!(pr.len(), 3);
+        // Node 3 (sink, dangling) receives from 2 and redistributes evenly
+        // but should still have higher PageRank than node 1
+        assert!(
+            pr[&3] > pr[&1],
+            "sink node 3 should rank above source node 1"
+        );
+    }
+
+    #[test]
+    fn test_pagerank_star_topology() {
+        // Star: 1→5, 2→5, 3→5, 4→5 — node 5 is the hub
+        let graph = DependencyGraph::new();
+        for src in 1..=4 {
+            graph
+                .add_edge(&DependencyEdge {
+                    source_id: src,
+                    target_id: 5,
+                    kind: DependencyKind::Calls,
+                })
+                .expect("edge");
+        }
+
+        let pr = graph.compute_pagerank(0.85, 30);
+        assert_eq!(pr.len(), 5);
+        // Hub node 5 should have the highest score
+        for &src in &[1i64, 2, 3, 4] {
+            assert!(
+                pr[&5] > pr[&src],
+                "hub node 5 ({:.4}) should outrank leaf node {} ({:.4})",
+                pr[&5],
+                src,
+                pr[&src]
+            );
+        }
+    }
+
+    #[test]
+    fn test_pagerank_scores_sum_to_one() {
+        // Any PageRank distribution should sum to 1.0
+        let graph = DependencyGraph::new();
+        for src in 1..=4 {
+            graph
+                .add_edge(&DependencyEdge {
+                    source_id: src,
+                    target_id: src + 1,
+                    kind: DependencyKind::Calls,
+                })
+                .expect("edge");
+        }
+        // Add a cycle back: 5 → 1
+        graph
+            .add_edge(&DependencyEdge {
+                source_id: 5,
+                target_id: 1,
+                kind: DependencyKind::Calls,
+            })
+            .expect("edge");
+
+        let pr = graph.compute_pagerank(0.85, 30);
+        let total: f64 = pr.values().sum();
+        assert!(
+            (total - 1.0).abs() < 0.01,
+            "PageRank scores should sum to ~1.0, got {total}"
+        );
+    }
+
+    #[test]
+    fn test_pagerank_percentiles() {
+        // Star: 1→5, 2→5, 3→5, 4→5
+        let graph = DependencyGraph::new();
+        for src in 1..=4 {
+            graph
+                .add_edge(&DependencyEdge {
+                    source_id: src,
+                    target_id: 5,
+                    kind: DependencyKind::Calls,
+                })
+                .expect("edge");
+        }
+
+        let pct = graph.compute_pagerank_percentiles(0.85, 30);
+        assert_eq!(pct.len(), 5);
+
+        // All percentiles should be in [0.0, 1.0)
+        for &p in pct.values() {
+            assert!(p >= 0.0 && p < 1.0, "percentile {p} out of range [0,1)");
+        }
+
+        // Hub node 5 should have the highest percentile
+        let hub_pct = pct[&5];
+        for &src in &[1i64, 2, 3, 4] {
+            assert!(
+                hub_pct > pct[&src],
+                "hub percentile ({hub_pct}) should exceed leaf {src} percentile ({})",
+                pct[&src]
+            );
+        }
+        // Highest percentile should be (n-1)/n = 0.8
+        assert!(
+            (hub_pct - 0.8).abs() < 0.01,
+            "top percentile should be 0.8, got {hub_pct}"
+        );
+    }
+
+    #[test]
+    fn test_pagerank_cycle_converges() {
+        // Full cycle: 1→2→3→1 — all nodes should have equal rank
+        let graph = DependencyGraph::new();
+        graph
+            .add_edge(&DependencyEdge {
+                source_id: 1,
+                target_id: 2,
+                kind: DependencyKind::Calls,
+            })
+            .expect("edge");
+        graph
+            .add_edge(&DependencyEdge {
+                source_id: 2,
+                target_id: 3,
+                kind: DependencyKind::Calls,
+            })
+            .expect("edge");
+        graph
+            .add_edge(&DependencyEdge {
+                source_id: 3,
+                target_id: 1,
+                kind: DependencyKind::Calls,
+            })
+            .expect("edge");
+
+        let pr = graph.compute_pagerank(0.85, 30);
+        // Symmetric cycle → all three should have equal PageRank ≈ 1/3
+        let expected = 1.0 / 3.0;
+        for &id in &[1i64, 2, 3] {
+            assert!(
+                (pr[&id] - expected).abs() < 0.01,
+                "node {} PageRank {:.4} should be ~{:.4}",
+                id,
+                pr[&id],
+                expected
+            );
+        }
     }
 }

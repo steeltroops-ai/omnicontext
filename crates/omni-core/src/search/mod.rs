@@ -31,20 +31,27 @@
     clippy::unused_self
 )]
 
+pub mod cache;
+pub mod chunk_dedup;
 pub mod context_assembler;
+pub mod context_formatter;
+pub mod feedback;
 pub mod hyde;
 pub mod intent;
 pub mod synonyms;
 
 use crate::embedder::Embedder;
 use crate::error::OmniResult;
+use crate::graph::reasoning::ReasoningEngine;
 use crate::index::MetadataIndex;
 use crate::reranker::Reranker;
 use crate::types::{Chunk, ContextEntry, ContextWindow, ScoreBreakdown, SearchResult};
 use crate::vector::VectorIndex;
 
 // Re-export key types for convenience
+pub use cache::{CacheKey, CacheStats, TieredCacheStats, TieredQueryCache};
 pub use context_assembler::ContextAssembler;
+pub use context_formatter::{ContextFormat, ContextFormatter, FormatOptions};
 pub use intent::{ContextStrategy, QueryIntent};
 
 /// Hybrid search engine that fuses multiple retrieval signals.
@@ -62,6 +69,30 @@ pub struct SearchEngine {
     /// LRU cache for query embeddings (query -> embedding vector).
     /// Reduces redundant embedding computation for repeated queries.
     query_cache: std::sync::Arc<std::sync::Mutex<lru::LruCache<String, Vec<f32>>>>,
+
+    /// Tiered result cache (L1 hot 60s / L2 warm 15min).
+    /// Caches full search results to achieve sub-30ms P99 on repeated queries.
+    result_cache: TieredQueryCache,
+
+    /// Bug-prone file boost factors (file_id → boost factor 1.0–2.0).
+    /// Populated from HistoricalGraphEnhancer during indexing.
+    /// Files frequently involved in bug fixes get higher relevance for debug queries.
+    bug_prone_boosts: std::sync::Arc<parking_lot::Mutex<std::collections::HashMap<i64, f32>>>,
+
+    /// PageRank percentile scores (symbol_id → percentile 0.0–1.0).
+    /// Populated from DependencyGraph::compute_pagerank_percentiles after indexing.
+    /// Structurally central symbols receive a score lift.
+    pagerank_scores: std::sync::Arc<parking_lot::Mutex<std::collections::HashMap<i64, f64>>>,
+
+    /// Temporal freshness scores (file_id → decay factor 0.0–1.0).
+    /// Populated from file `indexed_at` timestamps during pipeline init.
+    /// Recently modified files receive a relevance boost.
+    freshness_scores: std::sync::Arc<parking_lot::Mutex<std::collections::HashMap<i64, f64>>>,
+
+    /// File IDs of files modified on the current branch (vs base branch).
+    /// Populated from BranchTracker during pipeline init.
+    /// Files changed on the active branch get a relevance boost.
+    branch_changed_file_ids: std::sync::Arc<parking_lot::Mutex<std::collections::HashSet<i64>>>,
 }
 
 impl SearchEngine {
@@ -76,7 +107,162 @@ impl SearchEngine {
             retrieval_limit: 100, // fetch top-100 from each signal
             token_budget,
             query_cache: std::sync::Arc::new(std::sync::Mutex::new(lru::LruCache::new(cache_size))),
+            result_cache: TieredQueryCache::new(),
+            bug_prone_boosts: std::sync::Arc::new(parking_lot::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
+            pagerank_scores: std::sync::Arc::new(parking_lot::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
+            freshness_scores: std::sync::Arc::new(parking_lot::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
+            branch_changed_file_ids: std::sync::Arc::new(parking_lot::Mutex::new(
+                std::collections::HashSet::new(),
+            )),
         }
+    }
+
+    /// Get a reference to the tiered result cache for external invalidation.
+    pub fn result_cache(&self) -> &TieredQueryCache {
+        &self.result_cache
+    }
+
+    /// Get tiered result cache statistics.
+    pub fn result_cache_stats(&self) -> TieredCacheStats {
+        self.result_cache.stats()
+    }
+
+    /// Update bug-prone file boost factors.
+    ///
+    /// Called by the pipeline after analyzing git history. Files frequently
+    /// involved in bug fixes get a relevance boost for debug/fix queries.
+    pub fn set_bug_prone_boosts(&self, boosts: std::collections::HashMap<i64, f32>) {
+        let mut guard = self.bug_prone_boosts.lock();
+        *guard = boosts;
+    }
+
+    /// Update PageRank percentile scores for all symbols.
+    ///
+    /// Called by the pipeline after dependency graph is built.
+    /// Structurally central symbols (high PageRank percentile) receive
+    /// a score lift during search: `score *= 1.0 + (0.2 * percentile)`.
+    pub fn set_pagerank_scores(&self, scores: std::collections::HashMap<i64, f64>) {
+        let mut guard = self.pagerank_scores.lock();
+        *guard = scores;
+    }
+
+    /// Look up the PageRank percentile for a symbol.
+    pub fn pagerank_percentile(&self, symbol_id: i64) -> f64 {
+        self.pagerank_scores
+            .lock()
+            .get(&symbol_id)
+            .copied()
+            .unwrap_or(0.0)
+    }
+
+    /// Update temporal freshness scores for all files.
+    ///
+    /// Called by the pipeline after computing decay factors from file timestamps.
+    /// Recently modified files (freshness close to 1.0) get a relevance boost;
+    /// old files (freshness close to 0.0) get no boost.
+    pub fn set_freshness_scores(&self, scores: std::collections::HashMap<i64, f64>) {
+        let mut guard = self.freshness_scores.lock();
+        *guard = scores;
+    }
+
+    /// Look up the temporal freshness score for a file.
+    /// Returns 0.0–1.0 where 1.0 = just modified, 0.0 = very old.
+    pub fn file_freshness(&self, file_id: i64) -> f64 {
+        self.freshness_scores
+            .lock()
+            .get(&file_id)
+            .copied()
+            .unwrap_or(0.0)
+    }
+
+    /// Compute exponential decay freshness scores from ISO 8601 timestamps.
+    ///
+    /// Uses the formula: `freshness = exp(-decay_rate * age_hours)` where
+    /// `decay_rate` controls how quickly scores fall off. With the default
+    /// half-life of 168 hours (7 days), a file modified 1 week ago gets ~0.5.
+    pub fn compute_freshness_from_timestamps(
+        timestamps: &[(i64, String)],
+        half_life_hours: f64,
+    ) -> std::collections::HashMap<i64, f64> {
+        use std::collections::HashMap;
+
+        if timestamps.is_empty() {
+            return HashMap::new();
+        }
+
+        // decay_rate = ln(2) / half_life
+        let decay_rate = std::f64::consts::LN_2 / half_life_hours;
+
+        // Parse "now" as reference point: use the most recent timestamp as reference
+        // to avoid depending on system clock during tests
+        let mut max_epoch: f64 = 0.0;
+        let mut parsed: Vec<(i64, f64)> = Vec::with_capacity(timestamps.len());
+
+        for (file_id, ts_str) in timestamps {
+            let epoch = Self::parse_sqlite_datetime(ts_str);
+            if epoch <= 0.0 {
+                // Malformed or NULL timestamp — skip this file (it gets freshness 0.0 by default)
+                tracing::debug!(file_id, timestamp = %ts_str, "skipping file with unparseable timestamp");
+                continue;
+            }
+            if epoch > max_epoch {
+                max_epoch = epoch;
+            }
+            parsed.push((*file_id, epoch));
+        }
+
+        let mut result = HashMap::with_capacity(parsed.len());
+        for (file_id, epoch) in parsed {
+            let age_hours = (max_epoch - epoch) / 3600.0;
+            let freshness = (-decay_rate * age_hours).exp();
+            result.insert(file_id, freshness.clamp(0.0, 1.0));
+        }
+
+        result
+    }
+
+    /// Parse a SQLite datetime string (e.g., "2025-01-15 10:30:00") to epoch seconds.
+    fn parse_sqlite_datetime(s: &str) -> f64 {
+        // Format: "YYYY-MM-DD HH:MM:SS"
+        // Simple manual parsing to avoid chrono dependency
+        let parts: Vec<&str> = s
+            .split(|c| c == '-' || c == ' ' || c == ':' || c == 'T')
+            .collect();
+        if parts.len() < 6 {
+            return 0.0;
+        }
+        let year: f64 = parts[0].parse().unwrap_or(2020.0);
+        let month: f64 = parts[1].parse().unwrap_or(1.0);
+        let day: f64 = parts[2].parse().unwrap_or(1.0);
+        let hour: f64 = parts[3].parse().unwrap_or(0.0);
+        let min: f64 = parts[4].parse().unwrap_or(0.0);
+        let sec: f64 = parts[5].parse().unwrap_or(0.0);
+
+        // Approximate epoch: days since 2000-01-01 (good enough for relative ordering)
+        let years_since_2000 = year - 2000.0;
+        let days = years_since_2000 * 365.25 + (month - 1.0) * 30.44 + (day - 1.0);
+        days * 86400.0 + hour * 3600.0 + min * 60.0 + sec
+    }
+
+    /// Update the set of file IDs modified on the current branch.
+    ///
+    /// Called by the pipeline after querying BranchTracker for changed files.
+    /// Files on the active branch get a relevance boost during search, since
+    /// developers are most likely to need context about files they're actively working on.
+    pub fn set_branch_changed_files(&self, file_ids: std::collections::HashSet<i64>) {
+        let mut guard = self.branch_changed_file_ids.lock();
+        *guard = file_ids;
+    }
+
+    /// Check whether a file is part of the current branch diff.
+    pub fn is_branch_changed(&self, file_id: i64) -> bool {
+        self.branch_changed_file_ids.lock().contains(&file_id)
     }
 
     /// Execute a hybrid search query.
@@ -97,10 +283,37 @@ impl SearchEngine {
         vector_index: &VectorIndex,
         embedder: &Embedder,
         dep_graph: Option<&crate::graph::DependencyGraph>,
+        reasoning: Option<&ReasoningEngine>,
         reranker: Option<&Reranker>,
         reranker_config: Option<&crate::config::RerankerConfig>,
+        open_files: &[std::path::PathBuf],
     ) -> OmniResult<Vec<SearchResult>> {
+        // ---- Check tiered result cache ----
+        let reranker_active = reranker.is_some_and(|r| r.is_available());
+        let graph_available = dep_graph.is_some();
+        let reasoning_available = reasoning.is_some();
+        // Include the unranked_demotion threshold in the cache key because different
+        // threshold values produce different result orderings after reranking.
+        let min_rerank = reranker_config.map(|cfg| cfg.unranked_demotion as f32);
+        let cache_key = CacheKey::with_context(
+            query.to_string(),
+            limit,
+            min_rerank,
+            reranker_active,
+            graph_available,
+            reasoning_available,
+        );
+        if let Some(cached) = self.result_cache.get(&cache_key) {
+            tracing::debug!(
+                query = query,
+                results = cached.len(),
+                "tiered result cache HIT"
+            );
+            return Ok(cached);
+        }
+
         let query_type = analyze_query(query);
+        let query_intent = QueryIntent::classify(query);
         let limit = limit.min(self.retrieval_limit);
 
         // Adaptive retrieval limits per signal source.
@@ -153,9 +366,8 @@ impl SearchEngine {
             // Determine the best text to embed for semantic search.
             // For NL queries, HyDE generates a hypothetical code snippet whose
             // embedding is closer in vector space to relevant code.
-            let intent = QueryIntent::classify(query);
             let embed_text = if query_type == QueryType::NaturalLanguage {
-                hyde::generate_hypothetical_document(query, intent)
+                hyde::generate_hypothetical_document(query, query_intent)
                     .unwrap_or_else(|| query.to_string())
             } else {
                 query.to_string()
@@ -222,7 +434,7 @@ impl SearchEngine {
 
         // ---- RRF Fusion with query-type-adaptive weights ----
         let mut fused = self.fuse_results(
-            &keyword_results, &semantic_results, &symbol_results, query_type,
+            query, &keyword_results, &semantic_results, &symbol_results, query_type,
         );
 
         if let Some(reranker) = reranker {
@@ -303,7 +515,94 @@ impl SearchEngine {
             None
         };
 
+        // ---- Graph-Augmented Retrieval (GAR) ----
+        // Walk the semantic reasoning neighborhood from each anchor symbol.
+        // Discovered symbols get score boosts and potential injection into results.
+        // Uses intent-driven graph_depth rather than a hardcoded constant.
+        let mut gar_boosts: std::collections::HashMap<i64, f64> = std::collections::HashMap::new();
+        if let (Some(engine), Some(graph)) = (reasoning, dep_graph) {
+            let strategy = query_intent.context_strategy();
+            let gar_depth = strategy.graph_depth.min(engine.max_hops());
+
+            // Collect up to 3 anchor symbol IDs from top results
+            let mut anchors: Vec<i64> = Vec::new();
+            for scored in fused.iter().take(5) {
+                if let Some(chunk) = self.get_chunk_by_id(index, scored.chunk_id) {
+                    if let Ok(Some(sym)) = index.get_symbol_by_fqn(&chunk.symbol_path) {
+                        if !anchors.contains(&sym.id) {
+                            anchors.push(sym.id);
+                            if anchors.len() >= 3 {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            for anchor_id in &anchors {
+                // Use intent-driven depth with top-20 neighbors per anchor
+                if let Ok(hits) = engine.reasoning_neighborhood(graph, *anchor_id, gar_depth, 20) {
+                    for hit in &hits {
+                        // Map symbol_id → chunk_id for score injection
+                        if let Ok(Some(sym)) = index.get_symbol_by_id(hit.symbol_id) {
+                            if let Some(chunk_id) = sym.chunk_id {
+                                // Use max rather than sum to prevent hub bias:
+                                // a chunk reachable from multiple anchors is relevant,
+                                // but not N× more relevant than one reachable from one anchor.
+                                let entry = gar_boosts.entry(chunk_id).or_insert(0.0);
+                                if hit.score > *entry {
+                                    *entry = hit.score;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !gar_boosts.is_empty() {
+                tracing::debug!(
+                    anchors = anchors.len(),
+                    gar_hits = gar_boosts.len(),
+                    "GAR neighborhood discovered semantic neighbors"
+                );
+
+                // Apply GAR boosts to fused results that were already retrieved
+                for scored in &mut fused {
+                    if let Some(&boost) = gar_boosts.get(&scored.chunk_id) {
+                        let capped = boost.min(0.5); // Cap GAR boost at +50%
+                        scored.breakdown.dependency_boost = capped;
+                        scored.final_score *= 1.0 + capped;
+                    }
+                }
+
+                // Re-sort fused after GAR boosting
+                fused.sort_by(|a, b| {
+                    b.final_score
+                        .partial_cmp(&a.final_score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+            }
+        }
+
         // ---- Build final results with structural and graph boosting ----
+        // Resolve open_files to file_ids for editor-aware boosting
+        let open_file_ids: std::collections::HashSet<i64> = if !open_files.is_empty() {
+            open_files
+                .iter()
+                .filter_map(|path| {
+                    let conn = index.connection();
+                    conn.query_row(
+                        "SELECT id FROM files WHERE path = ?1",
+                        rusqlite::params![path.to_string_lossy().as_ref()],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .ok()
+                })
+                .collect()
+        } else {
+            std::collections::HashSet::new()
+        };
+
         let mut results = Vec::new();
         let mut total_tokens: u32 = 0;
 
@@ -348,6 +647,67 @@ impl SearchEngine {
                 }
             }
 
+            // Editor-aware open_files boost: chunks from files currently
+            // open in the editor get a 30% relevance boost
+            if open_file_ids.contains(&chunk.file_id) {
+                graph_boost += 0.3;
+            }
+
+            // Bug-proneness boost: files frequently involved in bug fixes get
+            // a relevance boost for debug/fix queries. The boost factor (1.0–2.0)
+            // is computed from historical git commit analysis and only applied
+            // when the query intent suggests bug-fixing activity.
+            {
+                let bug_boosts = self.bug_prone_boosts.lock();
+                if let Some(&boost_factor) = bug_boosts.get(&chunk.file_id) {
+                    // Scale boost by intent relevance: debug/edit queries get full boost,
+                    // other queries get a reduced version
+                    let intent_scale = match query_intent {
+                        intent::QueryIntent::Debug | intent::QueryIntent::Edit => 1.0,
+                        intent::QueryIntent::Refactor => 0.6,
+                        _ => 0.3,
+                    };
+                    // boost_factor is 1.0-2.0, so excess above 1.0 is the actual boost
+                    let bug_boost = (boost_factor - 1.0) * intent_scale as f32;
+                    graph_boost += bug_boost as f64;
+                }
+            }
+
+            // PageRank importance boost: structurally central symbols get a
+            // score lift proportional to their PageRank percentile.
+            // A symbol at the 95th percentile gets a +0.19 boost (0.2 × 0.95).
+            let pagerank_pct = if let Some(_graph) = dep_graph {
+                if !chunk.symbol_path.is_empty() {
+                    if let Ok(Some(sym)) = index.get_symbol_by_fqn(&chunk.symbol_path) {
+                        self.pagerank_percentile(sym.id)
+                    } else {
+                        0.0
+                    }
+                } else {
+                    0.0
+                }
+            } else {
+                0.0
+            };
+            if pagerank_pct > 0.0 {
+                graph_boost += 0.2 * pagerank_pct;
+            }
+
+            // Temporal freshness boost: recently modified files get a relevance
+            // lift. A file modified today (freshness=1.0) gets +0.15 boost,
+            // one modified a week ago (freshness≈0.5) gets +0.075.
+            let freshness = self.file_freshness(chunk.file_id);
+            if freshness > 0.0 {
+                graph_boost += 0.15 * freshness;
+            }
+
+            // Branch-aware boost: files modified on the current branch get a
+            // significant relevance boost. Developers querying for context are
+            // most likely working on files in their current branch.
+            if self.is_branch_changed(chunk.file_id) {
+                graph_boost += 0.25;
+            }
+
             // Apply structural + graph boost
             let (boosted_score, struct_weight) =
                 Self::apply_structural_boost(scored.final_score, &chunk, graph_boost);
@@ -365,6 +725,8 @@ impl SearchEngine {
 
             let mut breakdown = scored.breakdown.clone();
             breakdown.structural_weight = struct_weight;
+            breakdown.pagerank_boost = pagerank_pct;
+            breakdown.recency_boost = freshness;
 
             results.push(SearchResult {
                 chunk,
@@ -402,7 +764,80 @@ impl SearchEngine {
 
         deduped.truncate(limit);
 
+        // ---- Store in tiered result cache ----
+        if !deduped.is_empty() {
+            self.result_cache.insert(cache_key, deduped.clone());
+            tracing::debug!(
+                query = query,
+                results = deduped.len(),
+                "tiered result cache STORE"
+            );
+        }
+
         Ok(deduped)
+    }
+
+    /// Execute search and return both results AND the GAR neighbor map.
+    ///
+    /// The GAR neighbor map (`chunk_id → gar_score`) contains all chunks
+    /// discovered during the semantic reasoning neighborhood walk. This
+    /// sidecar data can be passed to `assemble_context_window()` to inject
+    /// shadow context without redundant graph traversals.
+    pub fn search_with_gar(
+        &self,
+        query: &str,
+        limit: usize,
+        index: &MetadataIndex,
+        vector_index: &VectorIndex,
+        embedder: &Embedder,
+        dep_graph: Option<&crate::graph::DependencyGraph>,
+        reasoning: Option<&ReasoningEngine>,
+        reranker: Option<&Reranker>,
+        reranker_config: Option<&crate::config::RerankerConfig>,
+        open_files: &[std::path::PathBuf],
+    ) -> OmniResult<(Vec<SearchResult>, std::collections::HashMap<i64, f64>)> {
+        let results = self.search(
+            query, limit, index, vector_index, embedder, dep_graph, reasoning, reranker,
+            reranker_config, open_files,
+        )?;
+
+        // Compute GAR neighbor map for context assembly
+        let mut gar_neighbors: std::collections::HashMap<i64, f64> =
+            std::collections::HashMap::new();
+        if let (Some(engine), Some(graph)) = (reasoning, dep_graph) {
+            let gar_intent = QueryIntent::classify(query);
+            let strategy = gar_intent.context_strategy();
+            let gar_depth = strategy.graph_depth.min(engine.max_hops());
+
+            let mut anchors: Vec<i64> = Vec::new();
+            for result in results.iter().take(5) {
+                if let Ok(Some(sym)) = index.get_symbol_by_fqn(&result.chunk.symbol_path) {
+                    if !anchors.contains(&sym.id) {
+                        anchors.push(sym.id);
+                        if anchors.len() >= 3 {
+                            break;
+                        }
+                    }
+                }
+            }
+
+            for anchor_id in &anchors {
+                if let Ok(hits) = engine.reasoning_neighborhood(graph, *anchor_id, gar_depth, 20) {
+                    for hit in &hits {
+                        if let Ok(Some(sym)) = index.get_symbol_by_id(hit.symbol_id) {
+                            if let Some(chunk_id) = sym.chunk_id {
+                                let entry = gar_neighbors.entry(chunk_id).or_insert(0.0);
+                                if hit.score > *entry {
+                                    *entry = hit.score;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok((results, gar_neighbors))
     }
 
     /// Fuse multiple rank lists using Reciprocal Rank Fusion (RRF)
@@ -416,6 +851,7 @@ impl SearchEngine {
     /// - Mixed:    keyword=0.9, semantic=1.1, symbol=1.2
     fn fuse_results(
         &self,
+        query: &str,
         keyword_results: &[(i64, f64)],  // (chunk_id, bm25_score)
         semantic_results: &[(u64, f32)], // (vector_id, similarity)
         symbol_results: &[i64],          // chunk_ids from symbol match
@@ -423,12 +859,40 @@ impl SearchEngine {
     ) -> Vec<ScoredChunk> {
         use std::collections::HashMap;
 
-        // Adaptive weights per query type
+        // Adaptive weights per query type.
+        // Base weights differ by structural vs semantic emphasis.
         let (kw_weight, sem_weight, sym_weight) = match query_type {
             QueryType::Symbol => (0.8, 0.5, 1.5),
             QueryType::Keyword => (1.0, 1.0, 1.0),
             QueryType::NaturalLanguage => (0.6, 1.3, 0.8),
             QueryType::Mixed => (0.9, 1.1, 1.2),
+        };
+
+        // Intent-level refinement: adjust weights based on the deeper semantic
+        // understanding of what the user is trying to accomplish. This provides
+        // finer-grained tuning on top of the base query-type weights.
+        let intent = intent::QueryIntent::classify(query);
+        let (kw_weight, sem_weight, sym_weight) = match intent {
+            // Debug/Edit: need precise symbol-level matches → boost keyword+symbol
+            intent::QueryIntent::Debug | intent::QueryIntent::Edit => {
+                (kw_weight * 1.2, sem_weight * 0.9, sym_weight * 1.2)
+            }
+            // Explain/DataFlow: need broad semantic understanding → boost semantic
+            intent::QueryIntent::Explain | intent::QueryIntent::DataFlow => {
+                (kw_weight * 0.8, sem_weight * 1.3, sym_weight * 0.9)
+            }
+            // Dependency: need exact symbol resolution → heavy symbol boost
+            intent::QueryIntent::Dependency => {
+                (kw_weight * 0.7, sem_weight * 0.8, sym_weight * 1.5)
+            }
+            // Refactor: need both semantic similarity and structural precision
+            intent::QueryIntent::Refactor => (kw_weight * 1.0, sem_weight * 1.2, sym_weight * 1.1),
+            // TestCoverage: test files use predictable naming → boost keyword
+            intent::QueryIntent::TestCoverage => {
+                (kw_weight * 1.3, sem_weight * 0.8, sym_weight * 1.0)
+            }
+            // Generate/Unknown: no adjustment
+            _ => (kw_weight, sem_weight, sym_weight),
         };
 
         let mut scores: HashMap<i64, ScoredChunk> = HashMap::new();
@@ -579,8 +1043,9 @@ impl SearchEngine {
     /// concatenating search results, it:
     /// 1. Groups results by file
     /// 2. For files with 3+ matching chunks, includes ALL chunks from that file
-    /// 3. Fetches 1-hop graph neighbors of anchor symbols
-    /// 4. Packs greedily by score until token budget is hit
+    /// 3. Injects GAR shadow context neighbors (pre-computed from search())
+    /// 4. Falls back to 1-hop graph neighbors when no GAR data is available
+    /// 5. Packs greedily by score until token budget is hit
     ///
     /// Returns a structured context window with file grouping.
     pub fn assemble_context_window(
@@ -588,6 +1053,7 @@ impl SearchEngine {
         search_results: &[SearchResult],
         index: &MetadataIndex,
         dep_graph: Option<&crate::graph::DependencyGraph>,
+        gar_neighbors: &std::collections::HashMap<i64, f64>,
         token_budget: u32,
     ) -> ContextWindow {
         use std::cmp::Ordering;
@@ -667,8 +1133,33 @@ impl SearchEngine {
             }
         }
 
-        // Step 3: Fetch 1-hop graph neighbors of top-scored anchor symbols
-        if let Some(graph) = dep_graph {
+        // Step 3: Inject GAR shadow context neighbors
+        //
+        // Use pre-computed GAR neighbor chunk_ids from search() to avoid
+        // redundant graph walks. Falls back to simple 1-hop structural
+        // neighbors when no GAR data is available.
+        if !gar_neighbors.is_empty() {
+            // GAR path: inject pre-computed semantic neighbors
+            let base_score = search_results.first().map(|r| r.score).unwrap_or(1.0);
+            for (&chunk_id, &gar_score) in gar_neighbors {
+                if !seen_chunk_ids.contains(&chunk_id) {
+                    if let Some(chunk) = self.get_chunk_by_id(index, chunk_id) {
+                        let fp = self
+                            .get_file_path_for_chunk(index, &chunk)
+                            .unwrap_or_default();
+                        seen_chunk_ids.insert(chunk_id);
+                        // Score: top result score * GAR relevance (capped at 0.6)
+                        heap.push(ScoredEntry {
+                            score: base_score * 0.5 * gar_score.min(1.0),
+                            chunk,
+                            file_path: fp,
+                            is_neighbor: true,
+                        });
+                    }
+                }
+            }
+        } else if let Some(graph) = dep_graph {
+            // Fallback: simple 1-hop structural neighbors (no GAR data)
             for result in search_results.iter().take(3) {
                 if result.chunk.symbol_path.is_empty() {
                     continue;
@@ -686,7 +1177,7 @@ impl SearchEngine {
                                                 .unwrap_or_default();
                                             seen_chunk_ids.insert(chunk_id);
                                             heap.push(ScoredEntry {
-                                                score: result.score * 0.5, // neighbor discount
+                                                score: result.score * 0.5,
                                                 chunk,
                                                 file_path: fp,
                                                 is_neighbor: true,
@@ -724,30 +1215,50 @@ impl SearchEngine {
             }
         }
 
-        // Step 4: Pack greedily by score until token budget is hit
-        let mut total_tokens: u32 = 0;
-        let mut entries: Vec<ContextEntry> = Vec::new();
+        // Step 4: Convert heap to prioritized entries and pack with knapsack DP
+        //
+        // The ContextAssembler uses 0/1 knapsack dynamic programming to find the
+        // mathematically optimal subset within the token budget, weighted by both
+        // score and priority. Falls back to greedy for very large inputs.
+        let query_for_intent = search_results
+            .first()
+            .map(|_| "") // We don't have the original query here; use Unknown intent
+            .unwrap_or("");
+        let intent = crate::search::intent::QueryIntent::classify(query_for_intent);
+        let strategy = intent.context_strategy();
 
+        // Drain heap into ContextEntry list with assigned priorities
+        let mut candidate_entries: Vec<ContextEntry> = Vec::new();
         while let Some(entry) = heap.pop() {
-            if total_tokens + entry.chunk.token_count > token_budget {
-                // Try to fit -- if this single chunk exceeds remaining budget, skip it
-                continue;
-            }
-            total_tokens += entry.chunk.token_count;
-            entries.push(ContextEntry {
+            let is_test = matches!(entry.chunk.kind, crate::types::ChunkKind::Test);
+            let priority = crate::types::ChunkPriority::from_score_and_context(
+                entry.score, false, // no active file info available here
+                is_test, entry.is_neighbor,
+            );
+            candidate_entries.push(ContextEntry {
                 file_path: entry.file_path,
                 chunk: entry.chunk,
                 score: entry.score,
                 is_graph_neighbor: entry.is_neighbor,
-                priority: None, // Priority not used in this legacy path
+                priority: Some(priority),
+                shadow_header: None,
             });
         }
 
-        ContextWindow {
-            entries,
-            total_tokens,
-            token_budget,
-        }
+        // Sort by priority (highest first), then by score
+        candidate_entries.sort_by(|a, b| {
+            let a_p = a.priority.unwrap_or(crate::types::ChunkPriority::Low);
+            let b_p = b.priority.unwrap_or(crate::types::ChunkPriority::Low);
+            b_p.cmp(&a_p).then_with(|| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+        });
+
+        // Delegate to ContextAssembler's knapsack DP packer
+        let assembler = context_assembler::ContextAssembler::new(token_budget);
+        assembler.pack_entries_with_strategy(candidate_entries, &strategy, token_budget)
     }
 }
 
@@ -1030,7 +1541,7 @@ mod tests {
         let keyword = vec![(1, -0.5), (2, -0.3), (3, -0.1)]; // chunk_id, bm25
         let semantic = vec![(2, 0.9), (1, 0.8), (4, 0.7)]; // vector_id, similarity
 
-        let fused = engine.fuse_results(&keyword, &semantic, &[], QueryType::Keyword);
+        let fused = engine.fuse_results("test query", &keyword, &semantic, &[], QueryType::Keyword);
 
         assert!(!fused.is_empty());
 
@@ -1050,7 +1561,7 @@ mod tests {
     #[test]
     fn test_fuse_results_empty() {
         let engine = SearchEngine::new(60, 4000);
-        let fused = engine.fuse_results(&[], &[], &[], QueryType::Keyword);
+        let fused = engine.fuse_results("", &[], &[], &[], QueryType::Keyword);
         assert!(fused.is_empty());
     }
 
@@ -1061,7 +1572,7 @@ mod tests {
         let keyword = vec![(1, -0.5), (2, -0.3)];
         let symbol = vec![2_i64]; // chunk_id 2 is an exact symbol match
 
-        let fused = engine.fuse_results(&keyword, &[], &symbol, QueryType::Symbol);
+        let fused = engine.fuse_results("Config", &keyword, &[], &symbol, QueryType::Symbol);
 
         let chunk2 = fused.iter().find(|s| s.chunk_id == 2);
         let chunk1 = fused.iter().find(|s| s.chunk_id == 1);
@@ -1150,5 +1661,161 @@ mod tests {
     fn test_expand_query_preserves_original() {
         let expanded = expand_query("processFileHash");
         assert!(expanded.contains("processFileHash"), "should keep original");
+    }
+
+    // -----------------------------------------------------------------------
+    // Temporal freshness scoring tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_freshness_empty() {
+        let scores = SearchEngine::compute_freshness_from_timestamps(&[], 168.0);
+        assert!(scores.is_empty());
+    }
+
+    #[test]
+    fn test_freshness_single_file_gets_1() {
+        let timestamps = vec![(1, "2025-06-15 10:00:00".to_string())];
+        let scores = SearchEngine::compute_freshness_from_timestamps(&timestamps, 168.0);
+        assert_eq!(scores.len(), 1);
+        // Single file is the "newest" → age = 0 → freshness = 1.0
+        assert!((scores[&1] - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_freshness_newer_file_scores_higher() {
+        let timestamps = vec![
+            (1, "2025-06-01 10:00:00".to_string()), // older
+            (2, "2025-06-15 10:00:00".to_string()), // newer
+        ];
+        let scores = SearchEngine::compute_freshness_from_timestamps(&timestamps, 168.0);
+        assert!(
+            scores[&2] > scores[&1],
+            "newer file ({:.3}) should score higher than older file ({:.3})",
+            scores[&2],
+            scores[&1]
+        );
+        // The newest file should be 1.0
+        assert!((scores[&2] - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_freshness_half_life_decay() {
+        // Two files: one is exactly half_life_hours apart from the other
+        // half_life = 168 hours = 7 days. 7 days ≈ 7*24 = 168 hours
+        let timestamps = vec![
+            (1, "2025-06-08 10:00:00".to_string()), // 7 days before
+            (2, "2025-06-15 10:00:00".to_string()), // reference point
+        ];
+        let scores = SearchEngine::compute_freshness_from_timestamps(&timestamps, 168.0);
+        // File 1 is ~7 days old → freshness ≈ 0.5
+        assert!(
+            (scores[&1] - 0.5).abs() < 0.1,
+            "file 7 days old should have freshness ~0.5, got {:.3}",
+            scores[&1]
+        );
+    }
+
+    #[test]
+    fn test_freshness_all_same_timestamp() {
+        let timestamps = vec![
+            (1, "2025-06-15 10:00:00".to_string()),
+            (2, "2025-06-15 10:00:00".to_string()),
+            (3, "2025-06-15 10:00:00".to_string()),
+        ];
+        let scores = SearchEngine::compute_freshness_from_timestamps(&timestamps, 168.0);
+        // All same age → all should be 1.0
+        for &id in &[1i64, 2, 3] {
+            assert!(
+                (scores[&id] - 1.0).abs() < 0.01,
+                "all same timestamp should give 1.0, got {:.3}",
+                scores[&id]
+            );
+        }
+    }
+
+    #[test]
+    fn test_freshness_scores_range() {
+        let timestamps = vec![
+            (1, "2020-01-01 00:00:00".to_string()), // very old
+            (2, "2025-06-15 10:00:00".to_string()), // recent
+        ];
+        let scores = SearchEngine::compute_freshness_from_timestamps(&timestamps, 168.0);
+        // All scores should be in [0, 1]
+        for &s in scores.values() {
+            assert!(s >= 0.0 && s <= 1.0, "score {s} out of [0,1] range");
+        }
+        // Very old file should be close to 0
+        assert!(scores[&1] < 0.01, "5-year-old file should be ~0.0");
+    }
+
+    #[test]
+    fn test_parse_sqlite_datetime() {
+        let epoch = SearchEngine::parse_sqlite_datetime("2025-06-15 10:30:45");
+        assert!(epoch > 0.0, "should parse to positive epoch");
+
+        let epoch2 = SearchEngine::parse_sqlite_datetime("2025-06-15 11:30:45");
+        // One hour later should be ~3600 seconds more
+        assert!((epoch2 - epoch - 3600.0).abs() < 1.0);
+    }
+
+    #[test]
+    fn test_freshness_set_and_get() {
+        let engine = SearchEngine::new(60, 4000);
+        assert_eq!(engine.file_freshness(1), 0.0);
+
+        let mut scores = std::collections::HashMap::new();
+        scores.insert(1, 0.75);
+        scores.insert(2, 0.3);
+        engine.set_freshness_scores(scores);
+
+        assert!((engine.file_freshness(1) - 0.75).abs() < 0.001);
+        assert!((engine.file_freshness(2) - 0.3).abs() < 0.001);
+        assert_eq!(engine.file_freshness(999), 0.0); // unknown file
+    }
+
+    // -----------------------------------------------------------------------
+    // Branch-aware retrieval boost tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_branch_changed_empty_by_default() {
+        let engine = SearchEngine::new(60, 4000);
+        assert!(!engine.is_branch_changed(1));
+        assert!(!engine.is_branch_changed(999));
+    }
+
+    #[test]
+    fn test_branch_changed_set_and_check() {
+        let engine = SearchEngine::new(60, 4000);
+
+        let mut ids = std::collections::HashSet::new();
+        ids.insert(10);
+        ids.insert(20);
+        ids.insert(30);
+        engine.set_branch_changed_files(ids);
+
+        assert!(engine.is_branch_changed(10));
+        assert!(engine.is_branch_changed(20));
+        assert!(engine.is_branch_changed(30));
+        assert!(!engine.is_branch_changed(1));
+        assert!(!engine.is_branch_changed(999));
+    }
+
+    #[test]
+    fn test_branch_changed_can_be_updated() {
+        let engine = SearchEngine::new(60, 4000);
+
+        let mut ids = std::collections::HashSet::new();
+        ids.insert(1);
+        engine.set_branch_changed_files(ids);
+        assert!(engine.is_branch_changed(1));
+
+        // Replace with different set
+        let mut ids2 = std::collections::HashSet::new();
+        ids2.insert(2);
+        engine.set_branch_changed_files(ids2);
+        assert!(!engine.is_branch_changed(1)); // old file no longer marked
+        assert!(engine.is_branch_changed(2)); // new file is marked
     }
 }

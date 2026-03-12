@@ -100,6 +100,7 @@ pub mod watcher;
 pub mod branch_diff;
 pub mod commits;
 pub mod patterns;
+pub mod plan_auditor;
 pub mod workspace;
 
 // Service Layer
@@ -108,5 +109,9 @@ pub mod server;
 pub use config::normalize_repo_hash;
 pub use config::Config;
 pub use error::OmniError;
+/// Re-export cross-file data flow extraction types.
+pub use graph::data_flow::{DataFlowEdge, DataFlowExtractor, FlowInference};
+/// Re-export the semantic reasoning engine types for Graph-Augmented Retrieval (GAR).
+pub use graph::reasoning::{EdgeWeights, ReasoningEngine, ReasoningHit};
 /// Re-export the primary engine interface.
 pub use pipeline::{Engine, FileProcessStats, RetryEmbeddingResult};

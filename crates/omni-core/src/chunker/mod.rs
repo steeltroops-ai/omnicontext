@@ -13,6 +13,7 @@
 //! 5. 10-15% token overlap at boundaries for context continuity
 //! 6. Each chunk preserves the parent signature as a header for context
 
+pub mod contextual;
 pub mod token_counter;
 
 use crate::config::Config;

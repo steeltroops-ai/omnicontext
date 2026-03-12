@@ -60,17 +60,15 @@ pub struct Embedder {
     config: EmbeddingConfig,
     /// The ONNX runtime session. None if model couldn't be loaded.
     /// Stored in a Mutex because Session::run requires &mut self.
-    /// Used for single-session mode (pool_size=1 or pool unavailable).
     session: Option<std::sync::Mutex<Session>>,
     /// Tokenizer for the embedding model. None if tokenizer couldn't be loaded.
     tokenizer: Option<tokenizers::Tokenizer>,
     /// Model fingerprint for staleness detection.
-    /// Format: "{model_name}:{dimensions}:{max_seq_length}".
-    /// Used to detect when vectors were produced by a different model.
     model_fingerprint: String,
     /// Optional session pool for parallel inference (pool_size > 1).
-    /// When available, `embed_batch_parallel` uses this instead of the single session.
     pool: Option<session_pool::SessionPool>,
+    /// Path to the ONNX model file, retained for session recreation.
+    model_path: Option<std::path::PathBuf>,
 }
 
 impl Embedder {
@@ -90,52 +88,23 @@ impl Embedder {
                 tokenizer: None,
                 model_fingerprint: format!("skip:{}:{}", config.dimensions, config.max_seq_length,),
                 pool: None,
+                model_path: None,
             });
         }
 
         // Resolve model spec and auto-download if needed
         let (model_path, tokenizer_path) = Self::resolve_model_files(config)?;
 
-        // Try to load the ONNX model
+        // Try to load the ONNX model.
+        // All errors here are caught and result in `None` (degraded mode),
+        // NOT propagated via `?`. The embedder must never prevent Engine startup.
         let session = if model_path.exists() {
-            match Session::builder() {
-                Ok(mut builder) => match builder.commit_from_file(&model_path) {
-                    Ok(session) => {
-                        tracing::info!(
-                            model = %model_path.display(),
-                            "loaded ONNX embedding model successfully"
-                        );
-                        Some(std::sync::Mutex::new(session))
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            model = %model_path.display(),
-                            error = %e,
-                            "CRITICAL: Failed to load embedding model. \
-                             Model file may be corrupt. \
-                             Delete {} and re-run to re-download. \
-                             Semantic search is DISABLED. Operating in keyword-only mode.",
-                            model_path.display()
-                        );
-                        None
-                    }
-                },
-                Err(e) => {
-                    tracing::error!(
-                        error = %e,
-                        "CRITICAL: Failed to create ONNX session builder. \
-                         ONNX Runtime may not be installed correctly. \
-                         Semantic search is DISABLED. Operating in keyword-only mode."
-                    );
-                    None
-                }
-            }
+            tracing::info!("building primary ONNX session");
+            Self::build_onnx_session(&model_path)
         } else {
             tracing::error!(
                 model = %model_path.display(),
-                "CRITICAL: Embedding model not found after download attempt. \
-                 Check internet connection and disk space. \
-                 Semantic search is DISABLED. Operating in keyword-only mode."
+                "CRITICAL: Embedding model not found. Semantic search is DISABLED."
             );
             None
         };
@@ -157,23 +126,9 @@ impl Embedder {
             None
         };
 
-        // Try to create a session pool for parallel inference
-        let pool = if session.is_some() {
-            let pool_size = session_pool::optimal_pool_size(4);
-            if pool_size > 1 {
-                match session_pool::SessionPool::new(&model_path, pool_size - 1) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        tracing::warn!(error = %e, "session pool creation failed, using single session");
-                        None
-                    }
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        // Session pool disabled: on 16GB systems, each extra ONNX session
+        // duplicates the ~641MB model in memory, causing OOM during inference.
+        let pool: Option<session_pool::SessionPool> = None;
 
         Ok(Self {
             config: config.clone(),
@@ -190,7 +145,97 @@ impl Embedder {
                 config.max_seq_length,
             ),
             pool,
+            model_path: Some(model_path),
         })
+    }
+
+    /// Build an ONNX session from a model file.
+    ///
+    /// Returns `None` on any failure (degraded mode). Never panics or propagates errors.
+    /// This ensures the embedder always initializes, even if ONNX Runtime has problems.
+    /// Uses `catch_unwind` to guard against native ONNX Runtime crashes.
+    fn build_onnx_session(model_path: &std::path::Path) -> Option<std::sync::Mutex<Session>> {
+        let path = model_path.to_path_buf();
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            Self::build_onnx_session_inner(&path)
+        })) {
+            Ok(result) => result,
+            Err(panic_info) => {
+                let msg = if let Some(s) = panic_info.downcast_ref::<String>() {
+                    s.clone()
+                } else if let Some(s) = panic_info.downcast_ref::<&str>() {
+                    (*s).to_string()
+                } else {
+                    "unknown panic".to_string()
+                };
+                tracing::error!(
+                    panic = %msg,
+                    "ONNX Runtime panicked during session creation. \
+                     Semantic search is DISABLED. Operating in keyword-only mode."
+                );
+                None
+            }
+        }
+    }
+
+    /// Inner session builder (separated for catch_unwind).
+    fn build_onnx_session_inner(model_path: &std::path::Path) -> Option<std::sync::Mutex<Session>> {
+        tracing::info!("creating ONNX session builder...");
+        let builder = match Session::builder() {
+            Ok(b) => {
+                tracing::info!("ONNX session builder created");
+                b
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "failed to create ONNX session builder");
+                return None;
+            }
+        };
+
+        tracing::info!("setting optimization level...");
+        let builder = match builder
+            .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level1)
+        {
+            Ok(b) => {
+                tracing::info!("optimization level set");
+                b
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "failed to set ONNX optimization level");
+                return None;
+            }
+        };
+
+        tracing::info!("setting execution providers...");
+        let mut builder = match builder.with_execution_providers([
+            ort::execution_providers::CPUExecutionProvider::default().build(),
+        ]) {
+            Ok(b) => {
+                tracing::info!("execution providers set");
+                b
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "failed to set ONNX execution providers");
+                return None;
+            }
+        };
+
+        tracing::info!(path = %model_path.display(), "committing primary session from file...");
+        match builder.commit_from_file(model_path) {
+            Ok(session) => {
+                tracing::info!("primary ONNX session loaded successfully");
+                Some(std::sync::Mutex::new(session))
+            }
+            Err(e) => {
+                tracing::error!(
+                    path = %model_path.display(),
+                    error = %e,
+                    "CRITICAL: Failed to load embedding model. \
+                     Model file may be corrupt. Semantic search is DISABLED."
+                );
+                None
+            }
+        }
     }
 
     /// Resolve model file paths, auto-downloading if needed.
@@ -330,12 +375,30 @@ impl Embedder {
             tokenizer: None,
             model_fingerprint: format!("degraded:{}:{}", config.dimensions, config.max_seq_length,),
             pool: None,
+            model_path: None,
         }
     }
 
     /// Whether the embedding model is loaded and operational.
     pub fn is_available(&self) -> bool {
         self.session.is_some()
+    }
+
+    /// Drop the current ONNX session and create a fresh one from disk.
+    /// This releases the accumulated ONNX Runtime arena memory.
+    pub fn reset_session(&mut self) {
+        if let Some(path) = &self.model_path {
+            let path = path.clone();
+            // Drop old session first to free memory
+            self.session = None;
+            tracing::info!("reset_session: old session dropped, rebuilding...");
+            self.session = Self::build_onnx_session_inner(&path);
+            if self.session.is_some() {
+                tracing::info!("reset_session: fresh session ready");
+            } else {
+                tracing::error!("reset_session: failed to rebuild session");
+            }
+        }
     }
 
     /// Number of ONNX sessions available (1 primary + pool).
@@ -682,11 +745,12 @@ impl Embedder {
         let batch_size = texts.len();
         let max_len = self.config.max_seq_length;
 
-        // Tokenize
-        let (input_ids, attention_mask, token_type_ids) = self.tokenize_batch(texts, max_len)?;
+        // Tokenize with dynamic padding (pads to actual max length in batch, not max_seq_length)
+        let (input_ids, attention_mask, token_type_ids, pad_len) =
+            self.tokenize_batch(texts, max_len)?;
 
-        // Create ort tensors using (shape, data) tuple API
-        let shape = vec![batch_size as i64, max_len as i64];
+        // Create ort tensors using the dynamic pad length
+        let shape = vec![batch_size as i64, pad_len as i64];
 
         let ids_value = ort::value::Tensor::from_array((shape.clone(), input_ids))
             .map_err(|e| OmniError::Internal(format!("ONNX tensor error: {e}")))?;
@@ -757,7 +821,7 @@ impl Embedder {
                 let mut mask_sum = 0.0f32;
 
                 for s in 0..seq_len {
-                    let mask_val = attention_mask[b * max_len + s] as f32;
+                    let mask_val = attention_mask[b * pad_len + s] as f32;
                     mask_sum += mask_val;
                     let offset = b * seq_len * hidden_dim + s * hidden_dim;
                     for d in 0..hidden_dim {
@@ -798,29 +862,28 @@ impl Embedder {
     /// - Catching encoding failures
     /// - Providing detailed error context
     /// - Ensuring consistent output dimensions
+    ///
+    /// Returns `(input_ids, attention_mask, token_type_ids, actual_padded_length)`.
+    /// Uses dynamic padding: pads to the longest sequence in the batch (capped at max_len)
+    /// instead of always padding to max_len, significantly reducing memory usage.
+    #[allow(clippy::type_complexity)]
     fn tokenize_batch(
         &self,
         texts: &[&str],
         max_len: usize,
-    ) -> OmniResult<(Vec<i64>, Vec<i64>, Vec<i64>)> {
+    ) -> OmniResult<(Vec<i64>, Vec<i64>, Vec<i64>, usize)> {
         let tokenizer = self
             .tokenizer
             .as_ref()
             .ok_or_else(|| OmniError::Internal("tokenizer not loaded".into()))?;
 
-        let mut all_input_ids = Vec::with_capacity(texts.len() * max_len);
-        let mut all_attention_mask = Vec::with_capacity(texts.len() * max_len);
-        let mut all_token_type_ids = Vec::with_capacity(texts.len() * max_len);
+        // First pass: tokenize all texts and find the actual max length in this batch
+        let mut encodings: Vec<Option<tokenizers::Encoding>> = Vec::with_capacity(texts.len());
+        let mut batch_max_len: usize = 1; // at least 1 to avoid zero-dim tensors
 
         for (idx, text) in texts.iter().enumerate() {
-            // Handle empty text
             if text.trim().is_empty() {
-                // Add padding for empty text
-                for _ in 0..max_len {
-                    all_input_ids.push(0);
-                    all_attention_mask.push(0);
-                    all_token_type_ids.push(0);
-                }
+                encodings.push(None);
                 continue;
             }
 
@@ -834,28 +897,49 @@ impl Embedder {
                 ))
             })?;
 
-            let ids = encoding.get_ids();
-            let mask = encoding.get_attention_mask();
-            let type_ids = encoding.get_type_ids();
+            let token_len = encoding.get_ids().len().min(max_len);
+            batch_max_len = batch_max_len.max(token_len);
+            encodings.push(Some(encoding));
+        }
 
-            let actual_len = ids.len().min(max_len);
+        let pad_len = batch_max_len; // dynamic: pad to actual max in batch, not max_len
 
-            // Copy tokens up to max_len
-            for i in 0..actual_len {
-                all_input_ids.push(ids[i] as i64);
-                all_attention_mask.push(mask[i] as i64);
-                all_token_type_ids.push(type_ids[i] as i64);
-            }
+        let mut all_input_ids = Vec::with_capacity(texts.len() * pad_len);
+        let mut all_attention_mask = Vec::with_capacity(texts.len() * pad_len);
+        let mut all_token_type_ids = Vec::with_capacity(texts.len() * pad_len);
 
-            // Pad to max_len
-            for _ in actual_len..max_len {
-                all_input_ids.push(0);
-                all_attention_mask.push(0);
-                all_token_type_ids.push(0);
+        // Second pass: build padded arrays using the dynamic pad length
+        for encoding in &encodings {
+            match encoding {
+                None => {
+                    // Empty text: all zeros
+                    all_input_ids.extend(std::iter::repeat(0i64).take(pad_len));
+                    all_attention_mask.extend(std::iter::repeat(0i64).take(pad_len));
+                    all_token_type_ids.extend(std::iter::repeat(0i64).take(pad_len));
+                }
+                Some(enc) => {
+                    let ids = enc.get_ids();
+                    let mask = enc.get_attention_mask();
+                    let type_ids = enc.get_type_ids();
+                    let actual_len = ids.len().min(pad_len);
+
+                    for i in 0..actual_len {
+                        all_input_ids.push(ids[i] as i64);
+                        all_attention_mask.push(mask[i] as i64);
+                        all_token_type_ids.push(type_ids[i] as i64);
+                    }
+                    for _ in actual_len..pad_len {
+                        all_input_ids.push(0);
+                        all_attention_mask.push(0);
+                        all_token_type_ids.push(0);
+                    }
+                }
             }
         }
 
-        Ok((all_input_ids, all_attention_mask, all_token_type_ids))
+        Ok((
+            all_input_ids, all_attention_mask, all_token_type_ids, pad_len,
+        ))
     }
 }
 

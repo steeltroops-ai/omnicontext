@@ -36,6 +36,8 @@ use crate::config::Config;
 use crate::embedder::Embedder;
 use crate::error::{OmniError, OmniResult};
 use crate::graph::dependencies::FileDependencyGraph;
+use crate::graph::historical::HistoricalGraphEnhancer;
+use crate::graph::reasoning::ReasoningEngine;
 use crate::graph::DependencyGraph;
 use crate::index::MetadataIndex;
 use crate::parser;
@@ -87,6 +89,8 @@ pub struct Engine {
     vector_breaker: CircuitBreaker,
     /// Commit history engine for git analysis.
     commit_engine: CommitEngine,
+    /// Semantic reasoning engine for Graph-Augmented Retrieval (GAR).
+    reasoning_engine: ReasoningEngine,
 }
 
 impl Engine {
@@ -188,6 +192,9 @@ impl Engine {
         // Initialize commit engine (max 10,000 commits)
         let commit_engine = CommitEngine::new(10_000);
 
+        // Initialize semantic reasoning engine for GAR
+        let reasoning_engine = ReasoningEngine::default();
+
         let mut engine = Self {
             config,
             index,
@@ -206,6 +213,7 @@ impl Engine {
             index_breaker,
             vector_breaker,
             commit_engine,
+            reasoning_engine,
         };
 
         // Load dependency graph from SQLite index
@@ -257,6 +265,65 @@ impl Engine {
             "dependency graph loaded"
         );
 
+        // Compute PageRank percentiles and wire into search engine
+        if self.dep_graph.node_count() > 0 {
+            let pr_scores = self.dep_graph.compute_pagerank_percentiles(0.85, 30);
+            let pr_count = pr_scores.len();
+            self.search_engine.set_pagerank_scores(pr_scores);
+            if pr_count > 0 {
+                tracing::info!(
+                    symbols = pr_count,
+                    "PageRank percentiles computed and loaded"
+                );
+            }
+        }
+
+        // Compute temporal freshness scores from file indexed_at timestamps.
+        // Uses exponential decay with a 7-day half-life so recently modified
+        // files surface higher in search results.
+        if let Ok(timestamps) = self.index.get_file_freshness() {
+            if !timestamps.is_empty() {
+                let freshness = crate::search::SearchEngine::compute_freshness_from_timestamps(
+                    &timestamps, 168.0, // 7 days half-life
+                );
+                let count = freshness.len();
+                self.search_engine.set_freshness_scores(freshness);
+                tracing::info!(
+                    files = count,
+                    "temporal freshness scores computed and loaded"
+                );
+            }
+        }
+
+        // Compute branch-aware file set: resolve git branch-changed paths
+        // to file IDs so the search engine can boost files in the current branch.
+        match self.branch_tracker.get_branch_changed_files() {
+            Ok(changed_paths) if !changed_paths.is_empty() => {
+                let mut branch_file_ids = std::collections::HashSet::new();
+                for rel_path in &changed_paths {
+                    let path = std::path::Path::new(rel_path);
+                    if let Ok(Some(file_info)) = self.index.get_file_by_path(path) {
+                        branch_file_ids.insert(file_info.id);
+                    }
+                }
+                let count = branch_file_ids.len();
+                self.search_engine.set_branch_changed_files(branch_file_ids);
+                if count > 0 {
+                    tracing::info!(
+                        files = count,
+                        total_changed = changed_paths.len(),
+                        "branch-changed file IDs loaded for retrieval boost"
+                    );
+                }
+            }
+            Ok(_) => {
+                tracing::debug!("no branch-changed files detected (on default branch)");
+            }
+            Err(e) => {
+                tracing::debug!(error = %e, "branch tracker unavailable, skipping branch boost");
+            }
+        }
+
         Ok(edge_count)
     }
 
@@ -265,7 +332,7 @@ impl Engine {
     /// 1. Performs a full directory scan
     /// 2. Processes each discovered file (parse -> chunk -> embed -> store)
     /// 3. Saves the vector index to disk
-    pub async fn run_index(&mut self) -> OmniResult<IndexResult> {
+    pub async fn run_index(&mut self, force: bool) -> OmniResult<IndexResult> {
         let repo_path = self.config.repo_path.clone();
         let (tx, mut rx) = mpsc::channel::<PipelineEvent>(1024);
 
@@ -283,6 +350,11 @@ impl Engine {
 
         // Close our sender side so the receiver will drain when the scanner finishes
         drop(tx);
+
+        if force {
+            tracing::info!("force reindex requested; clearing existing index state first");
+            self.clear_index()?;
+        }
 
         let mut result = IndexResult::default();
         let mut pending_embeddings = Vec::with_capacity(512);
@@ -307,7 +379,7 @@ impl Engine {
                         }
                     }
 
-                    if pending_embeddings.len() >= 1024 {
+                    if pending_embeddings.len() >= 80 {
                         if let Err(e) = self.flush_pending_embeddings(
                             &mut pending_embeddings,
                             &mut result.embeddings_generated,
@@ -345,6 +417,52 @@ impl Engine {
             result.embedding_failures += 1;
         }
 
+        // Automatic recovery pass: if chunks remain without vectors, retry once.
+        // This avoids returning a "successful" index with silently missing embeddings.
+        if self.embedder.is_available() {
+            match self.index.get_chunks_without_vectors() {
+                Ok(chunks_without_vectors) if !chunks_without_vectors.is_empty() => {
+                    let missing = chunks_without_vectors.len();
+                    tracing::warn!(
+                        missing,
+                        "detected chunks without embeddings after primary pass; starting automatic recovery"
+                    );
+
+                    match self.retry_failed_embeddings() {
+                        Ok(retry) => {
+                            result.embeddings_generated += retry.successful;
+                            if retry.failed > 0 {
+                                result.embedding_failures += retry.failed;
+                                tracing::warn!(
+                                    attempted = retry.total_attempted,
+                                    successful = retry.successful,
+                                    failed = retry.failed,
+                                    "automatic embedding recovery left missing vectors"
+                                );
+                            } else {
+                                tracing::info!(
+                                    attempted = retry.total_attempted,
+                                    successful = retry.successful,
+                                    "automatic embedding recovery completed"
+                                );
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!(error = %e, "automatic embedding recovery failed");
+                            result.embedding_failures += 1;
+                        }
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "failed to inspect chunks without vectors after indexing"
+                    );
+                }
+            }
+        }
+
         // Persist vector index to disk
         if let Err(e) = self.vector_index.save() {
             tracing::warn!(error = %e, "failed to persist vector index");
@@ -353,6 +471,69 @@ impl Engine {
         // Persist hash cache to disk
         if let Err(e) = self.hash_cache.save() {
             tracing::warn!(error = %e, "failed to persist hash cache");
+        }
+
+        // Historical graph enhancement: index commit history and enhance
+        // the file dependency graph with co-change edges.
+        if let Ok(count) = self.index_commit_history() {
+            tracing::info!(commits = count, "indexed commit history");
+        }
+        // Build a temporary MetadataIndex for the enhancer (needs its own connection)
+        if let Ok(enhancer_index) = MetadataIndex::open(&self.config.data_dir().join("index.db")) {
+            let mut enhancer = HistoricalGraphEnhancer::new(enhancer_index);
+            if let Ok(stats) = enhancer.analyze_history(1000) {
+                tracing::info!(
+                    commits_analyzed = stats.commits_analyzed,
+                    co_change_pairs = stats.co_change_pairs,
+                    bug_fixes = stats.bug_fixes_found,
+                    "analyzed commit history"
+                );
+                if let Ok(enhancement) = enhancer.enhance_graph(&mut self.file_dep_graph) {
+                    tracing::info!(
+                        edges_added = enhancement.edges_added,
+                        nodes_boosted = enhancement.nodes_boosted,
+                        "enhanced graph with historical data"
+                    );
+
+                    // Bridge historical co-change edges into symbol-level DependencyGraph.
+                    // For each co-change file pair, find representative symbols and create
+                    // HistoricalCoChange edges so GAR can traverse them.
+                    let co_change_symbol_edges = self.bridge_historical_to_symbol_graph(&enhancer);
+                    if co_change_symbol_edges > 0 {
+                        tracing::info!(
+                            edges = co_change_symbol_edges,
+                            "bridged historical co-change edges into symbol graph"
+                        );
+                    }
+                }
+
+                // Wire bug-prone file boost factors into the search engine.
+                // Resolve file paths to file_ids and compute boost factors
+                // (1.0 + bug_count/10, capped at 2.0).
+                let bug_prone = enhancer.find_bug_prone_files(2); // threshold: 2+ bug fixes
+                if !bug_prone.is_empty() {
+                    let mut boosts = std::collections::HashMap::new();
+                    for (file_path, bug_count) in &bug_prone {
+                        let conn = self.index.connection();
+                        if let Ok(file_id) = conn.query_row(
+                            "SELECT id FROM files WHERE path = ?1",
+                            rusqlite::params![file_path.to_string_lossy().as_ref()],
+                            |row| row.get::<_, i64>(0),
+                        ) {
+                            #[allow(clippy::cast_precision_loss)]
+                            let boost_factor = (1.0 + (*bug_count as f32 / 10.0)).min(2.0);
+                            boosts.insert(file_id, boost_factor);
+                        }
+                    }
+                    if !boosts.is_empty() {
+                        tracing::info!(
+                            files = boosts.len(),
+                            "wired bug-prone file boosts into search engine"
+                        );
+                        self.search_engine.set_bug_prone_boosts(boosts);
+                    }
+                }
+            }
         }
 
         // Calculate embedding coverage
@@ -399,6 +580,7 @@ impl Engine {
         pending_embeddings: &mut Vec<(i64, String)>,
     ) -> OmniResult<FileProcessStats> {
         let mut stats = FileProcessStats::default();
+        tracing::info!("Starting to process file: {}", path.display());
 
         // Read file content
         let content = std::fs::read_to_string(path)
@@ -490,6 +672,31 @@ impl Engine {
 
         stats.chunks = chunks.len();
         stats.symbols = symbols.len();
+
+        // ---------------------------------------------------------------
+        // Incremental graph update: remove stale edges from the in-memory
+        // dependency graph BEFORE the SQLite reindex deletes old symbol rows.
+        // We read old symbol IDs first, strip their edges from petgraph, then
+        // proceed with the atomic SQLite reindex which inserts fresh symbols.
+        // ---------------------------------------------------------------
+        {
+            let old_symbols = self
+                .index
+                .get_all_symbols_for_file(file_id)
+                .unwrap_or_default();
+            if !old_symbols.is_empty() {
+                let old_ids: Vec<i64> = old_symbols.iter().map(|s| s.id).collect();
+                let removed = self.dep_graph.remove_edges_for_symbols(&old_ids);
+                if removed > 0 {
+                    tracing::debug!(
+                        file_id = file_id,
+                        symbols = old_ids.len(),
+                        edges_removed = removed,
+                        "stripped stale edges from in-memory graph before reindex"
+                    );
+                }
+            }
+        }
 
         // Atomic reindex: delete old chunks/symbols, insert new
         let (_fid, chunk_ids) = self
@@ -651,7 +858,36 @@ impl Engine {
                 tracing::trace!(error = %e, "failed to insert type edge");
             }
         }
-        // Let's reuse call_edges stat or add a new one? No, we'll just track it via the graph size later.
+
+        // ---------------------------------------------------------------
+        // Step 9: Extract cross-file data flow edges
+        // ---------------------------------------------------------------
+        let flow_extractor = crate::graph::data_flow::DataFlowExtractor::new();
+        match flow_extractor.extract_flows_for_file(&self.index, file_id, &self.dep_graph) {
+            Ok(flows) if !flows.is_empty() => {
+                let flow_edges =
+                    crate::graph::data_flow::DataFlowExtractor::to_dependency_edges(&flows);
+                let mut flow_count = 0;
+                for edge in &flow_edges {
+                    if let Err(e) = self.index.insert_dependency(edge) {
+                        tracing::trace!(error = %e, "failed to insert data flow edge");
+                    }
+                    let _ = self.dep_graph.add_edge(edge);
+                    flow_count += 1;
+                }
+                if flow_count > 0 {
+                    tracing::debug!(
+                        path = %path.display(),
+                        flow_edges = flow_count,
+                        "data flow edges extracted"
+                    );
+                }
+            }
+            Ok(_) => {} // No flows found
+            Err(e) => {
+                tracing::trace!(error = %e, "data flow extraction failed");
+            }
+        }
 
         tracing::debug!(
             path = %path.display(),
@@ -704,8 +940,10 @@ impl Engine {
                     &self.vector_index,
                     &self.embedder,
                     Some(&self.dep_graph),
+                    Some(&self.reasoning_engine),
                     Some(&self.reranker),
                     reranker_config.as_ref(),
+                    &[], // no open files in pipeline search
                 )
             })
             .map_err(|e| match e {
@@ -740,15 +978,133 @@ impl Engine {
         token_budget: Option<u32>,
         min_rerank_score: Option<f32>,
     ) -> OmniResult<crate::types::ContextWindow> {
-        let results = self.search_with_rerank_threshold(query, limit, min_rerank_score)?;
+        let reranker_config = if let Some(threshold) = min_rerank_score {
+            let mut cfg = self.config.search.reranker.clone();
+            cfg.unranked_demotion = threshold as f64;
+            Some(cfg)
+        } else {
+            Some(self.config.search.reranker.clone())
+        };
+
+        // Use search_with_gar to get both results AND GAR neighbor map in a single pass.
+        // This eliminates the dual graph walk that previously happened in both
+        // search() and assemble_context_window().
+        let (results, gar_neighbors) = self
+            .index_breaker
+            .call_sync(|| {
+                self.search_engine.search_with_gar(
+                    query,
+                    limit,
+                    &self.index,
+                    &self.vector_index,
+                    &self.embedder,
+                    Some(&self.dep_graph),
+                    Some(&self.reasoning_engine),
+                    Some(&self.reranker),
+                    reranker_config.as_ref(),
+                    &[], // open_files passed via dedicated API when available
+                )
+            })
+            .map_err(|e| match e {
+                CircuitBreakerError::Open => OmniError::Internal(
+                    "search circuit breaker is open — too many recent failures".into(),
+                ),
+                CircuitBreakerError::OperationFailed(inner) => inner,
+            })?;
+
         let budget = token_budget.unwrap_or(self.config.search.token_budget);
-        let ctx = self.search_engine.assemble_context_window(
+        let mut ctx = self.search_engine.assemble_context_window(
             &results,
             &self.index,
             Some(&self.dep_graph),
+            &gar_neighbors,
             budget,
         );
+        // Enrich with shadow headers when enabled
+        if self.config.search.shadow_headers {
+            self.enrich_shadow_headers(&mut ctx);
+        }
         Ok(ctx)
+    }
+
+    /// Enrich a context window with architectural shadow headers.
+    ///
+    /// Each entry gets a header like:
+    /// ```text
+    /// // [OmniContext] File: path | Language: lang | Kind: function
+    /// // [OmniContext] Dependents: 5 | Dependencies: 3 | Risk: MEDIUM
+    /// // [OmniContext] Co-changes-with: config.rs, types.rs
+    /// ```
+    pub fn enrich_shadow_headers(&self, ctx: &mut crate::types::ContextWindow) {
+        for entry in &mut ctx.entries {
+            entry.shadow_header = Some(self.compute_shadow_header(entry));
+        }
+    }
+
+    /// Compute a shadow header for a single context entry.
+    fn compute_shadow_header(&self, entry: &crate::types::ContextEntry) -> String {
+        let file_path = entry.file_path.display().to_string();
+        let lang = entry
+            .file_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(crate::types::Language::from_extension)
+            .unwrap_or(crate::types::Language::Unknown);
+        let kind = entry.chunk.kind.as_str();
+
+        // Count downstream (dependents) and upstream (dependencies) for the first symbol
+        let (downstream_count, upstream_count) = if !entry.chunk.symbol_path.is_empty() {
+            if let Ok(Some(sym)) = self.index.get_symbol_by_fqn(&entry.chunk.symbol_path) {
+                let down = self
+                    .dep_graph
+                    .downstream(sym.id, 1)
+                    .map(|v| v.len())
+                    .unwrap_or(0);
+                let up = self
+                    .dep_graph
+                    .upstream(sym.id, 1)
+                    .map(|v| v.len())
+                    .unwrap_or(0);
+                (down, up)
+            } else {
+                (0, 0)
+            }
+        } else {
+            (0, 0)
+        };
+
+        // Risk level based on downstream count
+        let risk = if downstream_count > 20 {
+            "HIGH"
+        } else if downstream_count > 5 {
+            "MEDIUM"
+        } else {
+            "LOW"
+        };
+
+        // Co-change partners (top 3)
+        let co_changes =
+            crate::commits::CommitEngine::co_change_files(&self.index, &file_path, 2, 3)
+                .unwrap_or_default();
+
+        let co_change_str = if co_changes.is_empty() {
+            String::new()
+        } else {
+            let names: Vec<&str> = co_changes.iter().map(|c| c.path.as_str()).collect();
+            format!("\n// [OmniContext] Co-changes-with: {}", names.join(", "))
+        };
+
+        format!(
+            "// [OmniContext] File: {} | Language: {} | Kind: {}\n\
+             // [OmniContext] Dependents: {} | Dependencies: {} | Risk: {}{}",
+            file_path,
+            lang.as_str(),
+            kind,
+            downstream_count,
+            upstream_count,
+            risk,
+            co_change_str,
+        )
     }
 
     /// Get engine status information.
@@ -825,8 +1181,10 @@ impl Engine {
         let mut successful = 0;
         let mut failed = 0;
 
-        // Process in batches for efficiency
-        const BATCH_SIZE: usize = 32;
+        // Process in batches for efficiency.
+        // Keep batch size moderate to limit ONNX arena accumulation per outer loop.
+        const BATCH_SIZE: usize = 20;
+        let mut outer_batch_idx: usize = 0;
         for batch in failed_chunks.chunks(BATCH_SIZE) {
             // Get file info for each chunk to determine language
             let mut texts = Vec::new();
@@ -853,7 +1211,29 @@ impl Engine {
             }
 
             let text_refs: Vec<&str> = texts.iter().map(String::as_str).collect();
-            let embeddings = self.embedder.embed_batch(&text_refs);
+            let embeddings = match self.embedder_breaker.call_sync(|| {
+                let result = self.embedder.embed_batch(&text_refs);
+                let success_count = result.iter().filter(|r| r.is_some()).count();
+                if success_count == 0 && !text_refs.is_empty() {
+                    Err(OmniError::Internal(
+                        "all retry embeddings in batch failed".into(),
+                    ))
+                } else {
+                    Ok(result)
+                }
+            }) {
+                Ok(embs) => embs,
+                Err(CircuitBreakerError::Open) => {
+                    tracing::warn!("embedder circuit breaker open during retry — skipping batch");
+                    failed += texts.len();
+                    continue;
+                }
+                Err(CircuitBreakerError::OperationFailed(e)) => {
+                    tracing::warn!(error = %e, "batch embedding failed during retry");
+                    failed += texts.len();
+                    continue;
+                }
+            };
 
             for (i, maybe_embedding) in embeddings.into_iter().enumerate() {
                 if let Some(embedding) = maybe_embedding {
@@ -864,11 +1244,10 @@ impl Engine {
                                 .call_sync(|| self.vector_index.add(vector_id, &embedding));
                             match add_result {
                                 Err(CircuitBreakerError::Open) => {
-                                    tracing::warn!(
-                                        "vector circuit breaker open, skipping remaining vectors"
-                                    );
-                                    failed += chunk_ids.len() - i;
-                                    break;
+                                    let remaining = chunk_ids.len().saturating_sub(i);
+                                    return Err(OmniError::Internal(format!(
+                                        "vector circuit breaker open during retry; {remaining} embeddings left unprocessed"
+                                    )));
                                 }
                                 Err(CircuitBreakerError::OperationFailed(e)) => {
                                     tracing::warn!(
@@ -896,6 +1275,17 @@ impl Engine {
                     }
                 } else {
                     failed += 1;
+                }
+            }
+
+            // Free ONNX arena memory after each outer batch to prevent accumulation
+            self.embedder.reset_session();
+            outer_batch_idx += 1;
+
+            // Persist vectors every 5 outer batches so progress survives crashes
+            if outer_batch_idx % 5 == 0 {
+                if let Err(e) = self.vector_index.save() {
+                    tracing::warn!(error = %e, "periodic vector save during retry failed");
                 }
             }
         }
@@ -974,6 +1364,160 @@ impl Engine {
         &self.commit_engine
     }
 
+    /// Get a reference to the config.
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
+
+    /// Get a reference to the search engine (for cache stats, invalidation, etc.).
+    pub fn search_engine(&self) -> &SearchEngine {
+        &self.search_engine
+    }
+
+    /// Get a reference to the semantic reasoning engine.
+    pub fn reasoning_engine(&self) -> &ReasoningEngine {
+        &self.reasoning_engine
+    }
+
+    /// Bridge historical co-change file pairs into the symbol-level dependency graph.
+    ///
+    /// For each frequently co-changed file pair `(file_a, file_b)`, resolves a
+    /// representative symbol from each file and creates a `HistoricalCoChange`
+    /// edge in the symbol-level `DependencyGraph`. This allows the GAR reasoning
+    /// engine to traverse historical co-change relationships during BFS walks.
+    #[allow(clippy::similar_names)]
+    fn bridge_historical_to_symbol_graph(&mut self, enhancer: &HistoricalGraphEnhancer) -> usize {
+        let mut edges_added = 0;
+        let co_change_threshold = 3; // minimum commits together
+
+        for (file_a, file_b, _freq) in enhancer.co_change_pairs_above(co_change_threshold) {
+            // Resolve file paths to file_ids
+            let file_a_str = file_a.to_string_lossy();
+            let file_b_str = file_b.to_string_lossy();
+
+            let file_a_id = self.index.connection().query_row(
+                "SELECT id FROM files WHERE path = ?1",
+                rusqlite::params![file_a_str.as_ref()],
+                |row| row.get::<_, i64>(0),
+            );
+            let file_b_id = self.index.connection().query_row(
+                "SELECT id FROM files WHERE path = ?1",
+                rusqlite::params![file_b_str.as_ref()],
+                |row| row.get::<_, i64>(0),
+            );
+
+            if let (Ok(fid_a), Ok(fid_b)) = (file_a_id, file_b_id) {
+                // Get a representative symbol from each file (first module-level symbol)
+                let sym_a = self.index.connection().query_row(
+                    "SELECT id FROM symbols WHERE file_id = ?1 ORDER BY line LIMIT 1",
+                    rusqlite::params![fid_a],
+                    |row| row.get::<_, i64>(0),
+                );
+                let sym_b = self.index.connection().query_row(
+                    "SELECT id FROM symbols WHERE file_id = ?1 ORDER BY line LIMIT 1",
+                    rusqlite::params![fid_b],
+                    |row| row.get::<_, i64>(0),
+                );
+
+                if let (Ok(sid_a), Ok(sid_b)) = (sym_a, sym_b) {
+                    if sid_a != sid_b {
+                        let edge = DependencyEdge {
+                            source_id: sid_a,
+                            target_id: sid_b,
+                            kind: DependencyKind::HistoricalCoChange,
+                        };
+                        if self.dep_graph.add_edge(&edge).is_ok() {
+                            edges_added += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        edges_added
+    }
+
+    /// Generate a CLAUDE.md summary of the indexed repository.
+    ///
+    /// This produces a Markdown document suitable for LLM context priming,
+    /// containing project structure, key modules, and architectural notes.
+    pub fn generate_claude_md(&self) -> OmniResult<String> {
+        let status = self.status()?;
+        let mut out = String::with_capacity(4096);
+
+        let languages: Vec<String> = status
+            .language_distribution
+            .iter()
+            .map(|(lang, count)| format!("{lang} ({count})"))
+            .collect();
+
+        out.push_str("# Project Context (CLAUDE.md)\n\n");
+        out.push_str(&format!("**Repository**: `{}`\n", status.repo_path));
+        out.push_str(&format!("**Files indexed**: {}\n", status.files_indexed));
+        out.push_str(&format!("**Symbols**: {}\n", status.symbols_indexed));
+        out.push_str(&format!("**Chunks**: {}\n", status.chunks_indexed));
+        out.push_str(&format!("**Languages**: {}\n\n", languages.join(", ")));
+
+        // Graph summary
+        out.push_str("## Dependency Graph\n\n");
+        out.push_str(&format!("- **Nodes**: {}\n", status.graph_nodes));
+        out.push_str(&format!("- **Edges**: {}\n", status.graph_edges));
+        out.push_str(&format!("- **Has cycles**: {}\n\n", status.has_cycles));
+
+        // Health status
+        out.push_str("## Subsystem Health\n\n");
+        out.push_str(&format!(
+            "- Embedder: `{:?}`\n",
+            self.embedder_breaker.state()
+        ));
+        out.push_str(&format!(
+            "- Reranker: `{:?}`\n",
+            self.reranker_breaker.state()
+        ));
+        out.push_str(&format!("- Index: `{:?}`\n", self.index_breaker.state()));
+        out.push_str(&format!("- Vector: `{:?}`\n", self.vector_breaker.state()));
+
+        Ok(out)
+    }
+
+    /// Generate a JSON context map of the repository structure.
+    ///
+    /// Returns a JSON string with file counts, symbol graph summary,
+    /// and key metrics useful for agent orchestration.
+    pub fn generate_context_map(&self) -> OmniResult<String> {
+        let status = self.status()?;
+        let cache_stats = self.search_engine.result_cache_stats();
+
+        let map = serde_json::json!({
+            "repository": status.repo_path,
+            "files": status.files_indexed,
+            "symbols": status.symbols_indexed,
+            "chunks": status.chunks_indexed,
+            "languages": status.language_distribution,
+            "search_mode": status.search_mode,
+            "embedding_coverage_percent": status.embedding_coverage_percent,
+            "cache": {
+                "l1_size": cache_stats.l1.size,
+                "l2_size": cache_stats.l2.size,
+                "hit_rate": cache_stats.overall_hit_rate(),
+            },
+            "graph": {
+                "nodes": status.graph_nodes,
+                "edges": status.graph_edges,
+                "has_cycles": status.has_cycles,
+            },
+            "health": {
+                "embedder": format!("{:?}", self.embedder_breaker.state()),
+                "reranker": format!("{:?}", self.reranker_breaker.state()),
+                "index": format!("{:?}", self.index_breaker.state()),
+                "vector": format!("{:?}", self.vector_breaker.state()),
+            },
+        });
+
+        serde_json::to_string_pretty(&map)
+            .map_err(|e| OmniError::Internal(format!("JSON serialization failed: {e}")))
+    }
+
     /// Index git commit history for the repository.
     ///
     /// This analyzes git history to enable:
@@ -1035,6 +1579,24 @@ impl Engine {
             let rel_path = abs_path
                 .strip_prefix(&self.config.repo_path)
                 .unwrap_or(abs_path);
+
+            // Before deleting from SQLite, strip edges and nodes from in-memory graph
+            if let Ok(Some(fi)) = self.index.get_file_by_path(rel_path) {
+                let fid = fi.id;
+                let old_symbols = self.index.get_all_symbols_for_file(fid).unwrap_or_default();
+                if !old_symbols.is_empty() {
+                    let old_ids: Vec<i64> = old_symbols.iter().map(|s| s.id).collect();
+                    let edges_removed = self.dep_graph.remove_edges_for_symbols(&old_ids);
+                    let nodes_removed = self.dep_graph.remove_symbols(&old_ids);
+                    tracing::debug!(
+                        path = %rel_path.display(),
+                        edges_removed,
+                        nodes_removed,
+                        "purged deleted file's symbols from in-memory graph"
+                    );
+                }
+            }
+
             if let Err(e) = self.index.delete_file(rel_path) {
                 tracing::warn!(error = %e, "failed to delete file from index");
             }
@@ -1066,6 +1628,18 @@ impl Engine {
             "single file reindex complete"
         );
 
+        // Invalidate tiered result cache for this file so stale results aren't served.
+        if changed {
+            let invalidated = self.search_engine.result_cache().invalidate_file(abs_path);
+            if invalidated > 0 {
+                tracing::debug!(
+                    file = %abs_path.display(),
+                    invalidated = invalidated,
+                    "tiered result cache entries invalidated after reindex"
+                );
+            }
+        }
+
         Ok((stats, changed))
     }
 
@@ -1082,8 +1656,49 @@ impl Engine {
 
         let texts: Vec<&str> = pending.iter().map(|(_, t)| t.as_str()).collect();
 
-        // Use parallel embedding for batches
-        let embeddings = self.embedder.embed_batch_parallel(&texts);
+        // Use parallel embedding for batches — guarded by the embedder circuit breaker.
+        // When the breaker is open, we skip embedding and fall back to keyword-only search.
+        let embeddings = match self.embedder_breaker.call_sync(|| {
+            let result = self.embedder.embed_batch_parallel(&texts);
+            // embed_batch_parallel returns Vec<Option<Vec<f32>>> — treat all-None as failure
+            let success_count = result.iter().filter(|r| r.is_some()).count();
+            if success_count == 0 && !texts.is_empty() {
+                Err(OmniError::Internal("all embeddings in batch failed".into()))
+            } else {
+                Ok(result)
+            }
+        }) {
+            Ok(embs) => {
+                self.health_monitor.report_health(
+                    "embedder",
+                    crate::resilience::health_monitor::SubsystemHealth::Healthy,
+                );
+                embs
+            }
+            Err(CircuitBreakerError::Open) => {
+                tracing::warn!(
+                    batch_size = texts.len(),
+                    "embedder circuit breaker open — skipping batch embedding (keyword-only mode)"
+                );
+                self.health_monitor.report_health_with_message(
+                    "embedder",
+                    crate::resilience::health_monitor::SubsystemHealth::Degraded,
+                    "circuit breaker open — embeddings skipped",
+                );
+                pending.clear();
+                return Ok(());
+            }
+            Err(CircuitBreakerError::OperationFailed(e)) => {
+                tracing::error!(error = %e, "batch embedding failed — circuit breaker recorded failure");
+                self.health_monitor.report_health_with_message(
+                    "embedder",
+                    crate::resilience::health_monitor::SubsystemHealth::Degraded,
+                    format!("batch embedding failure: {e}"),
+                );
+                pending.clear();
+                return Err(e);
+            }
+        };
         let total_embeddings = embeddings.len();
 
         for (i, maybe_embedding) in embeddings.into_iter().enumerate() {
@@ -1116,6 +1731,13 @@ impl Engine {
         }
 
         pending.clear();
+
+        // Recreate ONNX session to free accumulated arena memory
+        self.embedder.reset_session();
+
+        // Persist vectors to disk after each flush so progress survives crashes
+        self.vector_index.save()?;
+
         Ok(())
     }
 
@@ -1269,7 +1891,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("create temp dir");
         let config = Config::defaults(dir.path());
         let mut engine = Engine::with_config(config).expect("create engine");
-        let result = engine.run_index().await.expect("index");
+        let result = engine.run_index(false).await.expect("index");
         assert_eq!(result.files_processed, 0);
         assert_eq!(result.chunks_created, 0);
     }
@@ -1289,7 +1911,7 @@ mod tests {
 
         let config = Config::defaults(root);
         let mut engine = Engine::with_config(config).expect("create engine");
-        let result = engine.run_index().await.expect("index");
+        let result = engine.run_index(false).await.expect("index");
 
         assert_eq!(result.files_processed, 1);
         assert!(result.chunks_created > 0, "should create at least 1 chunk");

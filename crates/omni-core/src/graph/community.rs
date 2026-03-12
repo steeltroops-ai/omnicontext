@@ -245,4 +245,3 @@ mod tests {
         assert!(modularity >= 0.0);
     }
 }
-

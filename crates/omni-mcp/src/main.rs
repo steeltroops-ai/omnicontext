@@ -39,6 +39,7 @@ mod tools;
 use anyhow::Result;
 use clap::Parser;
 use rmcp::ServiceExt;
+use std::time::Duration;
 
 /// `OmniContext` MCP Server
 #[derive(Parser, Debug)]
@@ -183,8 +184,14 @@ async fn main() -> Result<()> {
         "initializing OmniContext engine"
     );
 
-    // Initialize the core engine
-    let mut engine = omni_core::Engine::new(&repo_path)?;
+    // Initialize the core engine with a timeout and degraded fallback.
+    // This prevents MCP startup from hanging indefinitely during model init.
+    let (mut engine, degraded_mode) = initialize_engine_with_fallback(repo_path.clone()).await?;
+    if degraded_mode {
+        tracing::warn!(
+            "MCP started in degraded mode (OMNI_SKIP_MODEL_DOWNLOAD=1). Semantic embeddings and reranking are temporarily disabled."
+        );
+    }
 
     // Auto-index: if the index is empty and auto-index is not disabled,
     // run a full index before starting the MCP server.
@@ -194,7 +201,7 @@ async fn main() -> Result<()> {
         if status.files_indexed == 0 {
             tracing::info!("no existing index found, running auto-index...");
             let start = std::time::Instant::now();
-            match engine.run_index().await {
+            match engine.run_index(false).await {
                 Ok(result) => {
                     tracing::info!(
                         files = result.files_processed,
@@ -241,4 +248,53 @@ async fn main() -> Result<()> {
 
     tracing::info!("MCP server shut down");
     Ok(())
+}
+
+async fn initialize_engine_with_fallback(
+    repo_path: std::path::PathBuf,
+) -> Result<(omni_core::Engine, bool)> {
+    let normal_repo = repo_path.clone();
+    let normal_init = tokio::task::spawn_blocking(move || omni_core::Engine::new(&normal_repo));
+
+    match tokio::time::timeout(Duration::from_secs(90), normal_init).await {
+        Ok(joined) => match joined {
+            Ok(Ok(engine)) => {
+                tracing::info!("engine initialized in normal mode");
+                return Ok((engine, false));
+            }
+            Ok(Err(err)) => {
+                let message = err.to_string().to_lowercase();
+                let recoverable = message.contains("onnx")
+                    || message.contains("model")
+                    || message.contains("download")
+                    || message.contains("tokenizer");
+                if !recoverable {
+                    return Err(err.into());
+                }
+                tracing::warn!(
+                    error = %err,
+                    "normal engine init failed with recoverable model error; retrying degraded mode"
+                );
+            }
+            Err(join_err) => {
+                tracing::warn!(
+                    error = %join_err,
+                    "engine init task join failed; retrying degraded mode"
+                );
+            }
+        },
+        Err(_) => {
+            tracing::warn!("engine init timed out after 90s; retrying degraded mode");
+        }
+    }
+
+    std::env::set_var("OMNI_SKIP_MODEL_DOWNLOAD", "1");
+    let degraded_repo = repo_path.clone();
+    let degraded_init = tokio::task::spawn_blocking(move || omni_core::Engine::new(&degraded_repo));
+    let degraded = tokio::time::timeout(Duration::from_secs(30), degraded_init)
+        .await
+        .map_err(|_| anyhow::anyhow!("degraded engine init timed out after 30s"))?
+        .map_err(|e| anyhow::anyhow!("degraded init task failed: {e}"))??;
+
+    Ok((degraded, true))
 }

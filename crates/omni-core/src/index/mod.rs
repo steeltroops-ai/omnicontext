@@ -273,6 +273,22 @@ impl MetadataIndex {
         Ok(count as usize)
     }
 
+    /// Get file freshness timestamps as (file_id, indexed_at_iso8601).
+    ///
+    /// Returns the `indexed_at` timestamp for every file, which indicates when
+    /// the file was last re-indexed (and therefore last modified).
+    pub fn get_file_freshness(&self) -> OmniResult<Vec<(i64, String)>> {
+        let mut stmt = self.conn.prepare("SELECT id, indexed_at FROM files")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut result = Vec::new();
+        for row in rows {
+            result.push(row?);
+        }
+        Ok(result)
+    }
+
     // -----------------------------------------------------------------------
     // Chunk operations
     // -----------------------------------------------------------------------

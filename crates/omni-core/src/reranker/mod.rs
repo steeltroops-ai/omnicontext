@@ -75,27 +75,10 @@ impl Reranker {
         };
 
         let session = if model_path.exists() {
-            match Session::builder() {
-                Ok(mut builder) => match builder.commit_from_file(&model_path) {
-                    Ok(session) => {
-                        tracing::info!(model = model_spec.name, "cross-encoder reranker loaded");
-                        Some(Mutex::new(session))
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            model = %model_path.display(),
-                            error = %e,
-                            "failed to load cross-encoder model"
-                        );
-                        None
-                    }
-                },
-                Err(e) => {
-                    tracing::warn!(error = %e, "failed to create reranker ONNX session");
-                    None
-                }
-            }
+            tracing::info!(model = model_spec.name, "building reranker ONNX session");
+            Self::build_reranker_session(&model_path, model_spec.name)
         } else {
+            tracing::warn!(path = %model_path.display(), "reranker model file not found");
             None
         };
 
@@ -129,6 +112,59 @@ impl Reranker {
             tokenizer: None,
             max_seq_length: config.max_seq_length,
             batch_size: config.batch_size,
+        }
+    }
+
+    /// Build an ONNX session for the reranker. Returns `None` on any failure.
+    fn build_reranker_session(
+        model_path: &std::path::Path,
+        model_name: &str,
+    ) -> Option<Mutex<Session>> {
+        let builder = match Session::builder() {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::error!(error = %e, "failed to create reranker ONNX session builder");
+                return None;
+            }
+        };
+
+        let builder = match builder
+            .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level1)
+        {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::error!(error = %e, "failed to set reranker ONNX optimization level");
+                return None;
+            }
+        };
+
+        let mut builder = match builder.with_execution_providers([
+            ort::execution_providers::CPUExecutionProvider::default().build(),
+        ]) {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::error!(error = %e, "failed to set reranker ONNX execution providers");
+                return None;
+            }
+        };
+
+        tracing::info!(path = %model_path.display(), "committing reranker session from file...");
+        match builder.commit_from_file(model_path) {
+            Ok(session) => {
+                tracing::info!(
+                    model = model_name,
+                    "cross-encoder reranker loaded successfully"
+                );
+                Some(Mutex::new(session))
+            }
+            Err(e) => {
+                tracing::error!(
+                    model = %model_path.display(),
+                    error = %e,
+                    "failed to load cross-encoder model"
+                );
+                None
+            }
         }
     }
 

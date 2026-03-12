@@ -246,7 +246,27 @@ pub fn ensure_model(spec: &ModelSpec) -> OmniResult<(PathBuf, PathBuf)> {
 }
 
 /// Download a file from a URL with progress bar.
+///
+/// Uses `tokio::task::block_in_place` when called from within an async runtime
+/// to avoid panics from `reqwest::blocking` nesting a second tokio runtime.
 fn download_file(
+    url: &str,
+    dest: &Path,
+    message: &str,
+    expected_size: Option<u64>,
+) -> OmniResult<()> {
+    // If we're inside a tokio runtime, use block_in_place to allow blocking I/O.
+    // reqwest::blocking creates its own internal runtime, which panics if a
+    // tokio runtime is already running on this thread.
+    if tokio::runtime::Handle::try_current().is_ok() {
+        return tokio::task::block_in_place(|| {
+            download_file_inner(url, dest, message, expected_size)
+        });
+    }
+    download_file_inner(url, dest, message, expected_size)
+}
+
+fn download_file_inner(
     url: &str,
     dest: &Path,
     message: &str,

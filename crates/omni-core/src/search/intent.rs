@@ -10,7 +10,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Query intent classification.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum QueryIntent {
     /// User wants to understand how something works.
     Explain,

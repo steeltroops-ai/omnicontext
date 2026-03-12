@@ -7,178 +7,309 @@ order: 3
 
 # Installation
 
-OmniContext provides native installers for Windows, macOS, and Linux. Choose your platform below for installation instructions.
+OmniContext provides multiple installation methods for Windows, macOS, and Linux. Choose the approach that best suits your workflow.
 
 ## Prerequisites
 
 - **Operating System**: Windows 10+, macOS 11+, or Linux (Ubuntu 20.04+, Fedora 35+)
-- **Disk Space**: ~600MB for binaries and embedding models
-- **Memory**: 4GB RAM minimum, 8GB recommended for large codebases
+- **Disk Space**: ~600 MB for binaries and embedding models
+- **Memory**: 4 GB RAM minimum, 8 GB recommended for large codebases
 
-## Quick Install
+---
 
-### Windows
+## Quick Install (Recommended)
 
-Download and run the installer:
+The install script covers all three platforms and places the binaries in your PATH automatically.
+
+### macOS and Linux
+
+```bash
+curl -fsSL https://omnicontext.dev/install.sh | sh
+```
+
+The script installs `omnicontext` and `omnicontext-mcp` to `~/.local/bin/` and updates your shell profile.
+
+### Windows (PowerShell)
 
 ```powershell
-# Using PowerShell
 irm https://omnicontext.dev/install.ps1 | iex
 ```
 
-Or install via package managers:
+Binaries are installed to `%USERPROFILE%\.omnicontext\bin\`, which the script adds to your `PATH`.
+
+---
+
+## Platform-Specific Methods
+
+### Windows
+
+**PowerShell installer** (recommended — covers both binaries):
 
 ```powershell
-# Scoop
-scoop bucket add omnicontext https://github.com/omnicontext/scoop-bucket
-scoop install omnicontext
-
-# WinGet
-winget install OmniContext.OmniContext
+irm https://omnicontext.dev/install.ps1 | iex
 ```
+
+**Manual binary download**:
+
+1. Download the latest release archive from [GitHub Releases](https://github.com/steeltroops-ai/omnicontext/releases).
+2. Extract `omnicontext.exe` and `omnicontext-mcp.exe`.
+3. Move both files to `%USERPROFILE%\.omnicontext\bin\`.
+4. Add `%USERPROFILE%\.omnicontext\bin\` to your `PATH` environment variable.
 
 ### macOS
 
-Install via Homebrew:
+**Install script**:
 
 ```bash
-brew tap omnicontext/tap
+curl -fsSL https://omnicontext.dev/install.sh | sh
+```
+
+**Homebrew** (tap):
+
+```bash
+brew tap steeltroops-ai/omnicontext
 brew install omnicontext
 ```
 
-Or download the installer:
+**Manual binary download**:
 
-```bash
-curl -fsSL https://omnicontext.dev/install.sh | bash
-```
+1. Download the latest `.tar.gz` for your architecture (`x86_64-apple-darwin` or `aarch64-apple-darwin`) from [GitHub Releases](https://github.com/steeltroops-ai/omnicontext/releases).
+2. Extract and move `omnicontext` and `omnicontext-mcp` to `~/.local/bin/`.
+3. Make them executable: `chmod +x ~/.local/bin/omnicontext ~/.local/bin/omnicontext-mcp`
 
 ### Linux
 
-Install via package manager or script:
+**Install script** (Ubuntu, Debian, Fedora, Arch, and others):
 
 ```bash
-# Ubuntu/Debian
-curl -fsSL https://omnicontext.dev/install.sh | bash
-
-# Arch Linux (AUR)
-yay -S omnicontext
-
-# Fedora/RHEL
-dnf install omnicontext
+curl -fsSL https://omnicontext.dev/install.sh | sh
 ```
+
+**Manual binary download**:
+
+1. Download the latest `.tar.gz` for your architecture from [GitHub Releases](https://github.com/steeltroops-ai/omnicontext/releases).
+2. Extract and move the binaries:
+
+```bash
+tar -xzf omnicontext-*.tar.gz
+mv omnicontext omnicontext-mcp ~/.local/bin/
+chmod +x ~/.local/bin/omnicontext ~/.local/bin/omnicontext-mcp
+```
+
+---
+
+## Install via Cargo
+
+If you have Rust and Cargo installed, you can build and install from source or from [crates.io](https://crates.io):
+
+```bash
+cargo install omnicontext
+```
+
+This builds and installs both `omnicontext` and `omnicontext-mcp` into `~/.cargo/bin/`.
+
+To install from the repository directly:
+
+```bash
+git clone https://github.com/steeltroops-ai/omnicontext.git
+cd omnicontext
+cargo install --path crates/omni-cli
+cargo install --path crates/omni-mcp
+```
+
+> **Note**: A Rust toolchain version ≥ 1.80 is required.
+
+---
+
+## VS Code Extension
+
+The OmniContext VS Code extension provides automatic MCP server configuration — no manual JSON editing required.
+
+1. Open VS Code and go to the Extensions view (`Ctrl+Shift+X` / `Cmd+Shift+X`).
+2. Search for **OmniContext**.
+3. Click **Install**.
+
+The extension automatically detects your workspace and configures the `omnicontext-mcp` server in `mcp.json` on first activation.
+
+Alternatively, install from the command line:
+
+```bash
+code --install-extension steeltroops-ai.omnicontext
+```
+
+---
+
+## Install Locations
+
+| Platform | Binaries | Data & Cache |
+|----------|----------|--------------|
+| Linux / macOS | `~/.local/bin/` | `~/.omnicontext/` |
+| Windows | `%USERPROFILE%\.omnicontext\bin\` | `%USERPROFILE%\.omnicontext\` |
+
+The data directory stores embedding models, vector indexes, and SQLite databases. It is shared across all projects.
+
+---
 
 ## Verify Installation
 
-After installation, verify OmniContext is working:
+After installation, confirm both binaries are on your PATH:
 
 ```bash
-omni --version
+omnicontext --version
+omnicontext-mcp --version
 ```
 
-You should see output like:
+Expected output:
 
 ```
-omnicontext 0.1.0
+omnicontext 1.1.1
 ```
+
+---
 
 ## First Index
 
-Index your first codebase:
+Index your first codebase from the project root:
 
 ```bash
 cd /path/to/your/project
-omni index
+omnicontext index .
 ```
 
 OmniContext will:
-1. Auto-detect supported languages in your project
-2. Download embedding models (~550MB, one-time)
-3. Parse and index all source files
-4. Build vector index for semantic search
 
-Indexing speed: ~500 files/second on modern hardware.
+1. Auto-detect all supported languages in your project.
+2. Download the embedding model (~550 MB, one-time) to `~/.omnicontext/models/`.
+3. Parse and index all source files using tree-sitter.
+4. Build a vector index for semantic search.
 
-## Configuration
+Indexing speed: approximately 500 files per second on modern hardware.
 
-OmniContext works with zero configuration, but you can customize behavior:
+---
 
-### Configuration File
+## IDE and Agent Setup
 
-Create `.omnicontext/config.toml` in your project root:
+After indexing, wire OmniContext into every detected AI IDE and agent automatically:
 
-```toml
-[index]
-# Exclude patterns (glob syntax)
-exclude = ["node_modules/**", "dist/**", "*.test.ts"]
-
-# Maximum file size to index (bytes)
-max_file_size = 1048576  # 1MB
-
-[embedder]
-# Model path (auto-downloads if not present)
-model_path = "~/.omnicontext/models/jina-embeddings-v2-base-code"
-
-# Batch size for embedding generation
-batch_size = 32
-
-[search]
-# Number of results to return
-limit = 20
-
-# Minimum similarity score (0.0 - 1.0)
-min_score = 0.3
+```bash
+omnicontext setup --all
 ```
 
-### Environment Variables
+This single command injects a universal `omnicontext` MCP server entry (using `--repo .`) into all installed IDEs, including Claude Desktop, Claude Code, Cursor, Windsurf, VS Code, Cline, RooCode, Continue.dev, Zed, Kiro, PearAI, Trae, Gemini CLI, Amazon Q CLI, and Augment Code.
 
-Override configuration with environment variables:
+To preview changes without writing any files:
+
+```bash
+omnicontext setup --all --dry-run
+```
+
+To target a specific IDE only:
+
+```bash
+omnicontext autopilot --ide cursor
+```
+
+---
+
+## Download the Embedding Model Separately
+
+To pre-download the embedding model without running a full index (useful in CI or restricted environments):
+
+```bash
+omnicontext setup model-download
+```
+
+Check the current model status:
+
+```bash
+omnicontext setup model-status
+```
+
+The model is Jina embeddings v2 base code in ONNX format (~550 MB). It is stored in `~/.omnicontext/models/` and shared across all repositories.
+
+If the automatic download fails, manually download the ONNX weights from:
+- https://huggingface.co/jinaai/jina-embeddings-v2-base-code
+
+Place the model files in: `~/.omnicontext/models/jina-embeddings-v2-base-code/`
+
+---
+
+## Configuration File
+
+OmniContext works with zero configuration out of the box. To customize behavior, create `.omnicontext/config.toml` in your project root:
+
+```bash
+omnicontext config --init
+```
+
+This writes a commented default configuration you can edit. See the [Configuration](/docs/configuration) guide for all available options.
+
+---
+
+## Environment Variables
+
+Override configuration at runtime:
 
 ```bash
 export OMNI_MODEL_PATH=/custom/path/to/model
 export OMNI_INDEX_PATH=/custom/index/location
 export OMNI_LOG_LEVEL=debug
+export OMNI_SKIP_MODEL_DOWNLOAD=1   # Start in keyword-only mode without downloading the model
 ```
 
-## MCP Integration
-
-To use OmniContext with AI agents via MCP:
-
-1. Start the MCP server:
-
-```bash
-omni-mcp
-```
-
-2. Configure your AI client (e.g., Claude Desktop) to connect to the MCP server.
-
-See [MCP Tools](/docs/mcp-tools) for detailed API documentation.
+---
 
 ## Troubleshooting
 
+### `omnicontext: command not found`
+
+Add the install directory to your `PATH`:
+
+```bash
+# Linux / macOS
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+On Windows, add `%USERPROFILE%\.omnicontext\bin\` to your system `PATH` via **System Properties → Environment Variables**.
+
 ### Model Download Fails
 
-If model download fails, manually download from:
-- https://huggingface.co/jinaai/jina-embeddings-v2-base-code
+Run the download with verbose logging to diagnose network issues:
 
-Extract to: `~/.omnicontext/models/jina-embeddings-v2-base-code/`
+```bash
+OMNI_LOG_LEVEL=debug omnicontext setup model-download
+```
 
-### Indexing Hangs
+As a fallback, download the model manually from https://huggingface.co/jinaai/jina-embeddings-v2-base-code and extract it to `~/.omnicontext/models/jina-embeddings-v2-base-code/`.
 
-Check for large binary files being indexed. Add exclusions to config:
+To start the MCP server without waiting for a model download (keyword-only mode):
+
+```bash
+OMNI_SKIP_MODEL_DOWNLOAD=1 omnicontext mcp --repo .
+```
+
+### Indexing Hangs or Is Slow
+
+Check for large binary files being processed. Add exclusions to `.omnicontext/config.toml`:
 
 ```toml
-[index]
-exclude = ["*.bin", "*.so", "*.dll", "*.dylib"]
+[indexing]
+exclude_patterns = ["*.bin", "*.so", "*.dll", "*.dylib", "node_modules", "target"]
 ```
 
 ### Permission Errors
 
 Ensure write access to:
-- Project directory (for `.omnicontext/` folder)
-- Home directory (for `~/.omnicontext/` cache)
+
+- The project directory (for the `.omnicontext/` index folder)
+- The home directory (for `~/.omnicontext/` model cache)
+
+---
 
 ## Next Steps
 
-- [Quickstart](/docs/quickstart): Index your first project and run searches
-- [MCP Tools](/docs/mcp-tools): Integrate with AI agents
+- [Configuration](/docs/configuration): Customize indexing, search, and embedding behavior
+- [MCP Tools](/docs/mcp-tools): Integrate with AI agents via the Model Context Protocol
 - [Supported Languages](/docs/supported-languages): See which languages are supported
+- [Architecture](/docs/architecture): Understand how OmniContext works internally

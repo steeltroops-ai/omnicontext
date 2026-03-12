@@ -122,6 +122,7 @@ impl ContextAssembler {
                     score: result.score,
                     is_graph_neighbor: false,
                     priority: Some(priority),
+                    shadow_header: None,
                 });
             }
         }
@@ -137,6 +138,23 @@ impl ContextAssembler {
         strategy: &ContextStrategy,
     ) -> ContextWindow {
         self.pack_with_budget_limit(entries, strategy, self.token_budget)
+    }
+
+    /// Pack pre-built context entries within a token budget using knapsack DP.
+    ///
+    /// This is the public entry point used by `assemble_context_window()` in the
+    /// search pipeline, which handles file-grouping and GAR injection before
+    /// delegating the final packing step here.
+    ///
+    /// Entries should already have priorities assigned. The strategy controls
+    /// whether high-level filtering is applied and other packing behavior.
+    pub fn pack_entries_with_strategy(
+        &self,
+        entries: Vec<ContextEntry>,
+        strategy: &ContextStrategy,
+        budget: u32,
+    ) -> ContextWindow {
+        self.pack_with_budget_limit(entries, strategy, budget)
     }
 
     /// Pack entries within an explicit token budget using 0/1 knapsack optimization.

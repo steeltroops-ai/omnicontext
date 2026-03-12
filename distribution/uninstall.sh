@@ -184,15 +184,15 @@ if [ "$KEEP_CONFIG" = false ]; then
 
     _remove_mcp_entry() {
         local config_path="$1"
-        local use_powers="$2"
+        local top_key="$2"  # "mcpServers", "powers", "servers", or "context_servers"
 
         [ -f "$config_path" ] || return 0
 
         if command -v python3 >/dev/null 2>&1; then
-            python3 - "$config_path" "$use_powers" <<'PYEOF' 2>/dev/null && return 0
+            python3 - "$config_path" "$top_key" <<'PYEOF' 2>/dev/null && return 0
 import json, sys, os
 
-path, use_powers = sys.argv[1], sys.argv[2] == "true"
+path, top_key = sys.argv[1], sys.argv[2]
 modified = False
 
 try:
@@ -200,10 +200,20 @@ try:
 except: sys.exit(0)
 
 try:
-    if use_powers:
+    if top_key == "powers":
         servers = cfg.get("powers", {}).get("mcpServers", {})
         if "omnicontext" in servers:
             del cfg["powers"]["mcpServers"]["omnicontext"]
+            modified = True
+    elif top_key == "servers":
+        servers = cfg.get("servers", {})
+        if "omnicontext" in servers:
+            del cfg["servers"]["omnicontext"]
+            modified = True
+    elif top_key == "context_servers":
+        servers = cfg.get("context_servers", {})
+        if "omnicontext" in servers:
+            del cfg["context_servers"]["omnicontext"]
             modified = True
     else:
         servers = cfg.get("mcpServers", {})
@@ -229,9 +239,9 @@ PYEOF
     _unlink() {
         local name="$1"
         local path="$2"
-        local powers="$3"
+        local top_key="$3"  # "mcpServers", "powers", or "servers"
         if [ -f "$path" ]; then
-            result=$(_remove_mcp_entry "$path" "$powers" || echo "")
+            result=$(_remove_mcp_entry "$path" "$top_key" || echo "")
             if echo "$result" | grep -q "removed"; then
                 ok "  Unlinked  ${DIM}${name}${RESET}"
             else
@@ -240,16 +250,22 @@ PYEOF
         fi
     }
 
-    _unlink "Claude Desktop"  "$CLAUDE_CFG" "false"
-    _unlink "Claude Code CLI" "${HOME}/.claude.json" "false"
-    _unlink "Cursor"          "${HOME}/.cursor/mcp.json" "false"
-    _unlink "Continue.dev"    "${HOME}/.continue/config.json" "false"
-    _unlink "Kiro"            "${HOME}/.kiro/settings/mcp.json" "true"
-    _unlink "Windsurf"        "${HOME}/.windsurf/mcp_config.json" "false"
-    _unlink "Cline"           "${HOME}/.cline/mcp_settings.json" "false"
-    _unlink "RooCode"         "${HOME}/.roo-cline/mcp_settings.json" "false"
-    _unlink "Trae"            "${HOME}/.trae/mcp.json" "false"
-    _unlink "Antigravity"     "${HOME}/.gemini/antigravity/mcp_config.json" "false"
+    _unlink "Claude Desktop"  "$CLAUDE_CFG"                                                                                           "mcpServers"
+    _unlink "Claude Code CLI" "${HOME}/.claude.json"                                                                                  "mcpServers"
+    _unlink "Cursor"          "${HOME}/.cursor/mcp.json"                                                                              "mcpServers"
+    _unlink "VS Code"         "${HOME}/.config/Code/User/mcp.json"                                                                    "servers"
+    _unlink "Continue.dev"    "${HOME}/.continue/config.json"                                                                         "mcpServers"
+    _unlink "Kiro"            "${HOME}/.kiro/settings/mcp.json"                                                                       "powers"
+    _unlink "Windsurf"        "${HOME}/.codeium/windsurf/mcp_config.json"                                                             "mcpServers"
+    _unlink "Cline"           "${HOME}/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json"       "mcpServers"
+    _unlink "RooCode"         "${HOME}/.config/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/mcp_settings.json"         "mcpServers"
+    _unlink "Trae"            "${HOME}/.config/Trae/mcp_config.json"                                                                  "mcpServers"
+    _unlink "Antigravity"     "${HOME}/.config/Antigravity/User/mcp.json"                                                             "servers"
+    _unlink "Gemini CLI"      "${HOME}/.gemini/settings.json"                                                                         "mcpServers"
+    _unlink "Amazon Q CLI"    "${HOME}/.aws/amazonq/mcp.json"                                                                         "mcpServers"
+    _unlink "Augment Code"    "${HOME}/.config/Code/User/globalStorage/augment.vscode-augment/mcp_settings.json"                      "mcpServers"
+    _unlink "Zed"             "${HOME}/.config/zed/settings.json"                                                                     "context_servers"
+    _unlink "PearAI"          "${HOME}/.config/PearAI/User/mcp.json"                                                                  "mcpServers"
 
 else
     ok "MCP configurations preserved  ${DIM}(--keep-config)${RESET}"

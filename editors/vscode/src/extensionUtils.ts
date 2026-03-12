@@ -231,18 +231,18 @@ export function getKnownMcpClients(): McpClientTarget[] {
     });
   }
 
-  // Cursor
+  // Cursor — global user config (same as VS Code fork pattern)
   if (isWin) {
     targets.push({
       name: "Cursor",
-      configPath: joinPath(
-        appData,
-        "Cursor",
-        "User",
-        "globalStorage",
-        "cursor.mcp",
-        "config.json",
-      ),
+      configPath: joinPath(appData, "Cursor", "User", "mcp.json"),
+      serversKey: "mcpServers",
+      usesPowersNamespace: false,
+    });
+  } else if (isMac) {
+    targets.push({
+      name: "Cursor",
+      configPath: joinPath(home, "Library", "Application Support", "Cursor", "User", "mcp.json"),
       serversKey: "mcpServers",
       usesPowersNamespace: false,
     });
@@ -253,6 +253,99 @@ export function getKnownMcpClients(): McpClientTarget[] {
       serversKey: "mcpServers",
       usesPowersNamespace: false,
     });
+  }
+
+  // VS Code-family MCP user configs (for IDEs that support user-level mcp.json)
+  if (isWin) {
+    targets.push(
+      {
+        name: "VS Code",
+        configPath: joinPath(appData, "Code", "User", "mcp.json"),
+        serversKey: "mcpServers",
+        usesPowersNamespace: false,
+      },
+      {
+        name: "VS Code Insiders",
+        configPath: joinPath(appData, "Code - Insiders", "User", "mcp.json"),
+        serversKey: "mcpServers",
+        usesPowersNamespace: false,
+      },
+      {
+        name: "VSCodium",
+        configPath: joinPath(appData, "VSCodium", "User", "mcp.json"),
+        serversKey: "mcpServers",
+        usesPowersNamespace: false,
+      },
+    );
+  } else if (isMac) {
+    targets.push(
+      {
+        name: "VS Code",
+        configPath: joinPath(
+          home,
+          "Library",
+          "Application Support",
+          "Code",
+          "User",
+          "mcp.json",
+        ),
+        serversKey: "mcpServers",
+        usesPowersNamespace: false,
+      },
+      {
+        name: "VS Code Insiders",
+        configPath: joinPath(
+          home,
+          "Library",
+          "Application Support",
+          "Code - Insiders",
+          "User",
+          "mcp.json",
+        ),
+        serversKey: "mcpServers",
+        usesPowersNamespace: false,
+      },
+      {
+        name: "VSCodium",
+        configPath: joinPath(
+          home,
+          "Library",
+          "Application Support",
+          "VSCodium",
+          "User",
+          "mcp.json",
+        ),
+        serversKey: "mcpServers",
+        usesPowersNamespace: false,
+      },
+    );
+  } else {
+    targets.push(
+      {
+        name: "VS Code",
+        configPath: joinPath(home, ".config", "Code", "User", "mcp.json"),
+        serversKey: "mcpServers",
+        usesPowersNamespace: false,
+      },
+      {
+        name: "VS Code Insiders",
+        configPath: joinPath(
+          home,
+          ".config",
+          "Code - Insiders",
+          "User",
+          "mcp.json",
+        ),
+        serversKey: "mcpServers",
+        usesPowersNamespace: false,
+      },
+      {
+        name: "VSCodium",
+        configPath: joinPath(home, ".config", "VSCodium", "User", "mcp.json"),
+        serversKey: "mcpServers",
+        usesPowersNamespace: false,
+      },
+    );
   }
 
   // Continue.dev
@@ -268,45 +361,64 @@ export function getKnownMcpClients(): McpClientTarget[] {
     name: "Kiro",
     configPath: joinPath(home, ".kiro", "settings", "mcp.json"),
     serversKey: "mcpServers",
-    usesPowersNamespace: true,
+    usesPowersNamespace: false,
   });
 
-  // Windsurf / Codeium
+  // Windsurf (Codeium) — global config at ~/.codeium/windsurf/
+  // Verified: https://docs.windsurf.com/windsurf/cascade/mcp
+  targets.push({
+    name: "Windsurf",
+    configPath: joinPath(home, ".codeium", "windsurf", "mcp_config.json"),
+    serversKey: "mcpServers",
+    usesPowersNamespace: false,
+  });
+
+  // Cline (VS Code extension — saoudrizwan.claude-dev)
   if (isWin) {
     targets.push({
-      name: "Windsurf",
+      name: "Cline",
       configPath: joinPath(
-        appData,
-        "Windsurf",
-        "User",
-        "globalStorage",
-        "codeium.windsurf",
-        "mcp_config.json",
+        appData, "Code", "User", "globalStorage",
+        "saoudrizwan.claude-dev", "settings", "cline_mcp_settings.json",
+      ),
+      serversKey: "mcpServers",
+      usesPowersNamespace: false,
+    });
+  } else if (isMac) {
+    targets.push({
+      name: "Cline",
+      configPath: joinPath(
+        home, "Library", "Application Support", "Code", "User",
+        "globalStorage", "saoudrizwan.claude-dev", "settings", "cline_mcp_settings.json",
       ),
       serversKey: "mcpServers",
       usesPowersNamespace: false,
     });
   } else {
     targets.push({
-      name: "Windsurf",
-      configPath: joinPath(home, ".windsurf", "mcp_config.json"),
+      name: "Cline",
+      configPath: joinPath(
+        home, ".config", "Code", "User", "globalStorage",
+        "saoudrizwan.claude-dev", "settings", "cline_mcp_settings.json",
+      ),
       serversKey: "mcpServers",
       usesPowersNamespace: false,
     });
   }
 
-  // Cline / Roo Code
+  // Gemini CLI (google-gemini/gemini-cli)
+  // Verified: https://github.com/google-gemini/gemini-cli
   targets.push({
-    name: "Cline",
-    configPath: joinPath(home, ".cline", "mcp_settings.json"),
+    name: "Gemini CLI",
+    configPath: joinPath(home, ".gemini", "settings.json"),
     serversKey: "mcpServers",
     usesPowersNamespace: false,
   });
 
-  // Antigravity (Assistant)
+  // Amazon Q CLI
   targets.push({
-    name: "Antigravity",
-    configPath: joinPath(home, ".gemini", "antigravity", "mcp_config.json"),
+    name: "Amazon Q CLI",
+    configPath: joinPath(home, ".aws", "amazonq", "mcp.json"),
     serversKey: "mcpServers",
     usesPowersNamespace: false,
   });

@@ -1,0 +1,22 @@
+[package]
+name = "omni-ffi"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "staticlib", "lib"]
+
+[dependencies]
+omni-core = { path = "../omni-core" }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+serde_json = { workspace = true }
+# For omni_ensure_health() database lock probe
+rusqlite = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

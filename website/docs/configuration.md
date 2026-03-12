@@ -7,253 +7,239 @@ order: 30
 
 # Configuration
 
-OmniContext works with zero configuration, but you can customize behavior through configuration files and environment variables.
+OmniContext works with zero configuration out of the box — it auto-downloads models, auto-detects languages, and applies sensible defaults. For advanced use cases, you can customize behavior through a project-level configuration file, a user-level configuration file, and environment variables.
+
+---
 
 ## Configuration File
 
-Create `.omnicontext/config.toml` in your project root:
+The project configuration file lives at `.omnicontext/config.toml` in your repository root. Create it with:
+
+```bash
+omnicontext config --init
+```
+
+Or create it manually. The full set of available options is shown below:
 
 ```toml
-[index]
-# Exclude patterns (glob syntax)
-exclude = [
-    "node_modules/**",
-    "dist/**",
-    "build/**",
+[indexing]
+# Glob patterns for paths to exclude from indexing
+exclude_patterns = [
+    "node_modules",
+    "dist",
+    "build",
+    "target",
+    "__pycache__",
     "*.test.ts",
     "*.spec.js"
 ]
 
-# Maximum file size to index (bytes)
-max_file_size = 1048576  # 1MB
+# Maximum file size to index, in bytes (default: 1 MB)
+max_file_size = 1048576
 
-# File extensions to index
-include_extensions = [
-    "rs", "py", "ts", "js", "go", "java",
-    "c", "cpp", "cs", "rb", "php", "swift", "kt"
-]
+# Maximum tokens per chunk (default: 512)
+max_chunk_tokens = 512
 
-[embedder]
-# Model path (auto-downloads if not present)
-model_path = "~/.omnicontext/models/jina-embeddings-v2-base-code"
-
-# Batch size for embedding generation
-batch_size = 32
-
-# Use quantization (INT8) for memory efficiency
-quantize = true
+[embedding]
+# Dimensions of the embedding model (default: 768 for jina-v2-base-code)
+dimensions = 768
 
 [search]
-# Number of results to return
-limit = 20
+# Default number of results to return
+default_limit = 10
 
-# Minimum similarity score (0.0 - 1.0)
-min_score = 0.3
+# RRF constant for reciprocal rank fusion (higher = less aggressive merging)
+rrf_k = 60
 
-# Enable graph boosting
-graph_boost = true
-
-# Enable cross-encoder reranking
-rerank = true
-
-[graph]
-# Maximum hops for dependency traversal
-max_hops = 3
-
-# Edge types to include
-edge_types = ["IMPORTS", "INHERITS", "CALLS", "INSTANTIATES", "HISTORICAL_CO_CHANGE"]
+# Default token budget for context_window tool
+token_budget = 8192
 
 [watcher]
-# Enable file watching for incremental updates
-enabled = true
+# Debounce delay in milliseconds before re-indexing changed files
+debounce_ms = 100
 
-# Debounce delay (milliseconds)
-debounce_ms = 500
+# Polling interval in seconds for periodic full-index refresh
+poll_interval_secs = 300
 ```
+
+---
+
+## Viewing the Effective Configuration
+
+To see the configuration currently in effect (merged from all sources):
+
+```bash
+omnicontext config --show
+```
+
+---
 
 ## Environment Variables
 
-Override configuration with environment variables:
+Override any configuration value at runtime using environment variables:
 
 ```bash
 # Model configuration
 export OMNI_MODEL_PATH=/custom/path/to/model
-export OMNI_BATCH_SIZE=64
 
-# Index configuration
+# Index location (defaults to .omnicontext/ in the repo root)
 export OMNI_INDEX_PATH=/custom/index/location
-export OMNI_MAX_FILE_SIZE=2097152  # 2MB
-
-# Search configuration
-export OMNI_SEARCH_LIMIT=50
-export OMNI_MIN_SCORE=0.5
 
 # Logging
-export OMNI_LOG_LEVEL=debug  # trace, debug, info, warn, error
+export OMNI_LOG_LEVEL=debug        # trace | debug | info | warn | error
 export RUST_LOG=omni_core=debug
 
-# Performance
-export OMNI_THREAD_POOL_SIZE=8
+# Skip embedding model download (starts in keyword-only mode)
+export OMNI_SKIP_MODEL_DOWNLOAD=1
+
+# Repository path for the MCP server (used by IDE launchers)
+export OMNICONTEXT_REPO=/path/to/project
 ```
+
+---
 
 ## Configuration Precedence
 
-Configuration is resolved in this order (highest to lowest):
+Settings are resolved in this order (highest priority first):
 
-1. CLI flags (e.g., `--model-path`)
+1. CLI flags (e.g., `--repo`, `--log-level`)
 2. Environment variables (`OMNI_*` prefix)
-3. Project config (`.omnicontext/config.toml`)
+3. Project config (`.omnicontext/config.toml` in repo root)
 4. User config (`~/.config/omnicontext/config.toml`)
-5. Hardcoded defaults
+5. Built-in defaults
 
-## Common Configurations
+---
 
-### Large Codebase
+## User-Level Configuration
 
-For repositories with >100K files:
+Create `~/.config/omnicontext/config.toml` to apply global defaults across all repositories:
 
 ```toml
-[index]
-max_file_size = 524288  # 512KB
-exclude = ["node_modules/**", "vendor/**", "*.min.js"]
+[search]
+default_limit = 20
 
-[embedder]
-batch_size = 64
-quantize = true
+[watcher]
+debounce_ms = 200
+```
+
+---
+
+## Common Configuration Recipes
+
+### Large Codebase (>100 K files)
+
+Reduce memory pressure and speed up indexing:
+
+```toml
+[indexing]
+max_file_size = 524288   # 512 KB
+exclude_patterns = ["node_modules", "vendor", "*.min.js", "*.map"]
+max_chunk_tokens = 256
 
 [search]
-limit = 10
-graph_boost = true
+default_limit = 10
 ```
 
 ### Monorepo
 
-For monorepos with multiple projects:
+Limit graph traversal to avoid cross-package noise:
 
 ```toml
-[index]
-exclude = [
-    "*/node_modules/**",
-    "*/dist/**",
-    "*/build/**",
-    "*/.next/**"
+[indexing]
+exclude_patterns = [
+    "*/node_modules",
+    "*/dist",
+    "*/build",
+    "*/.next"
 ]
 
-[graph]
-max_hops = 2  # Limit cross-project traversal
+[search]
+rrf_k = 80   # Slightly more conservative fusion
 ```
 
-### Development
+### Active Development (Frequent Changes)
 
-For active development with frequent changes:
+Faster incremental updates with file watching:
 
 ```toml
 [watcher]
-enabled = true
-debounce_ms = 200  # Faster updates
-
-[index]
-max_file_size = 2097152  # 2MB for larger files
-
-[search]
-rerank = true  # Better accuracy
+debounce_ms = 100    # Respond quickly to saves
+poll_interval_secs = 60
 ```
 
-### CI/CD
+### CI / CD (No File Watching)
 
-For continuous integration:
+Disable the file watcher to avoid hanging processes in CI:
 
 ```toml
 [watcher]
-enabled = false  # No file watching in CI
-
-[embedder]
-batch_size = 128  # Faster indexing
-
-[search]
-rerank = false  # Faster queries
+debounce_ms = 0
+poll_interval_secs = 0
 ```
 
-## User-Level Configuration
+You can also set `OMNI_SKIP_MODEL_DOWNLOAD=1` to skip the embedding model download and run keyword-only search in CI:
 
-Create `~/.config/omnicontext/config.toml` for global settings:
+```bash
+OMNI_SKIP_MODEL_DOWNLOAD=1 omnicontext index .
+```
+
+### Accuracy Optimization
+
+Maximize search quality at the expense of latency:
 
 ```toml
-[embedder]
-model_path = "~/.omnicontext/models/jina-embeddings-v2-base-code"
-
-[logging]
-level = "info"
-format = "json"
+[search]
+default_limit = 20
+token_budget = 16384
+rrf_k = 60
 ```
 
-## Validation
-
-Validate your configuration:
-
-```bash
-omni config validate
-```
-
-View effective configuration:
-
-```bash
-omni config show
-```
+---
 
 ## Performance Tuning
 
 ### Memory Optimization
 
-```toml
-[embedder]
-quantize = true  # 4x memory reduction
-batch_size = 16  # Lower memory usage
-
-[search]
-limit = 10  # Fewer results
-```
+- Reduce `max_file_size` to skip very large generated files.
+- Reduce `max_chunk_tokens` to produce more, smaller chunks.
+- Lower `default_limit` to return fewer results per query.
 
 ### Speed Optimization
 
-```toml
-[embedder]
-batch_size = 128  # Faster indexing
+- Increase `max_chunk_tokens` to produce fewer, larger chunks (faster indexing).
+- Use `OMNI_SKIP_MODEL_DOWNLOAD=1` for keyword-only mode when embeddings are not needed.
+- Increase `debounce_ms` to reduce re-index frequency during heavy editing.
 
-[search]
-rerank = false  # Skip reranking
-graph_boost = false  # Skip graph boost
-```
+### Search Quality Optimization
 
-### Accuracy Optimization
+- Increase `token_budget` in `[search]` to pack more context for the LLM.
+- Increase `default_limit` to retrieve more candidates before reranking.
+- Lower `rrf_k` (e.g., 30) for more aggressive score fusion.
 
-```toml
-[search]
-rerank = true  # Enable reranking
-graph_boost = true  # Enable graph boost
-min_score = 0.5  # Higher threshold
-
-[graph]
-max_hops = 3  # Deeper traversal
-```
+---
 
 ## Troubleshooting
 
-### Indexing Too Slow
+### Indexing Is Too Slow
 
-- Increase `batch_size`
-- Reduce `max_file_size`
-- Add more exclusions
+- Increase `max_chunk_tokens` to reduce the total number of chunks generated.
+- Add more `exclude_patterns` for generated or vendored directories.
+- Reduce `max_file_size` to skip large auto-generated files.
 
 ### High Memory Usage
 
-- Enable `quantize = true`
-- Reduce `batch_size`
-- Lower `max_file_size`
+- Reduce `max_file_size`.
+- Reduce `max_chunk_tokens`.
+- Exclude large asset directories (`*.png`, `*.svg`, etc.).
 
 ### Poor Search Results
 
-- Enable `rerank = true`
-- Enable `graph_boost = true`
-- Lower `min_score`
-- Increase `limit`
+- Increase `token_budget` so the `context_window` tool packs more context.
+- Increase `default_limit` to retrieve more candidates.
+- Lower `rrf_k` for more aggressive fusion of keyword and semantic results.
+- Check embedding coverage with `omnicontext status`; if coverage is low, run:
+
+```bash
+omnicontext setup model-download
+omnicontext index . --force
+```

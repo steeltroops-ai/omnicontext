@@ -25,6 +25,8 @@ import {
   bootstrap,
   resolveBinaries,
   BootstrapResult,
+  scheduleBackgroundUpdateCheck,
+  cleanupInstalledBinaries,
 } from "./bootstrapService";
 import { registerRepo } from "./repoRegistry";
 
@@ -126,8 +128,9 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("omnicontext.search", () => runSearch()),
     vscode.commands.registerCommand("omnicontext.status", () => runStatus()),
     vscode.commands.registerCommand("omnicontext.startMcp", () => startMcp()),
-    vscode.commands.registerCommand("omnicontext.startDaemon", () =>
-      startDaemon(),
+    vscode.commands.registerCommand(
+      "omnicontext.startDaemon",
+      (silent?: boolean) => startDaemon(Boolean(silent)),
     ),
     vscode.commands.registerCommand("omnicontext.stopDaemon", () =>
       stopDaemon(),
@@ -153,6 +156,9 @@ export function activate(context: vscode.ExtensionContext) {
     ),
     vscode.commands.registerCommand("omnicontext.updateBinary", () =>
       runUpdateBinary(),
+    ),
+    vscode.commands.registerCommand("omnicontext.uninstallEngine", () =>
+      runUninstallEngine(),
     ),
   );
 
@@ -202,21 +208,29 @@ export function activate(context: vscode.ExtensionContext) {
         statusBarItem.text = "$(search) OmniContext";
         statusBarItem.tooltip = "OmniContext: Click to search";
 
+        // Schedule a background update check 30 seconds after activation
+        const installedVersion = bootstrapResult.cliBinary ? (() => {
+          try {
+            const { execSync } = require("child_process") as typeof import("child_process");
+            const out = execSync(`"${bootstrapResult!.cliBinary}" --version`, {
+              timeout: 3000, stdio: ["ignore", "pipe", "ignore"],
+            }).toString().trim();
+            const m = out.match(/(\d+\.\d+\.\d+)/);
+            return m ? m[1] : context.extension.packageJSON.version as string;
+          } catch { return context.extension.packageJSON.version as string; }
+        })() : context.extension.packageJSON.version as string;
+
+        scheduleBackgroundUpdateCheck(context, bootstrapResult.cliBinary, installedVersion);
+
         // Now that binaries are confirmed present, start the daemon
         const config = vscode.workspace.getConfiguration("omnicontext");
         if (config.get<boolean>("autoStartDaemon", true)) {
           await startDaemon(true);
         } else if (config.get<boolean>("autoIndex", true)) {
-          // Auto-index: start indexing for any workspace with a valid root.
-          // Previously-indexed repos re-index silently; new repos are registered and indexed.
+          // Auto-index: run a silent index for any workspace with a valid root.
+          // Do not pre-register zero counts here; runIndex() writes real counts on success.
           const root = getWorkspaceRoot();
           if (root) {
-            const { isRepoIndexed, registerRepo } =
-              await import("./repoRegistry");
-            if (!isRepoIndexed(root)) {
-              // New workspace: register it so subsequent activations skip the first-time path.
-              registerRepo(root, 0, 0);
-            }
             await runIndex(true);
           }
         }
@@ -236,6 +250,14 @@ export function activate(context: vscode.ExtensionContext) {
   sidebarRefreshInterval = setInterval(() => {
     sidebarProvider.refresh();
   }, 30000);
+  context.subscriptions.push({
+    dispose: () => {
+      if (sidebarRefreshInterval) {
+        clearInterval(sidebarRefreshInterval);
+        sidebarRefreshInterval = null;
+      }
+    },
+  });
 
   // Auto-sync MCP on workspace/editor changes (throttled).
   // This automatically "auto-corrects" the MCP path when switching repositories.
@@ -283,6 +305,8 @@ export function deactivate() {
   symbolExtractor = null;
   statusBarItem?.dispose();
   outputChannel?.dispose();
+  // Note: cleanupInstalledBinaries is NOT called on normal deactivate —
+  // only on explicit user-triggered uninstall (omnicontext.uninstallEngine command).
 }
 
 async function runSyncMcp() {
@@ -305,8 +329,13 @@ async function runSyncMcp() {
  * Does not show warnings, only logs results.
  */
 async function syncMcpSilent(): Promise<void> {
-  const config = vscode.workspace.getConfiguration("omnicontext");
-  if (!config.get<boolean>("autoSyncMcp", true)) return;
+  const topLevel = vscode.workspace.getConfiguration("omnicontext");
+  const legacy = vscode.workspace.getConfiguration("omnicontext.automation");
+  const autoSyncEnabled = topLevel.get<boolean>(
+    "autoSyncMcp",
+    legacy.get<boolean>("autoSyncMcp", true),
+  );
+  if (!autoSyncEnabled) return;
 
   const result = await syncMcpToClients();
   if (result.synced > 0) {
@@ -400,9 +429,11 @@ async function syncMcpToClients(): Promise<{
         );
       }
 
+      let wroteConfig = false;
       if (merged) {
         const configStr = JSON.stringify(merged, null, 2);
         fs.writeFileSync(client.configPath, configStr, "utf-8");
+        wroteConfig = true;
 
         // Verify the write succeeded by reading back
         try {
@@ -417,11 +448,13 @@ async function syncMcpToClients(): Promise<{
         }
       }
 
-      synced++;
-      syncedClients.push(client.name);
-      outputChannel.appendLine(
-        `[mcp-sync] configured ${client.name}: ${client.configPath}`,
-      );
+      if (wroteConfig) {
+        synced++;
+        syncedClients.push(client.name);
+        outputChannel.appendLine(
+          `[mcp-sync] configured ${client.name}: ${client.configPath}`,
+        );
+      }
     } catch (err: any) {
       outputChannel.appendLine(
         `[mcp-sync] ${client.name} error: ${err.message}`,
@@ -436,21 +469,36 @@ async function runRepairEnvironment() {
   const binary = getBinaryPath();
   if (!binary) return;
 
-  const scriptPath = path.join(
-    path.dirname(binary),
-    "..",
-    "..",
-    "scripts",
-    "fix-onnx-runtime.ps1",
-  );
-
-  const terminal = vscode.window.createTerminal("OmniContext Repair");
-  terminal.show();
-
-  if (process.platform === "win32") {
-    terminal.sendText(`pwsh -File "${scriptPath}"`);
-  } else {
+  if (process.platform !== "win32") {
     vscode.window.showInformationMessage("Repair is only needed on Windows.");
+    return;
+  }
+
+  // Re-run bootstrap to re-download and verify ONNX runtime
+  const { bootstrap } = await import("./bootstrapService");
+  try {
+    vscode.window.showInformationMessage(
+      "OmniContext: Re-downloading ONNX Runtime. This may take a moment...",
+    );
+    const context = (globalThis as any).__omniExtensionContext as
+      | vscode.ExtensionContext
+      | undefined;
+    if (context) {
+      await bootstrap(context, (status) => {
+        outputChannel.appendLine(`[repair] ${status.phase}: ${status.message}`);
+      });
+      vscode.window.showInformationMessage(
+        "OmniContext repair complete. Restart VS Code to apply.",
+      );
+    } else {
+      vscode.window.showWarningMessage(
+        "Cannot repair: extension context unavailable. Try reloading VS Code.",
+      );
+    }
+  } catch (e: any) {
+    vscode.window.showErrorMessage(
+      `Repair failed: ${e.message}. Try reinstalling the extension.`,
+    );
   }
 }
 
@@ -522,6 +570,36 @@ async function runUpdateBinary() {
     outputChannel.appendLine(`[update] failed: ${err.message}`);
     vscode.window.showErrorMessage(`OmniContext update failed: ${err.message}`);
   }
+}
+
+/**
+ * Uninstall the OmniContext engine binaries that were auto-downloaded by
+ * this extension into its globalStoragePath. Does NOT remove binaries
+ * installed via the standalone install script (~/.omnicontext/bin).
+ */
+async function runUninstallEngine(): Promise<void> {
+  const ctx = extensionContext;
+  if (!ctx) return;
+
+  const choice = await vscode.window.showWarningMessage(
+    "Remove OmniContext engine binaries downloaded by this extension? " +
+      "(Binaries in ~/.omnicontext/bin installed via install script are NOT affected.)",
+    { modal: true },
+    "Remove",
+    "Cancel",
+  );
+
+  if (choice !== "Remove") return;
+
+  stopDaemon();
+
+  cleanupInstalledBinaries(ctx);
+  bootstrapResult = null;
+
+  vscode.window.showInformationMessage(
+    "OmniContext extension-managed binaries removed. " +
+      "Re-install with the Update Binary command or the standalone installer.",
+  );
 }
 
 // ... (existing helper functions) ...
@@ -738,7 +816,7 @@ async function startDaemon(silent: boolean = false) {
         });
       return;
     }
-    runIndex(silent);
+    runIndex(silent, false);
     return;
   }
 
@@ -753,10 +831,15 @@ async function startDaemon(silent: boolean = false) {
 
   statusBarItem.text = "$(sync~spin) Starting daemon...";
 
-  try {
+  let degradedMode = false;
+
+  const launchDaemon = async (skipModelLoad: boolean): Promise<void> => {
     daemonProcess = cp.spawn(daemonBinary, ["--repo", root], {
       cwd: root,
       stdio: ["ignore", "pipe", "pipe"],
+      env: skipModelLoad
+        ? { ...process.env, OMNI_SKIP_MODEL_DOWNLOAD: "1" }
+        : process.env,
     });
 
     daemonProcess.stderr?.on("data", (data: Buffer) => {
@@ -775,8 +858,7 @@ async function startDaemon(silent: boolean = false) {
     });
 
     // Poll for daemon readiness instead of a fixed delay.
-    // The daemon needs time to create the named pipe before we can connect.
-    const maxWaitMs = 10_000;
+    const maxWaitMs = 60_000;
     const pollIntervalMs = 250;
     let connected = false;
     for (let waited = 0; waited < maxWaitMs; waited += pollIntervalMs) {
@@ -790,12 +872,48 @@ async function startDaemon(silent: boolean = false) {
         connected = true;
         break;
       } catch {
-        // Pipe not ready yet — wait and retry
         await new Promise((r) => setTimeout(r, pollIntervalMs));
       }
     }
+
     if (!connected) {
-      throw new Error("Daemon failed to become ready within 10 seconds");
+      // Ensure this launch attempt is torn down before retrying.
+      if (daemonProcess && !daemonExitedEarly) {
+        try {
+          daemonProcess.kill();
+        } catch {
+          // Best-effort cleanup.
+        }
+      }
+      throw new Error("Daemon failed to become ready within 60 seconds");
+    }
+  };
+
+  try {
+    try {
+      await launchDaemon(false);
+    } catch (err: any) {
+      const message = String(err?.message || err || "");
+      const recoverableStartupFailure =
+        message.includes("failed to become ready") ||
+        message.includes("exited before IPC connection");
+      if (!recoverableStartupFailure) {
+        throw err;
+      }
+
+      const modelReady = probeEmbeddingModelReady(root);
+      if (modelReady === false) {
+        outputChannel.appendLine(
+          "[daemon] embedding model not ready, retrying in degraded mode (OMNI_SKIP_MODEL_DOWNLOAD=1)",
+        );
+        await launchDaemon(true);
+        degradedMode = true;
+        outputChannel.appendLine(
+          "[daemon] degraded mode active: semantic embeddings are temporarily disabled",
+        );
+      } else {
+        throw err;
+      }
     }
 
     statusBarItem.text = "$(zap) OmniContext";
@@ -805,7 +923,13 @@ async function startDaemon(silent: boolean = false) {
     syncMcpSilent();
 
     if (!silent) {
-      vscode.window.showInformationMessage("OmniContext daemon started");
+      if (degradedMode) {
+        vscode.window.showWarningMessage(
+          "OmniContext daemon started in degraded mode (keyword-only). Use 'Repair Environment' or reinstall model to restore embeddings.",
+        );
+      } else {
+        vscode.window.showInformationMessage("OmniContext daemon started");
+      }
     }
   } catch (err: any) {
     statusBarItem.text = "$(error) OmniContext";
@@ -818,35 +942,43 @@ async function startDaemon(silent: boolean = false) {
   }
 }
 
-function stopDaemon() {
-  // Clear reconnection timer
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer);
-    reconnectTimer = null;
-  }
-  reconnectAttempts = 0;
-  currentRepoRoot = null;
-  isDaemonConnected = false;
-  stopHealthCheck();
-
-  if (ipcClient) {
-    try {
-      sendIpcRequest("shutdown", {}).catch(() => {});
-    } catch {
-      // Ignore errors during shutdown
+function stopDaemon(): Promise<void> {
+  return new Promise((resolve) => {
+    // Clear reconnection timer
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
     }
-    rejectAllPendingRequests("Daemon stopped");
-    ipcClient.destroy();
-    ipcClient = null;
-  }
+    reconnectAttempts = 0;
+    currentRepoRoot = null;
+    isDaemonConnected = false;
+    stopHealthCheck();
 
-  if (daemonProcess) {
-    daemonProcess.kill();
-    daemonProcess = null;
-  }
+    if (ipcClient) {
+      try {
+        sendIpcRequest("shutdown", {}).catch(() => {});
+      } catch {
+        // Ignore errors during shutdown
+      }
+      rejectAllPendingRequests("Daemon stopped");
+      ipcClient.destroy();
+      ipcClient = null;
+    }
 
-  statusBarItem.text = "$(search) OmniContext";
-  statusBarItem.tooltip = "OmniContext: Daemon stopped";
+    if (daemonProcess) {
+      const proc = daemonProcess;
+      daemonProcess = null;
+      proc.once("exit", () => resolve());
+      proc.kill();
+      // Fallback: resolve after 2s if process doesn't exit gracefully
+      setTimeout(resolve, 2000);
+    } else {
+      resolve();
+    }
+
+    statusBarItem.text = "$(search) OmniContext";
+    statusBarItem.tooltip = "OmniContext: Daemon stopped";
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1278,11 +1410,103 @@ function getCliContext(prompt: string): PreflightResponse | null {
   }
 }
 
+function shouldRetryCliInDegradedMode(err: any): boolean {
+  const message = String(err?.message || "").toLowerCase();
+  const code = String(err?.code || "").toLowerCase();
+  const signal = String(err?.signal || "").toLowerCase();
+
+  return (
+    message.includes("timed out") ||
+    code === "etimedout" ||
+    signal === "sigterm" ||
+    message.includes("onnx") ||
+    message.includes("embedding model")
+  );
+}
+
+function probeEmbeddingModelReady(repoRoot: string): boolean | null {
+  const binary = getBinaryPath();
+  if (!binary) {
+    return null;
+  }
+
+  try {
+    const result = cp.execFileSync(
+      binary,
+      ["setup", "model-status", "--json"],
+      {
+        encoding: "utf-8",
+        timeout: 15_000,
+        cwd: repoRoot,
+      },
+    );
+    const parsed = JSON.parse(result);
+    return Boolean(parsed?.model_ready);
+  } catch (err: any) {
+    outputChannel.appendLine(
+      `[daemon] model-status probe failed: ${err?.message || String(err)}`,
+    );
+    return null;
+  }
+}
+
+function runCliJsonWithDegradedFallback(
+  binary: string,
+  args: string[],
+  cwd: string,
+  timeoutMs: number,
+  commandName: string,
+): { data: any; degradedMode: boolean } {
+  const runWithEnv = (env: NodeJS.ProcessEnv): string =>
+    cp.execFileSync(binary, args, {
+      encoding: "utf-8",
+      timeout: timeoutMs,
+      cwd,
+      env,
+    });
+
+  try {
+    const result = runWithEnv(process.env);
+    return { data: JSON.parse(result), degradedMode: false };
+  } catch (err: any) {
+    if (!shouldRetryCliInDegradedMode(err)) {
+      throw err;
+    }
+
+    outputChannel.appendLine(
+      `[${commandName}] primary CLI execution failed, retrying with OMNI_SKIP_MODEL_DOWNLOAD=1`,
+    );
+    const degradedEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      OMNI_SKIP_MODEL_DOWNLOAD: "1",
+    };
+    const result = runWithEnv(degradedEnv);
+    return { data: JSON.parse(result), degradedMode: true };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
 
-async function runIndex(silent: boolean = false) {
+async function runIndex(
+  silent: boolean = false,
+  attemptDaemonStart: boolean = true,
+) {
+  // Prefer daemon indexing for live system/performance metrics in the sidebar.
+  if (!ipcClient && attemptDaemonStart) {
+    const daemonBinary = getDaemonBinaryPath();
+    if (daemonBinary) {
+      try {
+        await startDaemon(true);
+      } catch (err: any) {
+        outputChannel.appendLine(
+          `[index] daemon startup attempt failed, falling back to CLI: ${err.message}`,
+        );
+      }
+    }
+  }
+
   // Try daemon IPC first
   if (ipcClient) {
     if (!silent) statusBarItem.text = "$(sync~spin) Indexing...";
@@ -1349,13 +1573,13 @@ async function runIndex(silent: boolean = false) {
   }
 
   try {
-    const result = cp.execFileSync(binary, ["index", root, "--json"], {
-      encoding: "utf-8",
-      timeout: 300_000,
-      cwd: root,
-    });
-
-    const data = JSON.parse(result);
+    const { data, degradedMode } = runCliJsonWithDegradedFallback(
+      binary,
+      ["index", root, "--json"],
+      root,
+      300_000,
+      "index",
+    );
     statusBarItem.text = `$(search) OmniContext (${data.files_processed} files)`;
 
     // Record in repo registry for sidebar tracking
@@ -1375,6 +1599,11 @@ async function runIndex(silent: boolean = false) {
           `${data.embeddings_generated ?? 0} embeddings${failedText} ` +
           `${embeddingFailureText} in ${data.elapsed_ms}ms`,
       );
+      if (degradedMode) {
+        vscode.window.showWarningMessage(
+          "Indexing completed in degraded mode (keyword-only). Restore embeddings by repairing model setup.",
+        );
+      }
     }
   } catch (err: any) {
     statusBarItem.text = "$(error) OmniContext";
@@ -1467,12 +1696,19 @@ async function runStatus() {
       const binary = getBinaryPath();
       if (!binary) return;
 
-      const result = cp.execFileSync(binary, ["status", root, "--json"], {
-        encoding: "utf-8",
-        timeout: 10_000,
-        cwd: root,
-      });
-      data = JSON.parse(result);
+      const statusResult = runCliJsonWithDegradedFallback(
+        binary,
+        ["status", root, "--json"],
+        root,
+        60_000,
+        "status",
+      );
+      data = statusResult.data;
+      if (statusResult.degradedMode) {
+        outputChannel.appendLine(
+          "Status collected in degraded mode (keyword-only) after model initialization timeout.",
+        );
+      }
     }
 
     outputChannel.clear();

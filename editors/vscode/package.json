@@ -36,11 +36,20 @@
     "workspaceContains:**/*.rs",
     "workspaceContains:**/*.py",
     "workspaceContains:**/*.ts",
+    "workspaceContains:**/*.js",
+    "workspaceContains:**/*.tsx",
+    "workspaceContains:**/*.jsx",
     "workspaceContains:**/*.go",
     "workspaceContains:**/*.java",
     "workspaceContains:**/*.c",
     "workspaceContains:**/*.cpp",
-    "workspaceContains:**/*.cs"
+    "workspaceContains:**/*.cs",
+    "workspaceContains:**/*.rb",
+    "workspaceContains:**/*.php",
+    "workspaceContains:**/*.swift",
+    "workspaceContains:**/*.kt",
+    "workspaceContains:**/*.css",
+    "workspaceContains:**/*.md"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -109,6 +118,16 @@
         "command": "omnicontext.repair",
         "title": "OmniContext: Update / Repair Extension Backend",
         "icon": "$(tools)"
+      },
+      {
+        "command": "omnicontext.updateBinary",
+        "title": "OmniContext: Update Engine Binary",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "omnicontext.uninstallEngine",
+        "title": "OmniContext: Uninstall Extension-Managed Engine",
+        "icon": "$(trash)"
       }
     ],
     "configuration": {
@@ -144,7 +163,12 @@
         "omnicontext.autoSyncMcp": {
           "type": "boolean",
           "default": true,
-          "description": "Automatically configure OmniContext MCP in detected AI clients (Claude, Cursor, Continue, Kiro, Windsurf, Cline) when the daemon starts"
+          "description": "Automatically configure OmniContext MCP in detected AI clients (Claude, Cursor, Continue, Kiro, Windsurf, Cline, RooCode, Trae, Gemini CLI, Amazon Q, Augment Code) when the daemon starts"
+        },
+        "omnicontext.autoUpdate": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically check for and install engine binary updates in the background (30 seconds after activation)"
         },
         "omnicontext.logLevel": {
           "type": "string",
@@ -186,8 +210,9 @@
         },
         "omnicontext.automation.autoSyncMcp": {
           "type": "boolean",
-          "default": false,
-          "description": "Automatically sync MCP configuration to Claude and Kiro on changes"
+          "default": true,
+          "deprecationMessage": "Deprecated: Use omnicontext.autoSyncMcp instead",
+          "description": "[Deprecated] Use omnicontext.autoSyncMcp instead"
         }
       }
     },

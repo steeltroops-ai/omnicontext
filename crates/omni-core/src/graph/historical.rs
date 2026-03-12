@@ -206,6 +206,20 @@ impl HistoricalGraphEnhancer {
         self.co_change_frequency.get(&pair).copied().unwrap_or(0)
     }
 
+    /// Get all co-change file pairs above a given frequency threshold.
+    ///
+    /// Returns `(file_a, file_b, frequency)` triples for bridging into symbol graphs.
+    pub fn co_change_pairs_above(
+        &self,
+        min_frequency: usize,
+    ) -> Vec<(&std::path::Path, &std::path::Path, usize)> {
+        self.co_change_frequency
+            .iter()
+            .filter(|(_, freq)| **freq >= min_frequency)
+            .map(|((a, b), freq)| (a.as_path(), b.as_path(), *freq))
+            .collect()
+    }
+
     /// Get bug fix count for a specific file.
     pub fn get_bug_fix_count(&self, file: &PathBuf) -> usize {
         self.bug_prone_files.get(file).copied().unwrap_or(0)

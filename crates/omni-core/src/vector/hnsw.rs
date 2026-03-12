@@ -303,7 +303,10 @@ impl HnswIndex {
             return Vec::new();
         }
 
-        let ep = self.entry_point.unwrap();
+        let ep = match self.entry_point {
+            Some(ep) => ep,
+            None => return Vec::new(), // No entry point — index is in an invalid state
+        };
         let mut current_ep = ep;
 
         // Phase 1: Greedy descent from top to layer 1
