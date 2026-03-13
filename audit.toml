@@ -1,0 +1,17 @@
+# Cargo audit configuration for OmniContext
+# See: https://github.com/rustsec/cargo-audit
+
+[advisories]
+# gix-date: RUSTSEC-2025-0140 - Non-utf8 String can be created with `TimeBuf::as_str`
+# We use gix for branch-aware diff indexing. gix 0.72 depends on gix-date 0.10.7.
+# The vulnerable code path (TimeBuf::as_str) is not exercised by our usage of gix
+# (we only use branch listing and commit walking). Fix: upgrade gix to >=0.73.
+# TODO: Upgrade gix when 0.73+ stabilizes.
+ignore = [
+    "RUSTSEC-2025-0140",  # gix-date: non-utf8 TimeBuf (not exercised by our gix usage)
+    "RUSTSEC-2026-0002",  # lru: IterMut soundness (we do not call iter_mut() on LruCache)
+    "RUSTSEC-2025-0141",  # bincode 1.x unmaintained (used transitively, no direct call)
+    "RUSTSEC-2024-0384",  # instant unmaintained (transitive via indicatif)
+    "RUSTSEC-2025-0119",  # number_prefix unmaintained (transitive via indicatif)
+    "RUSTSEC-2024-0436",  # paste unmaintained (transitive via proc macros)
+]

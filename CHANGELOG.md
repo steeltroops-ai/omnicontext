@@ -10,14 +10,62 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Restore distribution enhancements stripped by release automation ([e28640f](https://github.com/steeltroops-ai/omnicontext/commit/e28640f3f893e073c8f8550870371a92caea76a6))
 - Use platform config variables to avoid unused-variable errors on Linux ([116c6ca](https://github.com/steeltroops-ai/omnicontext/commit/116c6ca3e0e139093a21be75f548e992ad79889c))
 
-## [1.2.0] - 2026-03-12
+## [1.2.0] - 2026-03-13
 
 ### Added
-- Add Antigravity IDE support, harden distribution scripts, and enhance MCP tools ([99dd59f](https://github.com/steeltroops-ai/omnicontext/commit/99dd59fa2d87d491d22cbc5fd64308b40cd612f1))
-- Improve indexed repo visibility and repo actions ([6645aa4](https://github.com/steeltroops-ai/omnicontext/commit/6645aa496f5e8040aaafda9ccad702957c923f94))
+- **Antigravity IDE support**: MCP auto-configuration for Antigravity IDE on all platforms
+  using `servers` key format; orchestrator updated with correct platform-specific config paths
+  (`~/.config/Antigravity/User/mcp.json` Linux/macOS, `%APPDATA%\Antigravity\User\mcp.json` Windows)
+- **16-IDE MCP coverage**: `omnicontext setup --all` now covers Claude Desktop, Claude Code,
+  Cursor, Windsurf, VS Code, VS Code Insiders, Cline, RooCode, Continue.dev, Zed, Kiro,
+  PearAI, Trae, Antigravity, Gemini CLI, Amazon Q CLI, and Augment Code
+- **Distribution script `--help` and enterprise options**: `install.sh` and `install.ps1` now
+  support `--help`, `--no-model`, `--no-mcp`, `--no-onnx`, `--dry-run`, `--dir <path>`,
+  `--model <name>`, `--version`; `uninstall.sh`/`uninstall.ps1` add `--help` and `--purge`
+- **VS Code extension model selection**: New `omnicontext.embeddingModel` setting and
+  `OmniContext: Select Embedding Model` command palette entry; supports
+  `jina-embeddings-v2-base-code`, `jina-embeddings-v2-small-en`, `all-minilm-l6-v2`
+- **Security audit**: Updated `quinn-proto` 0.11.13 → 0.11.14 (RUSTSEC-2026-0037 DoS fix);
+  added `audit.toml` documenting suppressed advisories with justifications; `bun audit` passes
 
 ### Fixed
-- Mark ONNX-dependent FFI tests as #[ignore] ([d9f483e](https://github.com/steeltroops-ai/omnicontext/commit/d9f483e1158ca4b3e550e3a37e56caee53e611bc))
+- **Clippy pedantic compliance** (`omni-core`, `omni-mcp`, `omni-daemon`, `omni-ffi`, `omni-cli`):
+  - `doc_markdown`: corrected Markdown in doc comments (BackPressure → `BackPressure`, etc.)
+  - `map_or_else` / `map_or(false, …)` → `is_some_and(…)` in search, plan_auditor, graph modules
+  - `manual_clamp`: 6 instances in `ipc.rs` and `tools.rs` replaced with `.clamp(min, max)`
+  - `similar_names`: `#[allow]` on `file_a_str` / `file_b_str` in pipeline diff functions
+  - `clone_on_copy`: `kind.clone()` → `*kind` in graph reasoning (Copy enum)
+  - `case_sensitive_file_extension_comparisons`: all extension comparisons now lowercase-normalized
+  - `unnecessary_sort_by`: graph coverage uses `sort_by_key` with `std::cmp::Reverse`
+  - FNV hash constants now use digit grouping separators (`0xcbf2_9ce4_8422_2325`)
+  - `doc_lazy_continuation`, `unnested_or_patterns`, `assigning_clones`, `needless_borrows_for_generic_args`
+- **FFI integration tests**: 4 tests in `omni-ffi/src/lib.rs` marked with
+  `#[ignore = "requires ONNX model download (~550 MB)"]` so `cargo test --workspace`
+  completes without network access; run `cargo test -- --ignored` for full integration testing
+- **Linux CI**: Eliminated `unused variable: app_support` and `unused variable: appdata`
+  errors on Linux; all platform-gated blocks now use the pre-declared variables instead of
+  inline `home.join(".config")` expressions
+- **Distribution manifests**: Restored `license`, `bottle :unneeded`, `post_install` block,
+  and `caveats` in `distribution/homebrew/omnicontext.rb`; restored `post_install` and
+  `notes` in `distribution/scoop/omnicontext.json` after release automation stripped them
+- **Release automation template**: Updated `.github/workflows/release.yml` embedded Homebrew
+  and Scoop templates to include all distribution enhancements for future releases
+- **IPC startup race condition**: Extension now waits 2 seconds before first IPC connection
+  attempt when daemon starts cold; status bar shows loading state during ONNX initialization
+- **Cross-platform ONNX detection**: `resolveBinaries()` checks `libonnxruntime.so`,
+  `libonnxruntime.dylib`, and versioned variants instead of assuming present on non-Windows
+
+### Changed
+- VS Code sidebar shows indexed repository list with one-click re-index actions per repo
+- MCP auto-sync runs after every binary update (not just first install) to pick up new IDEs
+- Cargo workspace `rust-version` confirmed at 1.80 (MSRV); all MSRV-gated APIs verified
+
+### Security
+- `quinn-proto` updated 0.11.13 → 0.11.14 (RUSTSEC-2026-0037: DoS via crafted QUIC packets)
+- `lru` 0.12.5 soundness advisory (RUSTSEC-2026-0002): `iter_mut()` is not called on any
+  `LruCache` instance in this codebase; documented in `audit.toml` with explicit justification
+- `gix-date` 0.10.7 (RUSTSEC-2025-0140): `TimeBuf::as_str` not exercised by our gix usage;
+  documented in `audit.toml`; will be resolved when `gix` 0.73+ stabilizes
 
 ## [1.1.2] - 2026-03-11
 

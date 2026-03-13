@@ -5,33 +5,123 @@
 .DESCRIPTION
     Removes OmniContext binaries, PATH entry, indexed data, cached models,
     and unlinks the MCP entry from all known AI client config files.
+
     Use -KeepData to preserve the vector index and embedding model.
     Use -KeepConfig to leave MCP client configurations untouched.
+    Use -Purge to explicitly remove everything (same as the default, but
+    makes the intent clear — useful in scripts).
 
 .PARAMETER KeepData
     Preserve ~/.omnicontext (models, vector indices, repos).
+    Binaries and PATH entry are still removed.
 
 .PARAMETER KeepConfig
     Preserve MCP configuration entries in all AI clients.
+    Useful when you plan to reinstall shortly.
+
+.PARAMETER Purge
+    Explicitly remove everything: binaries, data, models, and all MCP configs.
+    This is the default behaviour; the flag exists for script clarity.
+    Cannot be combined with -KeepData or -KeepConfig.
 
 .PARAMETER Silent
-    Skip the confirmation prompt.
+    Skip the confirmation prompt. Use in automated / CI environments.
+
+.PARAMETER Help
+    Show this help message and exit.
 
 .EXAMPLE
     irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/uninstall.ps1 | iex
 
 .EXAMPLE
     .\uninstall.ps1 -KeepData -KeepConfig
+
+.EXAMPLE
+    # Non-interactive full uninstall
+    .\uninstall.ps1 -Silent
+
+.EXAMPLE
+    # Explicit full purge without prompts
+    .\uninstall.ps1 -Purge -Silent
+
+.EXAMPLE
+    # Keep your 600 MB model but remove the binaries
+    .\uninstall.ps1 -KeepData -Silent
+
+.NOTES
+    Requires PowerShell 5.1 or later.
+
+    Files/directories removed by default:
+      %USERPROFILE%\.omnicontext\bin\omnicontext*.exe
+      %USERPROFILE%\.omnicontext\  (data + models)
+      User PATH entry for the bin directory
+
+    MCP entries unlinked from:
+      Claude Desktop, Claude Code, Cursor, Windsurf, VS Code,
+      Cline, RooCode, Continue.dev, Zed, Kiro, PearAI, Trae,
+      Antigravity, Gemini CLI, Amazon Q CLI, Augment Code
+
+    To reinstall after uninstalling:
+      irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install.ps1 | iex
 #>
 
 param(
     [switch]$KeepData,
     [switch]$KeepConfig,
-    [switch]$Silent
+    [switch]$Purge,
+    [switch]$Silent,
+    [switch]$Help
 )
 
 #Requires -Version 5.1
 $ErrorActionPreference = "Stop"
+
+# Handle -Help before anything else
+if ($Help) {
+    Get-Help $MyInvocation.MyCommand.Path -Detailed 2>$null
+    if (-not $MyInvocation.MyCommand.Path) {
+        Write-Host @"
+OmniContext Uninstaller for Windows
+
+USAGE
+  irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/uninstall.ps1 | iex
+  .\uninstall.ps1 [OPTIONS]
+
+OPTIONS
+  -Help           Show this help message and exit
+  -Silent         Skip the confirmation prompt
+  -KeepData       Preserve ~/.omnicontext (models, vector indices)
+  -KeepConfig     Leave MCP client configurations untouched
+  -Purge          Explicitly remove everything (default behaviour; for
+                  script clarity — cannot combine with -KeepData/-KeepConfig)
+
+EXAMPLES
+  # Interactive full uninstall
+  .\uninstall.ps1
+
+  # Non-interactive
+  .\uninstall.ps1 -Silent
+
+  # Keep your 600 MB model
+  .\uninstall.ps1 -KeepData -Silent
+
+  # Explicit full purge
+  .\uninstall.ps1 -Purge -Silent
+
+NOTES
+  Requires PowerShell 5.1+.
+  To reinstall:
+    irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install.ps1 | iex
+"@
+    }
+    exit 0
+}
+
+# -Purge overrides keep flags
+if ($Purge) {
+    $KeepData   = $false
+    $KeepConfig = $false
+}
 
 # Enable TLS 1.2 for secure downloads (GitHub)
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -47,10 +137,10 @@ $RED    = c "31"; $GREEN = c "32"; $YELLOW = c "33"
 $BLUE   = c "34"; $CYAN  = c "36"
 
 function step   { param($n,$t) Write-Host "$BOLD$CYAN  [$n]$RESET $t" }
-function ok     { param($t)    Write-Host "$GREEN  [v]$RESET $t" }
-function info   { param($t)    Write-Host "$BLUE  [»]$RESET $t" }
-function warn   { param($t)    Write-Host "$YELLOW  [!] $RESET $t" }
-function fail   { param($t)    Write-Host "$RED  [x]$RESET $t" }
+function ok     { param($t)    Write-Host "$GREEN  ✔$RESET $t" }
+function info   { param($t)    Write-Host "$BLUE  »$RESET $t" }
+function warn   { param($t)    Write-Host "$YELLOW  ⚠ $RESET $t" }
+function fail   { param($t)    Write-Host "$RED  ✖$RESET $t" }
 $HR      = $DIM + ('-' * 54) + $RESET
 function hr    { Write-Host $HR }
 function blank { Write-Host '' }

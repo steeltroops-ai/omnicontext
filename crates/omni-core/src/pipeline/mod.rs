@@ -586,11 +586,22 @@ impl Engine {
         let content = std::fs::read_to_string(path)
             .map_err(|e| OmniError::Internal(format!("failed to read {}: {e}", path.display())))?;
 
-        // Detect language
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        // Detect language — lowercase the extension for case-insensitive matching on
+        // macOS and Windows where the filesystem may preserve the original case
+        // (e.g., a file named `Main.RS` must be treated as Rust).
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_ascii_lowercase());
+        let ext = ext.as_deref().unwrap_or("");
         let language = Language::from_extension(ext);
 
         if matches!(language, Language::Unknown) {
+            tracing::debug!(
+                path = %path.display(),
+                ext = ext,
+                "skipping file with unrecognized extension"
+            );
             return Err(OmniError::Parse {
                 path: path.to_path_buf(),
                 message: "unsupported language".into(),

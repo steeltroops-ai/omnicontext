@@ -128,6 +128,11 @@
         "command": "omnicontext.uninstallEngine",
         "title": "OmniContext: Uninstall Extension-Managed Engine",
         "icon": "$(trash)"
+      },
+      {
+        "command": "omnicontext.selectModel",
+        "title": "OmniContext: Select Embedding Model",
+        "icon": "$(symbol-misc)"
       }
     ],
     "configuration": {
@@ -213,6 +218,21 @@
           "default": true,
           "deprecationMessage": "Deprecated: Use omnicontext.autoSyncMcp instead",
           "description": "[Deprecated] Use omnicontext.autoSyncMcp instead"
+        },
+        "omnicontext.embeddingModel": {
+          "type": "string",
+          "default": "jina-embeddings-v2-base-code",
+          "enum": [
+            "jina-embeddings-v2-base-code",
+            "jina-embeddings-v2-small-en",
+            "all-minilm-l6-v2"
+          ],
+          "enumDescriptions": [
+            "Best code quality (~550 MB) — recommended for most projects",
+            "Smaller and faster (~130 MB) — good general-purpose quality",
+            "Tiny model (~22 MB) — minimal resource usage, basic search only"
+          ],
+          "description": "Embedding model used for semantic code search. Changing this setting will prompt you to restart the daemon. Use the 'OmniContext: Select Embedding Model' command for a guided picker."
         }
       }
     },

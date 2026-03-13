@@ -1,9 +1,61 @@
 #!/usr/bin/env bash
 # OmniContext Uninstaller - macOS / Linux
-# Usage: bash uninstall.sh [--keep-data] [--keep-config] [--silent]
+# Usage: bash uninstall.sh [OPTIONS]
 #        curl -fsSL https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/uninstall.sh | bash
 
 set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Usage / help
+# ---------------------------------------------------------------------------
+_usage() {
+    cat <<'OMNI_USAGE_EOF'
+OmniContext Uninstaller — macOS / Linux
+
+USAGE
+  bash uninstall.sh [OPTIONS]
+  curl -fsSL https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/uninstall.sh | bash
+
+OPTIONS
+  -h, --help          Show this help message and exit
+  -y, --silent        Skip the confirmation prompt
+      --keep-data     Preserve ~/.omnicontext (models, vector indices)
+      --keep-config   Leave MCP client configurations untouched
+      --purge         Remove everything, including data and configs
+                      (explicit alias for the default full-removal behaviour;
+                       equivalent to omitting --keep-data and --keep-config)
+
+EXAMPLES
+  # Interactive full uninstall (will prompt for confirmation)
+  bash uninstall.sh
+
+  # Non-interactive / CI — remove everything without prompting
+  bash uninstall.sh --silent
+
+  # Keep your indexed data and models (~600 MB), remove binaries only
+  bash uninstall.sh --keep-data
+
+  # Keep MCP entries in AI client configs
+  bash uninstall.sh --keep-config
+
+  # Keep both data and config
+  bash uninstall.sh --keep-data --keep-config
+
+  # Explicit full purge (no prompts)
+  bash uninstall.sh --purge --silent
+
+NOTES
+  • Binaries removed from: ~/.local/bin/omnicontext*
+  • Data directory:        ~/.omnicontext
+  • PATH entry removed from: ~/.bashrc, ~/.zshrc, ~/.profile
+  • MCP configs cleaned for: Claude Desktop, Claude Code, Cursor, Windsurf,
+      VS Code, Cline, RooCode, Continue.dev, Zed, Kiro, PearAI, Trae,
+      Antigravity, Gemini CLI, Amazon Q CLI, Augment Code
+  • Requires: bash 3.2+, python3 (optional, for richer JSON handling)
+  • To reinstall:
+      curl -fsSL https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install.sh | bash
+OMNI_USAGE_EOF
+}
 
 # ---------------------------------------------------------------------------
 # parse args
@@ -12,12 +64,33 @@ KEEP_DATA=false
 KEEP_CONFIG=false
 SILENT=false
 
-while [[ $# -gt 0 ]]; do
+while [ $# -gt 0 ]; do
     case "$1" in
-        --keep-data)   KEEP_DATA=true;   shift ;;
-        --keep-config) KEEP_CONFIG=true; shift ;;
-        --silent|-y)   SILENT=true;      shift ;;
-        *) shift ;;
+        -h|--help)
+            _usage
+            exit 0
+            ;;
+        --keep-data)
+            KEEP_DATA=true
+            shift
+            ;;
+        --keep-config)
+            KEEP_CONFIG=true
+            shift
+            ;;
+        --purge)
+            # Explicit purge — force both flags to false (remove everything)
+            KEEP_DATA=false
+            KEEP_CONFIG=false
+            shift
+            ;;
+        --silent|-y)
+            SILENT=true
+            shift
+            ;;
+        *)
+            shift
+            ;;
     esac
 done
 
@@ -33,10 +106,10 @@ else
 fi
 
 step()  { printf "${BOLD}${CYAN}  [%s]${RESET} %s\n" "$1" "$2"; }
-ok()    { printf "${GREEN}  [v]${RESET} %s\n" "$*"; }
-info()  { printf "${BLUE}  [»]${RESET} %s\n" "$*"; }
-warn()  { printf "${YELLOW}  [!]${RESET} %s\n" "$*"; }
-err()   { printf "${RED}  [x]${RESET} %s\n" "$*"; }
+ok()    { printf "${GREEN}  ✔${RESET} %s\n" "$*"; }
+info()  { printf "${BLUE}  »${RESET} %s\n" "$*"; }
+warn()  { printf "${YELLOW}  ⚠${RESET} %s\n" "$*"; }
+err()   { printf "${RED}  ✖${RESET} %s\n" "$*"; }
 hr()    { printf "${DIM}%s${RESET}\n" "──────────────────────────────────────────────────────"; }
 blank() { echo ""; }
 die()   { blank; err "$1"; blank; exit 1; }
@@ -72,11 +145,14 @@ blank
 
 if [ "$SILENT" = false ]; then
     read -r -p "  Proceed with uninstallation? [y/N] " response
-    if [[ ! "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
-        info "Uninstallation cancelled."
-        blank
-        exit 0
-    fi
+    case "$response" in
+        [yY]|[yY][eE][sS]) ;;
+        *)
+            info "Uninstallation cancelled."
+            blank
+            exit 0
+            ;;
+    esac
 fi
 
 blank
@@ -108,12 +184,14 @@ if [ "${#CONFLICTS[@]}" -gt 0 ]; then
     for c in "${CONFLICTS[@]}"; do info "  ${c}"; done
     if [ "$SILENT" = false ]; then
         read -r -p "  Remove these conflicts too? [y/N] " response
-        if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
-            for c in "${CONFLICTS[@]}"; do
-                rm -f "${CARGO_BIN_DIR}/${c}"
-                ok "Removed conflict: ${c}"
-            done
-        fi
+        case "$response" in
+            [yY]|[yY][eE][sS])
+                for c in "${CONFLICTS[@]}"; do
+                    rm -f "${CARGO_BIN_DIR}/${c}"
+                    ok "Removed conflict: ${c}"
+                done
+                ;;
+        esac
     fi
 fi
 

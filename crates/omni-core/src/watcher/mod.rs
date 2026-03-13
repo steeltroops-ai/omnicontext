@@ -262,11 +262,16 @@ fn is_excluded_static(path: &Path, exclude_patterns: &[String]) -> bool {
 }
 
 /// Check if a file has a recognized source file extension.
+///
+/// Extensions are compared case-insensitively so that files on case-insensitive
+/// filesystems (macOS, Windows) are correctly detected regardless of how the OS
+/// preserves the original case (e.g., `Main.RS`, `App.TS`, `Script.PY`).
 fn is_source_file_static(path: &Path) -> bool {
     let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
         return false;
     };
-    !matches!(Language::from_extension(ext), Language::Unknown)
+    let ext_lower = ext.to_ascii_lowercase();
+    !matches!(Language::from_extension(&ext_lower), Language::Unknown)
 }
 
 #[cfg(test)]
@@ -322,6 +327,31 @@ mod tests {
         // Truly unsupported
         assert!(!is_source_file_static(Path::new("Makefile")));
         assert!(!is_source_file_static(Path::new("image.png")));
+    }
+
+    #[test]
+    fn test_is_source_file_case_insensitive_extensions() {
+        // On case-insensitive filesystems (macOS, Windows), files may be presented
+        // with uppercase or mixed-case extensions. These must be indexed correctly.
+        assert!(is_source_file_static(Path::new("Main.RS")));
+        assert!(is_source_file_static(Path::new("App.PY")));
+        assert!(is_source_file_static(Path::new("index.TS")));
+        assert!(is_source_file_static(Path::new("app.JS")));
+        assert!(is_source_file_static(Path::new("main.GO")));
+        assert!(is_source_file_static(Path::new("App.JAVA")));
+        assert!(is_source_file_static(Path::new("main.CPP")));
+        assert!(is_source_file_static(Path::new("Program.CS")));
+        assert!(is_source_file_static(Path::new("README.MD")));
+        assert!(is_source_file_static(Path::new("config.TOML")));
+        assert!(is_source_file_static(Path::new("config.YAML")));
+        assert!(is_source_file_static(Path::new("data.JSON")));
+        // Mixed case
+        assert!(is_source_file_static(Path::new("Main.Rs")));
+        assert!(is_source_file_static(Path::new("App.Py")));
+        assert!(is_source_file_static(Path::new("Index.Ts")));
+        // Still unsupported regardless of case
+        assert!(!is_source_file_static(Path::new("image.PNG")));
+        assert!(!is_source_file_static(Path::new("image.Png")));
     }
 
     #[test]

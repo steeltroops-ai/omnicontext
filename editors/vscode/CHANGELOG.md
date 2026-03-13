@@ -1,16 +1,68 @@
 # Changelog
 
 All notable changes to the OmniContext VS Code extension are documented here.
+Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [1.2.1] - 2026-03-12
 
 _No direct changes in this release._
 
 
-## [1.2.0] - 2026-03-12
+## [1.2.0] - 2026-03-13
 
-- add Antigravity IDE support, harden distribution scripts, and enhance MCP tools ([99dd59f](https://github.com/steeltroops-ai/omnicontext/commit/99dd59f))
-- improve indexed repo visibility and repo actions ([6645aa4](https://github.com/steeltroops-ai/omnicontext/commit/6645aa4))
+### Added
+- **Antigravity IDE support**: OmniContext MCP server now auto-configures in Antigravity
+  (`~/.config/Antigravity/User/mcp.json` on Linux/macOS, `%APPDATA%\Antigravity\User\mcp.json` on Windows)
+  using the `servers` key format compatible with Antigravity's MCP protocol implementation
+- **16 AI client auto-configuration**: Distribution scripts and `setup --all` now cover
+  Claude Desktop, Claude Code, Cursor, Windsurf, VS Code, VS Code Insiders, Cline, RooCode,
+  Continue.dev, Zed, Kiro, PearAI, Trae, Antigravity, Gemini CLI, Amazon Q CLI, Augment Code
+- **Model selection command**: New `OmniContext: Select Embedding Model` command lets users
+  choose their embedding model from the Command Palette (jina-embeddings-v2-base-code 550 MB,
+  jina-embeddings-v2-small-en 130 MB, or all-minilm-l6-v2 22 MB); saved to
+  `omnicontext.embeddingModel` setting; daemon restarts automatically on change
+- **Improved IPC startup resilience**: Added 2-second initial delay before first IPC
+  connection attempt when daemon starts cold (allowing ONNX model to initialize); status bar
+  now shows `$(sync~spin) OmniContext: Engine loading...` during startup instead of immediately
+  showing disconnected
+- **Cross-platform ONNX detection**: `resolveBinaries()` now checks for `libonnxruntime.so`,
+  `libonnxruntime.dylib`, and versioned variants on Linux/macOS so ONNX is correctly detected
+  and not re-downloaded unnecessarily
+- **Security audit**: `quinn-proto` updated to 0.11.14 (fixes CVE RUSTSEC-2026-0037 DoS
+  vulnerability); bun audit passes with no vulnerabilities on all Node.js dependencies
+
+### Fixed
+- **Distribution scripts hardened**: Install, uninstall, and update scripts now include
+  `--help` / `-Help` flags, `--no-model`, `--no-mcp`, `--no-onnx`, `--dry-run`, `--dir`,
+  `--model` options for enterprise deployments
+- **FFI tests no longer hang**: ONNX-dependent integration tests in `omni-ffi` now carry
+  `#[ignore = "requires ONNX model download (~550 MB)"]` so `cargo test --workspace` completes
+  in a reasonable time; run with `cargo test -- --ignored` for full integration coverage
+- **Linux unused-variable CI**: All platform-gated code in `orchestrator.rs` and `main.rs`
+  now uses the pre-declared `app_support` / `appdata` variables instead of inlining the path;
+  eliminates the `unused variable` error that was failing the Linux CI Check job
+- **Clippy pedantic compliance**: Fixed 29 clippy warnings across `omni-core`, `omni-mcp`,
+  `omni-daemon`, `omni-ffi`, and `omni-cli` (doc_markdown, map_or_else, manual_clamp,
+  similar_names, clone_on_copy, case_sensitive_file_extension_comparisons, and more)
+- **Distribution manifests restored**: Homebrew formula and Scoop manifest had `license`,
+  `bottle :unneeded`, `post_install`, and `caveats` / `notes` fields stripped by release
+  automation; restored in both current manifests and the release workflow template
+- **Release automation template**: Updated `.github/workflows/release.yml` Homebrew and
+  Scoop embedded templates to preserve all distribution enhancements across future releases
+- **Rust crate improvements** (context engine):
+  - `omni-core`: FNV hash constants with digit separators; `similar_names` suppressed for
+    legitimate `file_a_str` / `file_b_str` pairs; `map_or(false, …)` → `is_some_and(…)`;
+    `clone_on_copy` for `Kind` enum; `case_sensitive_file_extension_comparisons` for `.rs`,
+    `.py` etc.; graph `unnecessary_sort_by` → `sort_by_key` with `Reverse`
+  - `omni-mcp`: `doc_markdown` fixes; `write_with_newline` → `writeln!`; `manual_clamp`
+  - `omni-daemon`: `manual_clamp` in 4 IPC backpressure locations; `single_match_else` fixes
+  - `omni-ffi`: 4 integration tests marked `#[ignore]` for ONNX dependency
+
+### Changed
+- Sidebar now shows repo registry with indexed repository list and one-click re-index actions
+- Improved indexed repo visibility in sidebar: paths normalized, repo count shown at top level
+- Auto-sync MCP now runs after every update (not just first install) to register new IDEs
 
 
 

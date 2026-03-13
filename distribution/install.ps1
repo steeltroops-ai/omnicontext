@@ -17,27 +17,154 @@
 .PARAMETER Force
     Bypass up-to-date check and reinstall even if the current version matches.
 
+.PARAMETER NoModel
+    Skip the embedding model download entirely.
+    The model can be downloaded later with: omnicontext setup model-download
+
+.PARAMETER NoMcp
+    Skip MCP client auto-configuration.
+    Re-run the installer (or omnicontext setup --all) to configure later.
+
+.PARAMETER NoOnnx
+    Skip ONNX Runtime DLL download.
+    Context injection will not work until onnxruntime.dll is present.
+
+.PARAMETER InstallDir
+    Override the installation directory for binaries.
+    Default: %USERPROFILE%\.omnicontext\bin
+
+.PARAMETER Model
+    Select the embedding model to download.
+    Default: jina-embeddings-v2-base-code
+
+.PARAMETER DryRun
+    Print every action that would be taken without modifying the system.
+    Implies -NoModel, -NoMcp, and -NoOnnx.
+
+.PARAMETER Help
+    Show this help message and exit.
+
 .EXAMPLE
     irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install.ps1 | iex
 
 .EXAMPLE
     .\install.ps1 -Version v1.2.3 -Force
 
+.EXAMPLE
+    .\install.ps1 -NoModel -NoOnnx
+
+.EXAMPLE
+    # Install to a custom directory
+    .\install.ps1 -InstallDir "C:\Tools\omnicontext"
+
+.EXAMPLE
+    # Preview what the installer would do without making any changes
+    .\install.ps1 -DryRun
+
+.EXAMPLE
+    # Use a different embedding model
+    .\install.ps1 -Model all-minilm-l6-v2
+
+.EXAMPLE
+    # Silent CI install — no model, no ONNX, no MCP
+    .\install.ps1 -Force -NoModel -NoOnnx -NoMcp
+
 .NOTES
+    Requires PowerShell 5.1 or later.
     If the script fails to run due to execution policy, run first:
       Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
+
+    Environment variables:
+      OMNICONTEXT_VERSION   Pin the release version (same as -Version)
+      FORCE                 Set to 1 to force reinstall (same as -Force)
 #>
 
 #Requires -Version 5.1
 
 [CmdletBinding()]
 param(
-    [string] $Version = "",
-    [switch] $Force
+    [string] $Version     = "",
+    [switch] $Force,
+    [switch] $NoModel,
+    [switch] $NoMcp,
+    [switch] $NoOnnx,
+    [string] $InstallDir  = "",
+    [string] $Model       = "",
+    [switch] $DryRun,
+    [switch] $Help
 )
 
 $ErrorActionPreference = "Stop"
 $ProgressPreference    = "SilentlyContinue"
+
+# Show help and exit if -Help was passed
+if ($Help) {
+    Get-Help $MyInvocation.MyCommand.Path -Detailed 2>$null
+    if (-not $MyInvocation.MyCommand.Path) {
+        # Piped via iex — fall back to inline text
+        Write-Host @"
+OmniContext Installer for Windows
+
+USAGE
+  irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install.ps1 | iex
+  .\install.ps1 [OPTIONS]
+
+OPTIONS
+  -Help                   Show this help message and exit
+  -Force                  Bypass up-to-date check and reinstall
+  -Version <ver>          Pin a specific release  (e.g. v1.2.3)
+  -InstallDir <path>      Override binary install directory
+                          Default: %USERPROFILE%\.omnicontext\bin
+  -Model <name>           Select the embedding model to download
+                          Default: jina-embeddings-v2-base-code
+  -NoModel                Skip embedding model download
+  -NoMcp                  Skip MCP client auto-configuration
+  -NoOnnx                 Skip ONNX Runtime DLL download
+  -DryRun                 Preview all actions without modifying the system
+                          (implies -NoModel, -NoMcp, -NoOnnx)
+
+EXAMPLES
+  # Standard one-line install
+  irm https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install.ps1 | iex
+
+  # Pin a specific version
+  .\install.ps1 -Version v1.2.3
+
+  # Install to a custom directory, skip model
+  .\install.ps1 -InstallDir "C:\Tools\omnicontext" -NoModel
+
+  # Preview without making changes
+  .\install.ps1 -DryRun
+
+  # Silent CI install
+  .\install.ps1 -Force -NoModel -NoOnnx -NoMcp
+
+ENVIRONMENT VARIABLES
+  OMNICONTEXT_VERSION   Pin the release version (same as -Version)
+
+NOTES
+  Requires PowerShell 5.1+.
+  If blocked by execution policy:
+    Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
+"@
+    }
+    exit 0
+}
+
+# DryRun implies skipping all slow/destructive steps
+if ($DryRun) {
+    $NoModel = $true
+    $NoMcp   = $true
+    $NoOnnx  = $true
+}
+
+# Allow env-var version pin (mirrors the bash installer)
+if (-not $Version -and $env:OMNICONTEXT_VERSION) {
+    $Version = $env:OMNICONTEXT_VERSION
+}
+
+# Allow -InstallDir to override the default bin dir
+$CustomInstallDir = $InstallDir
 
 # Enable TLS 1.2/1.3 for secure downloads
 [Net.ServicePointManager]::SecurityProtocol =
@@ -109,7 +236,7 @@ function Invoke-Download {
 # ---------------------------------------------------------------------------
 $RepoOwner  = "steeltroops-ai"
 $RepoName   = "omnicontext"
-$OutDir     = Join-Path $HOME ".omnicontext\bin"
+$OutDir     = if ($CustomInstallDir) { $CustomInstallDir } else { Join-Path $HOME ".omnicontext\bin" }
 $DataDir    = Join-Path $HOME ".omnicontext"
 $CargoExe   = Join-Path $HOME ".cargo\bin\omnicontext.exe"
 $OutExe     = Join-Path $OutDir "omnicontext.exe"
@@ -279,7 +406,10 @@ if (-not (Test-Path $OutExe) -and (Test-Path $CargoExe)) {
 Write-Blank
 Write-Step "2/$TotalSteps" "Downloading release archive"
 
-if ($UseCargoExe) {
+if ($DryRun) {
+    Write-Info "[dry-run] Would download  ${DIM}$DownloadUrl${RESET}"
+    Write-Info "[dry-run] Would install binaries to  ${DIM}$OutDir${RESET}"
+} elseif ($UseCargoExe) {
     Write-Ok "Binary download skipped (cargo install path in use)"
 } else {
     Write-Info "URL  ${DIM}$DownloadUrl${RESET}"
@@ -334,6 +464,9 @@ if ($UseCargoExe) {
 Write-Blank
 Write-Step "3/$TotalSteps" "Stopping active processes"
 
+if ($DryRun) {
+    Write-Info "[dry-run] Would stop any running omnicontext processes"
+} else {
 $procs = Get-Process -Name "omnicontext","omnicontext-mcp","omnicontext-daemon" -EA SilentlyContinue
 if ($procs) {
     foreach ($p in $procs) {
@@ -348,8 +481,10 @@ if ($procs) {
 } else {
     Write-Info "No active OmniContext processes found"
 }
+}
 
-# Check for file locks on existing binaries
+# Check for file locks on existing binaries (skip in dry-run)
+if (-not $DryRun) {
 $lockedFiles = @()
 foreach ($exePath in @($OutExe, $OutMcpExe, $OutDaemonExe)) {
     if (-not (Test-Path $exePath)) { continue }
@@ -367,12 +502,17 @@ if ($lockedFiles.Count -gt 0) {
     Write-Warn "Close all OmniContext-related apps and retry, or reboot if the lock persists."
     Exit-Err "Cannot overwrite locked binaries."
 }
+}
 
 # ---------------------------------------------------------------------------
 # step 4 – backup, extract and install
 # ---------------------------------------------------------------------------
 Write-Blank
 Write-Step "4/$TotalSteps" "Installing binaries"
+
+if ($DryRun) {
+    Write-Info "[dry-run] Would extract $AssetFileName and install to  ${DIM}$OutDir${RESET}"
+} else {
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
@@ -443,6 +583,8 @@ if (-not $UseCargoExe) {
     Write-Ok "Using cargo-installed binary — no extraction needed"
 }
 
+}  # end dry-run guard for step 4
+
 # ---------------------------------------------------------------------------
 # ONNX Runtime DLL — launch download as a background job
 # ---------------------------------------------------------------------------
@@ -507,7 +649,10 @@ $OnnxVersion = Get-LatestOnnxVersion
 $DllPath     = Join-Path $OutDir "onnxruntime.dll"
 
 $NeedsOnnxUpdate = $true
-if (Test-Path $DllPath) {
+if ($NoOnnx) {
+    $NeedsOnnxUpdate = $false
+    Write-Info "ONNX Runtime download skipped (-NoOnnx)"
+} elseif (Test-Path $DllPath) {
     try {
         $existVer = (Get-Item $DllPath).VersionInfo.ProductVersion
         if ($existVer -like "$($OnnxVersion.Split('.')[0]).*") {
@@ -587,54 +732,66 @@ if ($UserPath -notlike "*$EffectiveOutDir*") {
 Write-Blank
 Write-Step "6/$TotalSteps" "Embedding model setup"
 
-# Allow dev-mode override with local build
-$LocalExe = Join-Path $PSScriptRoot "..\target\release\omnicontext.exe"
-if ($PSScriptRoot -and (Test-Path $LocalExe)) { $OutExe = $LocalExe }
+# Allow dev-mode override with local build.
+# $PSScriptRoot is empty when piped via iex, so guard with null-check.
+$LocalExe = if ($PSScriptRoot) { Join-Path $PSScriptRoot "..\target\release\omnicontext.exe" } else { "" }
+if ($PSScriptRoot -and $LocalExe -and (Test-Path $LocalExe)) { $OutExe = $LocalExe }
 
-$helpText = try { & $OutExe --help 2>&1 | Out-String } catch { "" }
-$hasSetup = $helpText -like "*setup*"
-
-if ($hasSetup) {
-    $statusObj = $null
-    try { $statusObj = & $OutExe setup model-status --json 2>&1 | ConvertFrom-Json -EA Stop } catch { }
-
-    if ($statusObj -and $statusObj.model_ready) {
-        $sizeMb = [math]::Round($statusObj.model_size_bytes / 1MB, 0)
-        Write-Ok ("Model ready: " + $BOLD + $statusObj.model_name + $RESET + $DIM + " ($sizeMb MB)" + $RESET)
-    } else {
-        $modelName = if ($statusObj -and $statusObj.model_name) { $statusObj.model_name } `
-                     else { "jina-embeddings-v2-base-code" }
-        Write-Info ("Downloading model: " + $BOLD + $modelName + $RESET + $DIM + " (~550 MB, HuggingFace)" + $RESET)
-        Write-Blank
-
-        try {
-            Write-Host ("  " + $DIM + ('─' * 40) + $RESET)
-            & $OutExe setup model-download
-            Write-Host ("  " + $DIM + ('─' * 40) + $RESET)
-
-            $statusObj = & $OutExe setup model-status --json 2>&1 | ConvertFrom-Json -EA SilentlyContinue
-            if ($statusObj -and $statusObj.model_ready) {
-                $sizeMb = [math]::Round($statusObj.model_size_bytes / 1MB, 0)
-                Write-Ok "Model setup successful  ${DIM}($sizeMb MB)${RESET}"
-            } else {
-                Write-Warn "Model download incomplete."
-                Write-Info "Run later: ${DIM}omnicontext setup model-download${RESET}"
-            }
-        } catch {
-            Write-Warn "Model download failed or interrupted: $_"
-            Write-Info "Run later: ${DIM}omnicontext setup model-download${RESET}"
-            # Non-fatal: continue with install
-        }
-    }
+if ($NoModel) {
+    Write-Info "Embedding model download skipped (-NoModel)"
 } else {
-    # Legacy binary fallback
-    $ModelPath = Join-Path $DataDir "models\jina-embeddings-v2-base-code\model.onnx"
-    if (Test-Path $ModelPath) {
-        $sizeMb = [math]::Round((Get-Item $ModelPath).Length / 1MB, 0)
-        Write-Ok ("Model ready (cached)  " + $DIM + "($sizeMb MB)" + $RESET)
+    $helpText = try { & $OutExe --help 2>&1 | Out-String } catch { "" }
+    $hasSetup = $helpText -like "*setup*"
+
+    if ($hasSetup) {
+        $statusObj = $null
+        try { $statusObj = & $OutExe setup model-status --json 2>&1 | ConvertFrom-Json -EA Stop } catch { }
+
+        if ($statusObj -and $statusObj.model_ready) {
+            $sizeMb = [math]::Round($statusObj.model_size_bytes / 1MB, 0)
+            Write-Ok ("Model ready: " + $BOLD + $statusObj.model_name + $RESET + $DIM + " ($sizeMb MB)" + $RESET)
+        } else {
+            # Prefer -Model override, then status object, then default
+            $modelName = if ($Model) { $Model } `
+                         elseif ($statusObj -and $statusObj.model_name) { $statusObj.model_name } `
+                         else { "jina-embeddings-v2-base-code" }
+            Write-Info ("Downloading model: " + $BOLD + $modelName + $RESET + $DIM + " (~550 MB, HuggingFace)" + $RESET)
+            Write-Blank
+
+            try {
+                Write-Host ("  " + $DIM + ('─' * 40) + $RESET)
+                # Pass --model flag if user requested a specific model
+                if ($Model) {
+                    & $OutExe setup model-download --model $Model
+                } else {
+                    & $OutExe setup model-download
+                }
+                Write-Host ("  " + $DIM + ('─' * 40) + $RESET)
+
+                $statusObj = & $OutExe setup model-status --json 2>&1 | ConvertFrom-Json -EA SilentlyContinue
+                if ($statusObj -and $statusObj.model_ready) {
+                    $sizeMb = [math]::Round($statusObj.model_size_bytes / 1MB, 0)
+                    Write-Ok "Model setup successful  ${DIM}($sizeMb MB)${RESET}"
+                } else {
+                    Write-Warn "Model download incomplete."
+                    Write-Info "Run later: ${DIM}omnicontext setup model-download${RESET}"
+                }
+            } catch {
+                Write-Warn "Model download failed or interrupted: $_"
+                Write-Info "Run later: ${DIM}omnicontext setup model-download${RESET}"
+                # Non-fatal: continue with install
+            }
+        }
     } else {
-        Write-Info "Legacy binary detected — model will be initialized on first index."
-        Write-Info "Run: ${DIM}omnicontext index .${RESET}  in your project directory."
+        # Legacy binary fallback
+        $ModelPath = Join-Path $DataDir "models\jina-embeddings-v2-base-code\model.onnx"
+        if (Test-Path $ModelPath) {
+            $sizeMb = [math]::Round((Get-Item $ModelPath).Length / 1MB, 0)
+            Write-Ok ("Model ready (cached)  " + $DIM + "($sizeMb MB)" + $RESET)
+        } else {
+            Write-Info "Legacy binary detected — model will be initialized on first index."
+            Write-Info "Run: ${DIM}omnicontext index .${RESET}  in your project directory."
+        }
     }
 }
 
@@ -687,6 +844,16 @@ Write-Step "7/$TotalSteps" "Auto-configuring MCP for AI clients"
 
 $SetupAllUsed = $false
 $ConfiguredCount = 0
+
+if ($NoMcp) {
+    Write-Info "MCP configuration skipped (-NoMcp)"
+} else {
+
+# Need $helpText in scope for the setup --all check; re-probe if we skipped model step
+if (-not $helpText) {
+    $helpText = if ($DryRun -or -not (Test-Path $OutExe)) { "" } `
+                else { try { & $OutExe --help 2>&1 | Out-String } catch { "" } }
+}
 
 # Primary: use setup --all (orchestrator handles all 15+ IDEs correctly)
 if ($helpText -match 'setup\s+--all|--all') {
@@ -817,11 +984,25 @@ if (-not $SetupAllUsed) {
     }
 }
 
+}  # end NoMcp guard
+
 # ---------------------------------------------------------------------------
 # step 8 – cleanup & finalize
 # ---------------------------------------------------------------------------
 Write-Blank
 Write-Step "8/$TotalSteps" "Finalizing"
+
+if ($DryRun) {
+    Write-Blank
+    Write-Hr
+    Write-Host ("${BOLD}${YELLOW}  [dry-run] No changes made.${RESET}")
+    Write-Host "  The steps above show exactly what the installer would do."
+    Write-Hr
+    Write-Blank
+    Write-Host "  To run for real, re-run without ${BOLD}-DryRun${RESET}."
+    Write-Blank
+    exit 0
+}
 
 # Delete backups on success
 if ($DidBackup -and (Test-Path $BackupDir)) {
@@ -872,10 +1053,12 @@ if ($SetupAllUsed) {
 
 Write-Blank
 Write-Host "  ${DIM}Update:    .\install.ps1  (or -Version v1.2.3 to pin)${RESET}"
+Write-Host "  ${DIM}Options:   -NoModel  -NoOnnx  -NoMcp  -InstallDir <path>  -DryRun${RESET}"
 Write-Host "  ${DIM}Cargo:     cargo install omnicontext${RESET}"
 Write-Host "  ${DIM}Restart your terminal to apply PATH changes${RESET}"
 Write-Host "  ${DIM}Docs:      https://github.com/$RepoOwner/$RepoName${RESET}"
 Write-Blank
-Write-Host "  ${DIM}Uninstall: Remove-Item -Recurse '$OutDir', '$DataDir'${RESET}"
+Write-Host "  ${DIM}Uninstall: irm https://raw.githubusercontent.com/$RepoOwner/$RepoName/main/distribution/uninstall.ps1 | iex${RESET}"
+Write-Host "  ${DIM}Manual:    Remove-Item -Recurse '$OutDir', '$DataDir'${RESET}"
 Write-Host "  ${DIM}           and remove '$EffectiveOutDir' from your User PATH${RESET}"
 Write-Blank

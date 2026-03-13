@@ -17,14 +17,139 @@ CARGO_BIN="${HOME}/.cargo/bin/omnicontext"
 FORCE="${FORCE:-0}"
 # Allow pinning: OMNICONTEXT_VERSION=v1.2.3 ./install.sh
 PINNED_VERSION="${OMNICONTEXT_VERSION:-}"
+SKIP_MODEL=0
+SKIP_MCP=0
+SKIP_ONNX=0
+DRY_RUN=0
+SELECTED_MODEL=""
 
-# Parse --force / --version flags when invoked as a script (not piped)
-while [[ $# -gt 0 ]]; do
+# ---------------------------------------------------------------------------
+# Usage / help  (printed before color detection so we use raw ANSI sequences)
+# ---------------------------------------------------------------------------
+_usage() {
+    cat <<'OMNI_USAGE_EOF'
+OmniContext Installer — macOS / Linux
+
+USAGE
+  curl -fsSL https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install.sh | bash
+  ./install.sh [OPTIONS]
+
+OPTIONS
+  -h, --help              Show this help message and exit
+  -f, --force             Bypass up-to-date check and reinstall even if the
+                          current version already matches the target
+      --version <ver>     Pin a specific release version  (e.g. v1.2.3)
+      --dir <path>        Override install directory for binaries
+                          Default: ~/.local/bin
+      --model <name>      Select the embedding model to download
+                          Default: jina-embeddings-v2-base-code
+      --no-model          Skip embedding model download entirely
+      --no-mcp            Skip MCP client auto-configuration
+      --no-onnx           Skip ONNX Runtime shared-library download
+      --dry-run           Print every action that would be taken without
+                          actually modifying the system; implies --no-model,
+                          --no-mcp, and --no-onnx
+
+ENVIRONMENT VARIABLES
+  OMNICONTEXT_VERSION     Pin the release version without a flag
+                          Example: OMNICONTEXT_VERSION=v1.2.3 ./install.sh
+  FORCE                   Set to 1 to force reinstall  (same as --force)
+  NO_COLOR                Set to any non-empty value to disable ANSI colour
+
+EXAMPLES
+  # Standard one-line install (always fetches the latest release)
+  curl -fsSL https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/install.sh | bash
+
+  # Pin a specific version
+  OMNICONTEXT_VERSION=v1.2.3 bash install.sh
+
+  # Install to a custom directory, skip model download
+  ./install.sh --dir /usr/local/bin --no-model
+
+  # Use a different embedding model
+  ./install.sh --model all-minilm-l6-v2
+
+  # Preview what the installer would do without touching the system
+  ./install.sh --dry-run
+
+  # Silent update inside CI (no tty, no model, no ONNX)
+  ./install.sh --force --no-model --no-onnx --no-mcp
+
+  # Reinstall current version, keep data, skip slow downloads
+  ./install.sh --force --no-model --no-onnx
+
+NOTES
+  • Requires: bash 3.2+, curl, tar
+  • Optional: python3 (for richer JSON merging of MCP configs)
+  • Binaries are placed in BIN_DIR (~/.local/bin by default) and a PATH
+    entry is appended to ~/.bashrc / ~/.zshrc / ~/.profile as appropriate
+  • To uninstall:
+      bash <(curl -fsSL https://raw.githubusercontent.com/steeltroops-ai/omnicontext/main/distribution/uninstall.sh)
+  • Homepage: https://github.com/steeltroops-ai/omnicontext
+OMNI_USAGE_EOF
+}
+
+# ---------------------------------------------------------------------------
+# Parse flags — safe for both direct execution AND piped-via-bash invocation.
+# When piped (curl | bash) there are no positional args so the loop is a
+# no-op.  When run directly the full flag set is parsed.
+# ---------------------------------------------------------------------------
+while [ $# -gt 0 ]; do
     case "$1" in
-        --force|-f)   FORCE=1; shift ;;
-        --version)    PINNED_VERSION="$2"; shift 2 ;;
-        --version=*)  PINNED_VERSION="${1#--version=}"; shift ;;
-        *)            shift ;;
+        -h|--help)
+            _usage
+            exit 0
+            ;;
+        -f|--force)
+            FORCE=1
+            shift
+            ;;
+        --version)
+            PINNED_VERSION="$2"
+            shift 2
+            ;;
+        --version=*)
+            PINNED_VERSION="${1#--version=}"
+            shift
+            ;;
+        --dir)
+            BIN_DIR="$2"
+            shift 2
+            ;;
+        --dir=*)
+            BIN_DIR="${1#--dir=}"
+            shift
+            ;;
+        --model)
+            SELECTED_MODEL="$2"
+            shift 2
+            ;;
+        --model=*)
+            SELECTED_MODEL="${1#--model=}"
+            shift
+            ;;
+        --no-model)
+            SKIP_MODEL=1
+            shift
+            ;;
+        --no-mcp)
+            SKIP_MCP=1
+            shift
+            ;;
+        --no-onnx)
+            SKIP_ONNX=1
+            shift
+            ;;
+        --dry-run)
+            DRY_RUN=1
+            SKIP_MODEL=1
+            SKIP_MCP=1
+            SKIP_ONNX=1
+            shift
+            ;;
+        *)
+            shift
+            ;;
     esac
 done
 
@@ -289,7 +414,11 @@ step "3/8" "Downloading release archive"
 
 TEMP_DIR="$(mktemp -d)"
 
-if [ "$USE_CARGO_BIN" -eq 1 ]; then
+if [ "$DRY_RUN" -eq 1 ]; then
+    info "[dry-run] Would download  ${DIM}${DOWNLOAD_URL}${RESET}"
+    info "[dry-run] Would install binaries to  ${DIM}${BIN_DIR}${RESET}"
+    NEED_BINARY_INSTALL=0
+elif [ "$USE_CARGO_BIN" -eq 1 ]; then
     ok "Binary download skipped (cargo install path in use)"
     NEED_BINARY_INSTALL=0
 else
@@ -335,6 +464,9 @@ fi
 blank
 step "4/8" "Stopping active processes"
 
+if [ "$DRY_RUN" -eq 1 ]; then
+    info "[dry-run] Would stop any running omnicontext processes"
+else
 STOPPED=0
 for proc in omnicontext-daemon omnicontext-mcp omnicontext; do
     if pkill -x "$proc" 2>/dev/null; then
@@ -347,12 +479,17 @@ if [ "$STOPPED" -eq 0 ]; then
 else
     sleep 0.5
 fi
+fi  # end dry-run guard for step 4
 
 # ---------------------------------------------------------------------------
 # step 5 - backup existing, extract and install
 # ---------------------------------------------------------------------------
 blank
 step "5/8" "Installing binaries"
+
+if [ "$DRY_RUN" -eq 1 ]; then
+    info "[dry-run] Would extract ${ASSET_NAME} and install binaries to ${DIM}${BIN_DIR}${RESET}"
+else
 
 mkdir -p "$BIN_DIR"
 
@@ -407,6 +544,8 @@ else
     ok "Using cargo-installed binary — no binary extraction needed"
     BIN_DIR="$(dirname "$CARGO_BIN")"
 fi
+
+fi  # end dry-run guard for step 5
 
 # ---------------------------------------------------------------------------
 # ONNX Runtime shared library
@@ -479,7 +618,9 @@ fi
 NEED_ONNX=1
 ONNX_VERSION=$(get_latest_onnx_version)
 
-if [ -f "$ONNX_LIB" ]; then
+if [ "$SKIP_ONNX" -eq 1 ] || [ "$DRY_RUN" -eq 1 ]; then
+    NEED_ONNX=0
+elif [ -f "$ONNX_LIB" ]; then
     MAJOR="${ONNX_VERSION%%.*}"
     if ls "${BIN_DIR}"/libonnxruntime* 2>/dev/null | grep -q "${MAJOR}"; then
         ok "ONNX Runtime already present  ${DIM}v${ONNX_VERSION}${RESET}"
@@ -488,14 +629,21 @@ if [ -f "$ONNX_LIB" ]; then
 fi
 
 # Launch ONNX download in background so it runs concurrently with model setup
-if [ "$NEED_ONNX" -eq 1 ]; then
+if [ "$NEED_ONNX" -eq 1 ] && [ "$SKIP_ONNX" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
     info "Starting parallel ONNX Runtime download in background..."
+    # Capture color variables NOW (before the subshell) so they are available
+    # even when stdout is not a tty inside the background process.
+    _BG_GREEN="$GREEN"
+    _BG_YELLOW="$YELLOW"
+    _BG_RESET="$RESET"
     (install_onnx_runtime "$BIN_DIR" "$ONNX_VERSION" \
         && printf '\n%s✔%s ONNX Runtime %s installed (parallel download complete)\n' \
-            "${GREEN}" "${RESET}" "$ONNX_VERSION" \
+            "${_BG_GREEN}" "${_BG_RESET}" "$ONNX_VERSION" \
         || printf '\n%s⚠%s ONNX Runtime download failed (context injection may not work)\n' \
-            "${YELLOW}" "${RESET}") &
+            "${_BG_YELLOW}" "${_BG_RESET}") &
     ONNX_PID=$!
+elif [ "$SKIP_ONNX" -eq 1 ]; then
+    info "ONNX Runtime download skipped (--no-onnx)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -533,58 +681,70 @@ step "6/8" "Embedding model setup"
 OMNI_BIN="${BIN_DIR}/omnicontext"
 [ "$USE_CARGO_BIN" -eq 1 ] && OMNI_BIN="$CARGO_BIN"
 
-HAS_SETUP=false
-if "$OMNI_BIN" --help 2>&1 | grep -q "setup"; then
-    HAS_SETUP=true
-fi
-
-if [ "$HAS_SETUP" = "true" ]; then
-    MODEL_READY="false"
-    MODEL_NAME="jina-embeddings-v2-base-code"
-    MODEL_SIZE="?"
-
-    if status_json=$("$OMNI_BIN" setup model-status --json 2>/dev/null); then
-        MODEL_READY=$(printf '%s' "$status_json" \
-            | grep -o '"model_ready": [a-z]*' | cut -d' ' -f2 || true)
-        MODEL_NAME=$(printf '%s' "$status_json" \
-            | grep -o '"model_name": "[^"]*"' | cut -d'"' -f4 || true)
-        MODEL_BYTES=$(printf '%s' "$status_json" \
-            | grep -o '"model_size_bytes": [0-9]*' | cut -d' ' -f2 || true)
-        if [ "${MODEL_BYTES:-0}" -gt 0 ] 2>/dev/null; then
-            MODEL_SIZE="$((MODEL_BYTES / 1024 / 1024)) MB"
-        fi
+if [ "$SKIP_MODEL" -eq 1 ]; then
+    info "Embedding model download skipped (--no-model)"
+elif [ "$DRY_RUN" -eq 1 ]; then
+    info "[dry-run] Would download embedding model to ${DIM}${DATA_DIR}/models/${RESET}"
+else
+    HAS_SETUP=false
+    if "$OMNI_BIN" --help 2>&1 | grep -q "setup"; then
+        HAS_SETUP=true
     fi
 
-    if [ "$MODEL_READY" = "true" ]; then
-        ok "Model ready: ${BOLD}${MODEL_NAME}${RESET}  ${DIM}(${MODEL_SIZE})${RESET}"
-    else
-        info "Downloading model: ${BOLD}${MODEL_NAME}${RESET}  ${DIM}(~550 MB, HuggingFace)${RESET}"
-        blank
-        printf "  ${DIM}────────────────────────────────────────${RESET}\n"
-        # Model download failure is non-fatal — user can run later
-        if ! "$OMNI_BIN" setup model-download 2>&1; then
-            warn "Model download interrupted or failed."
-            warn "Run later: ${DIM}omnicontext setup model-download${RESET}"
-        fi
-        printf "  ${DIM}────────────────────────────────────────${RESET}\n"
+    if [ "$HAS_SETUP" = "true" ]; then
+        MODEL_READY="false"
+        MODEL_NAME="${SELECTED_MODEL:-jina-embeddings-v2-base-code}"
+        MODEL_SIZE="?"
 
         if status_json=$("$OMNI_BIN" setup model-status --json 2>/dev/null); then
             MODEL_READY=$(printf '%s' "$status_json" \
                 | grep -o '"model_ready": [a-z]*' | cut -d' ' -f2 || true)
-            if [ "$MODEL_READY" = "true" ]; then
-                ok "Model setup successful"
-            else
-                warn "Model download incomplete. Run: ${DIM}omnicontext setup model-download${RESET}"
+            # Use --model override if provided, otherwise take name from status
+            if [ -z "$SELECTED_MODEL" ]; then
+                MODEL_NAME=$(printf '%s' "$status_json" \
+                    | grep -o '"model_name": "[^"]*"' | cut -d'"' -f4 || true)
+            fi
+            MODEL_BYTES=$(printf '%s' "$status_json" \
+                | grep -o '"model_size_bytes": [0-9]*' | cut -d' ' -f2 || true)
+            if [ "${MODEL_BYTES:-0}" -gt 0 ] 2>/dev/null; then
+                MODEL_SIZE="$((MODEL_BYTES / 1024 / 1024)) MB"
             fi
         fi
-    fi
-else
-    # Legacy fallback
-    if [ -f "${DATA_DIR}/models/jina-embeddings-v2-base-code/model.onnx" ]; then
-        ok "Model ready (cached)"
+
+        if [ "$MODEL_READY" = "true" ]; then
+            ok "Model ready: ${BOLD}${MODEL_NAME}${RESET}  ${DIM}(${MODEL_SIZE})${RESET}"
+        else
+            info "Downloading model: ${BOLD}${MODEL_NAME}${RESET}  ${DIM}(~550 MB, HuggingFace)${RESET}"
+            blank
+            printf "  ${DIM}────────────────────────────────────────${RESET}\n"
+            # Build model-download command — pass --model if the user requested one
+            MODEL_DL_CMD=("$OMNI_BIN" setup model-download)
+            [ -n "$SELECTED_MODEL" ] && MODEL_DL_CMD+=("--model" "$SELECTED_MODEL")
+            # Model download failure is non-fatal — user can run later
+            if ! "${MODEL_DL_CMD[@]}" 2>&1; then
+                warn "Model download interrupted or failed."
+                warn "Run later: ${DIM}omnicontext setup model-download${RESET}"
+            fi
+            printf "  ${DIM}────────────────────────────────────────${RESET}\n"
+
+            if status_json=$("$OMNI_BIN" setup model-status --json 2>/dev/null); then
+                MODEL_READY=$(printf '%s' "$status_json" \
+                    | grep -o '"model_ready": [a-z]*' | cut -d' ' -f2 || true)
+                if [ "$MODEL_READY" = "true" ]; then
+                    ok "Model setup successful"
+                else
+                    warn "Model download incomplete. Run: ${DIM}omnicontext setup model-download${RESET}"
+                fi
+            fi
+        fi
     else
-        warn "Legacy binary detected — model will be initialized on first index."
-        info "Run: ${DIM}omnicontext index .${RESET}  to trigger model download."
+        # Legacy fallback
+        if [ -f "${DATA_DIR}/models/jina-embeddings-v2-base-code/model.onnx" ]; then
+            ok "Model ready (cached)"
+        else
+            warn "Legacy binary detected — model will be initialized on first index."
+            info "Run: ${DIM}omnicontext index .${RESET}  to trigger model download."
+        fi
     fi
 fi
 
@@ -628,6 +788,12 @@ step "7/8" "Auto-configuring MCP for AI clients"
 MCP_CONFIGURED_COUNT=0
 SETUP_ALL_USED=0
 
+if [ "$SKIP_MCP" -eq 1 ]; then
+    info "MCP configuration skipped (--no-mcp)"
+elif [ "$DRY_RUN" -eq 1 ]; then
+    info "[dry-run] Would configure MCP entries for all detected AI clients"
+else
+
 # Primary: use setup --all (binary orchestrates all 15+ IDEs correctly)
 if "$OMNI_BIN" --help 2>&1 | grep -qE 'setup.*--all|setup --all'; then
     info "Using ${BOLD}omnicontext setup --all${RESET} (orchestrator handles all clients)"
@@ -635,7 +801,7 @@ if "$OMNI_BIN" --help 2>&1 | grep -qE 'setup.*--all|setup --all'; then
     printf "  ${DIM}────────────────────────────────────────${RESET}\n"
     if "$OMNI_BIN" setup --all 2>&1 | while IFS= read -r line; do
            printf "  %s\n" "$line"
-           [[ "$line" =~ "configured" ]] && MCP_CONFIGURED_COUNT=$((MCP_CONFIGURED_COUNT + 1)) || true
+           case "$line" in *configured*) MCP_CONFIGURED_COUNT=$((MCP_CONFIGURED_COUNT + 1)) ;; esac
         done; then
         printf "  ${DIM}────────────────────────────────────────${RESET}\n"
         ok "MCP configuration complete via orchestrator"
@@ -757,11 +923,25 @@ PYEOF
     fi
 fi
 
+fi  # end SKIP_MCP / DRY_RUN guard
+
 # ---------------------------------------------------------------------------
 # step 8 - cleanup & success
 # ---------------------------------------------------------------------------
 blank
 step "8/8" "Finalizing"
+
+if [ "$DRY_RUN" -eq 1 ]; then
+    blank
+    hr
+    printf "${BOLD}${YELLOW}  [dry-run] No changes made.${RESET}\n"
+    printf "  The steps above show exactly what the installer would do.\n"
+    hr
+    blank
+    printf "  To run for real, re-run without ${BOLD}--dry-run${RESET}.\n"
+    blank
+    exit 0
+fi
 
 # Delete backups on success
 if [ "$DID_BACKUP" -eq 1 ] && [ -d "$BACKUP_DIR" ]; then
@@ -807,9 +987,11 @@ fi
 
 blank
 printf "  ${DIM}Update:     OMNICONTEXT_VERSION=<ver> ./install.sh  or re-run anytime${RESET}\n"
+printf "  ${DIM}Options:    --no-model  --no-onnx  --no-mcp  --dir <path>  --dry-run${RESET}\n"
 printf "  ${DIM}Cargo:      cargo install omnicontext${RESET}\n"
 printf "  ${DIM}Docs:       https://github.com/${REPO_OWNER}/${REPO_NAME}${RESET}\n"
 blank
-printf "  ${DIM}Uninstall:  rm -rf ${BIN_DIR}/omnicontext* ${DATA_DIR}${RESET}\n"
+printf "  ${DIM}Uninstall:  bash <(curl -fsSL https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/distribution/uninstall.sh)${RESET}\n"
+printf "  ${DIM}Manual:     rm -rf ${BIN_DIR}/omnicontext* ${DATA_DIR}${RESET}\n"
 printf "  ${DIM}            and remove the PATH line from ${SHELL_RC}${RESET}\n"
 blank

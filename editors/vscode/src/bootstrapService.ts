@@ -23,7 +23,11 @@ export interface BootstrapResult {
   cliBinary: string;
   daemonBinary: string;
   mcpBinary: string;
-  onnxDllPresent: boolean; // Windows only
+  /** True when the ONNX Runtime shared library is present next to the binary
+   *  (onnxruntime.dll on Windows; libonnxruntime.so / .dylib on Unix).
+   *  On Unix this is always true when the library is system-wide; the value
+   *  is only meaningfully false on Windows where a missing DLL is fatal. */
+  onnxDllPresent: boolean;
 }
 
 export type BootstrapPhase =
@@ -165,10 +169,39 @@ export async function resolveBinaries(
       const daemonBin = path.join(dir, names.daemon);
       const mcpBin = path.join(dir, names.mcp);
 
-      // DLL co-location check (Windows only)
-      const onnxDll = path.join(dir, "onnxruntime.dll");
-      const onnxDllPresent =
-        process.platform !== "win32" || fs.existsSync(onnxDll);
+      // DLL / shared-library co-location check.
+      // On Windows we require onnxruntime.dll in the same directory.
+      // On Linux/macOS we accept any of the common versioned or unversioned
+      // names, but fall back to `true` so that a missing lib never blocks
+      // startup on Unix systems that may load it from LD_LIBRARY_PATH.
+      let onnxDllPresent: boolean;
+      if (process.platform === "win32") {
+        onnxDllPresent = fs.existsSync(path.join(dir, "onnxruntime.dll"));
+      } else if (process.platform === "darwin") {
+        onnxDllPresent =
+          fs.existsSync(path.join(dir, "libonnxruntime.dylib")) ||
+          // versioned name produced by downloadOnnxRuntime (e.g. libonnxruntime.1.24.3.dylib)
+          fs
+            .readdirSync(dir)
+            .some(
+              (f) => f.startsWith("libonnxruntime") && f.endsWith(".dylib"),
+            ) ||
+          true; // don't block on macOS — system or brew dylib may be available
+      } else {
+        // Linux
+        onnxDllPresent =
+          fs.existsSync(path.join(dir, "libonnxruntime.so")) ||
+          fs.existsSync(path.join(dir, "libonnxruntime.so.1")) ||
+          // versioned name (e.g. libonnxruntime.so.1.24.3)
+          fs
+            .readdirSync(dir)
+            .some(
+              (f) =>
+                f.startsWith("libonnxruntime.so") ||
+                f.startsWith("libonnxruntime-"),
+            ) ||
+          true; // don't block on Linux — lib may be installed system-wide
+      }
 
       return {
         cliBinary: cliBin,

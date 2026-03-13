@@ -51,6 +51,10 @@ let reconnectAttempts = 0;
 const MAX_RECONNECT_ATTEMPTS = 10;
 let reconnectTimer: NodeJS.Timeout | null = null;
 let currentRepoRoot: string | null = null;
+// Tracks whether we are still inside the initial daemon-startup polling window.
+// While true, transient connect failures must NOT burn reconnect budget.
+let daemonStartingUp = false;
+let daemonStartedAt: number = 0;
 
 // Event tracking
 let eventTracker: EventTracker | null = null;
@@ -159,6 +163,9 @@ export function activate(context: vscode.ExtensionContext) {
     ),
     vscode.commands.registerCommand("omnicontext.uninstallEngine", () =>
       runUninstallEngine(),
+    ),
+    vscode.commands.registerCommand("omnicontext.selectModel", () =>
+      runSelectModel(),
     ),
   );
 
@@ -465,9 +472,133 @@ async function syncMcpToClients(): Promise<{
   return { synced, syncedClients };
 }
 
+// ---------------------------------------------------------------------------
+// Model selection UI
+// ---------------------------------------------------------------------------
+
+interface ModelOption {
+  label: string;
+  description: string;
+  detail: string;
+  modelId: string;
+}
+
+const EMBEDDING_MODEL_OPTIONS: ModelOption[] = [
+  {
+    label: "$(star-full) jina-embeddings-v2-base-code",
+    description: "Default · ~550 MB",
+    detail: "Best code quality — recommended for most projects",
+    modelId: "jina-embeddings-v2-base-code",
+  },
+  {
+    label: "$(zap) jina-embeddings-v2-small-en",
+    description: "Smaller · ~130 MB",
+    detail: "Faster startup and indexing, good general-purpose quality",
+    modelId: "jina-embeddings-v2-small-en",
+  },
+  {
+    label: "$(package) all-minilm-l6-v2",
+    description: "Tiny · ~22 MB",
+    detail: "Minimal resource usage — basic keyword-like search only",
+    modelId: "all-minilm-l6-v2",
+  },
+];
+
+async function runSelectModel(): Promise<void> {
+  const config = vscode.workspace.getConfiguration("omnicontext");
+  const currentModel = config.get<string>(
+    "embeddingModel",
+    "jina-embeddings-v2-base-code",
+  );
+
+  // Annotate the currently active model
+  const items = EMBEDDING_MODEL_OPTIONS.map((opt) => ({
+    ...opt,
+    label:
+      opt.modelId === currentModel ? `${opt.label} $(check)` : opt.label,
+  }));
+
+  const picked = await vscode.window.showQuickPick(items, {
+    title: "OmniContext: Select Embedding Model",
+    placeHolder: "Choose the model used for semantic code search",
+    matchOnDescription: true,
+    matchOnDetail: true,
+  });
+
+  if (!picked) {
+    return; // user cancelled
+  }
+
+  if (picked.modelId === currentModel) {
+    vscode.window.showInformationMessage(
+      `OmniContext: Embedding model is already set to "${picked.modelId}".`,
+    );
+    return;
+  }
+
+  await config.update(
+    "embeddingModel",
+    picked.modelId,
+    vscode.ConfigurationTarget.Global,
+  );
+
+  outputChannel.appendLine(
+    `[model] embedding model changed: ${currentModel} → ${picked.modelId}`,
+  );
+
+  // Prompt to restart the daemon so the new model takes effect.
+  const choice = await vscode.window.showInformationMessage(
+    `OmniContext: Embedding model set to "${picked.modelId}". Restart the daemon to apply?`,
+    "Restart Daemon",
+    "Later",
+  );
+
+  if (choice === "Restart Daemon") {
+    stopDaemon();
+    const autoStart = vscode.workspace
+      .getConfiguration("omnicontext")
+      .get<boolean>("autoStartDaemon", true);
+    if (autoStart) {
+      await startDaemon(false);
+    }
+  }
+}
+
+/**
+ * Called when omnicontext.embeddingModel changes via settings UI or
+ * workspace settings (not via the selectModel quick-pick, which handles
+ * restart itself).
+ */
+async function handleEmbeddingModelChange(): Promise<void> {
+  const config = vscode.workspace.getConfiguration("omnicontext");
+  const newModel = config.get<string>(
+    "embeddingModel",
+    "jina-embeddings-v2-base-code",
+  );
+
+  outputChannel.appendLine(
+    `[model] omnicontext.embeddingModel changed to: ${newModel}`,
+  );
+
+  // Only restart if the daemon is actually running, to avoid starting a
+  // daemon when the user merely browses settings without one active.
+  if (!isDaemonConnected && !daemonProcess) {
+    return;
+  }
+
+  const choice = await vscode.window.showInformationMessage(
+    `OmniContext: Embedding model changed to "${newModel}". Restart daemon to apply?`,
+    "Restart Daemon",
+    "Later",
+  );
+
+  if (choice === "Restart Daemon") {
+    stopDaemon();
+    await startDaemon(false);
+  }
+}
+
 async function runRepairEnvironment() {
-  const binary = getBinaryPath();
-  if (!binary) return;
 
   if (process.platform !== "win32") {
     vscode.window.showInformationMessage("Repair is only needed on Windows.");
@@ -613,6 +744,9 @@ function registerConfigurationWatcher(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration("omnicontext.prefetch")) {
         handlePrefetchConfigChange();
+      }
+      if (event.affectsConfiguration("omnicontext.embeddingModel")) {
+        handleEmbeddingModelChange();
       }
     }),
   );
@@ -829,7 +963,10 @@ async function startDaemon(silent: boolean = false) {
     return;
   }
 
-  statusBarItem.text = "$(sync~spin) Starting daemon...";
+  // Show "Engine loading..." during the entire startup window so users
+  // are not left seeing "not connected" while the ONNX model loads.
+  statusBarItem.text = "$(sync~spin) OmniContext: Engine loading...";
+  statusBarItem.tooltip = "OmniContext: Daemon is starting, ONNX model loading...";
 
   let degradedMode = false;
 
@@ -850,6 +987,7 @@ async function startDaemon(silent: boolean = false) {
     daemonProcess.on("exit", (code) => {
       outputChannel.appendLine(`[daemon] exited with code ${code}`);
       daemonExitedEarly = true;
+      daemonStartingUp = false;
       rejectAllPendingRequests("Daemon process exited");
       daemonProcess = null;
       ipcClient = null;
@@ -857,12 +995,25 @@ async function startDaemon(silent: boolean = false) {
       statusBarItem.text = "$(search) OmniContext";
     });
 
+    // Mark that we are inside the startup window so that transient IPC
+    // failures in this polling loop do NOT burn reconnect budget.
+    daemonStartingUp = true;
+    daemonStartedAt = Date.now();
+
+    // On Windows, named pipes take a moment to become available after the
+    // process starts because the daemon must load the ONNX model first.
+    // Give it a 2-second head-start before attempting the first connection.
+    if (process.platform === "win32") {
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+
     // Poll for daemon readiness instead of a fixed delay.
     const maxWaitMs = 60_000;
     const pollIntervalMs = 250;
     let connected = false;
     for (let waited = 0; waited < maxWaitMs; waited += pollIntervalMs) {
       if (daemonExitedEarly) {
+        daemonStartingUp = false;
         throw new Error(
           "Daemon exited before IPC connection could be established",
         );
@@ -875,6 +1026,9 @@ async function startDaemon(silent: boolean = false) {
         await new Promise((r) => setTimeout(r, pollIntervalMs));
       }
     }
+
+    // Startup window is over regardless of outcome.
+    daemonStartingUp = false;
 
     if (!connected) {
       // Ensure this launch attempt is torn down before retrying.
@@ -952,6 +1106,7 @@ function stopDaemon(): Promise<void> {
     reconnectAttempts = 0;
     currentRepoRoot = null;
     isDaemonConnected = false;
+    daemonStartingUp = false;
     stopHealthCheck();
 
     if (ipcClient) {
@@ -1099,13 +1254,24 @@ function scheduleReconnect(): void {
     return;
   }
 
+  // During the initial daemon startup window the polling loop in launchDaemon
+  // already drives reconnection.  Firing scheduleReconnect here would
+  // incorrectly burn reconnect budget for normal "pipe not ready yet" errors
+  // that happen while the ONNX model is still loading.
+  if (daemonStartingUp) {
+    outputChannel.appendLine(
+      "[ipc] startup still in progress — skipping scheduleReconnect (poll loop handles this)",
+    );
+    return;
+  }
+
   // Give up after max attempts
   if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
     outputChannel.appendLine(
       `[ipc] max reconnection attempts (${MAX_RECONNECT_ATTEMPTS}) reached, giving up`,
     );
     statusBarItem.text = "$(error) OmniContext";
-    statusBarItem.tooltip = "OmniContext: Connection failed";
+    statusBarItem.tooltip = "OmniContext: Connection failed — restart daemon";
     return;
   }
 
@@ -1116,6 +1282,11 @@ function scheduleReconnect(): void {
   outputChannel.appendLine(
     `[ipc] scheduling reconnection attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS} in ${delay}ms`,
   );
+
+  // Update status bar to indicate we are actively trying to reconnect,
+  // rather than immediately showing the permanent "not connected" error.
+  statusBarItem.text = "$(sync~spin) OmniContext: Reconnecting...";
+  statusBarItem.tooltip = `OmniContext: Reconnecting (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`;
 
   reconnectTimer = setTimeout(async () => {
     reconnectTimer = null;
