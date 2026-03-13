@@ -1,25 +1,25 @@
 ---
 title: Quickstart
-description: Get started with OmniContext v1.2.0 in 5 minutes
+description: Get started with OmniContext v1.2.1 in 5 minutes
 category: Getting Started
 order: 1
 ---
 
 # Quickstart
 
-Index your first codebase and start serving context to AI agents in under 5 minutes using OmniContext **v1.2.0**.
+Index your first codebase and start serving context to AI agents in under 5 minutes using OmniContext **v1.2.1**.
 
 ## Prerequisites
 
-- OmniContext v1.2.0 installed — see [Installation](/docs/getting-started/installation)
+- OmniContext v1.2.1 installed — see [Installation](/docs/getting-started/installation)
 - A codebase to index (any supported language)
-- Any of the **16 supported AI clients**: Claude Desktop, Claude Code, Cursor, Windsurf, VS Code, VS Code Insiders, Cline, RooCode, Continue.dev, Zed, Kiro, PearAI, Trae, Antigravity, Gemini CLI, Amazon Q CLI, or Augment Code
+- Any of the **17 supported AI clients**: Claude Desktop, Claude Code, Cursor, Windsurf, VS Code, VS Code Insiders, Cline, RooCode, Continue.dev, Zed, Kiro, PearAI, Trae, Antigravity, Gemini CLI, Amazon Q CLI, or Augment Code
 
 ## Step 1 — Choose and download an embedding model
 
 OmniContext uses a local embedding model for semantic search. Two options are available:
 
-**Default model** — higher accuracy, larger download (~200 MB):
+**Default model** — higher accuracy, larger download (~550 MB):
 
 ```bash
 omnicontext setup model-download
@@ -105,16 +105,16 @@ Ask your AI agent to search the codebase:
 
 > "Search for authentication logic in my codebase"
 
-The agent will call the `search_code` tool, query the local index, and return relevant code snippets with file paths and line numbers.
+The agent will call the `search_codebase` tool, query the local index, and return relevant code snippets with file paths and line numbers.
 
 ## Available MCP tools
 
-OmniContext v1.2.0 exposes **19 MCP tools** for semantic code search and analysis:
+OmniContext v1.2.1 exposes **19 MCP tools** for semantic code search and analysis:
 
 | Tool | Description |
 |------|-------------|
 | `index_repository` | Trigger or re-trigger codebase indexing |
-| `search_code` | Hybrid semantic + keyword search |
+| `search_codebase` | Hybrid semantic + keyword search |
 | `get_file_context` | Retrieve context for a specific file |
 | `get_symbol_context` | Resolve and expand a symbol definition |
 | `list_files` | List files in the indexed repository |

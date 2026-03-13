@@ -1,7 +1,7 @@
 # VS Code Extension Architecture
 
-**Version**: 0.14.0  
-**Last Updated**: 2026-03-09  
+**Version**: 1.2.1
+**Last Updated**: 2026-03-13
 **Status**: Production Ready
 
 ---
@@ -516,11 +516,22 @@ Display in Quick Pick / Webview
 
 **Supported Clients**:
 - Claude Desktop
+- Claude Code
 - Cline
+- RooCode
 - Continue.dev
 - Windsurf
 - Cursor
 - Kiro
+- PearAI
+- Trae
+- Antigravity
+- Zed
+- Gemini CLI
+- Amazon Q CLI
+- Augment Code
+- VS Code
+- VS Code Insiders
 
 ### 5. Real-Time Metrics Dashboard
 
@@ -614,26 +625,26 @@ Display in Quick Pick / Webview
 cd editors/vscode
 
 # Install dependencies
-npm install
+bun install
 
 # Compile TypeScript
-npm run compile
+bun run compile
 
 # Watch mode (auto-recompile on changes)
-npm run watch
+bun run watch
 ```
 
 ### Testing
 
 ```bash
 # Run all tests
-npm test
+bun test
 
 # Run specific test suite
-npm test -- --grep "Bootstrap"
+bun test --grep "Bootstrap"
 
 # Run with coverage
-npm run test:coverage
+bun run test:coverage
 ```
 
 ### Debugging
@@ -659,12 +670,12 @@ npm run test:coverage
 
 ```bash
 # Install vsce (VS Code Extension Manager)
-npm install -g @vscode/vsce
+bun add -g @vscode/vsce
 
 # Package extension
 vsce package
 
-# Output: omnicontext-0.14.0.vsix
+# Output: omnicontext-1.2.1.vsix
 ```
 
 ### Publishing
@@ -677,7 +688,7 @@ vsce login steeltroops-ai
 vsce publish
 
 # Publish specific version
-vsce publish 0.14.0
+vsce publish 1.2.1
 ```
 
 ---
@@ -884,7 +895,7 @@ vsce publish 0.14.0
 
 **Solutions**:
 1. Check VS Code version: `code --version`
-2. Reinstall extension: `code --install-extension omnicontext-0.14.0.vsix`
+2. Reinstall extension: `code --install-extension omnicontext-1.2.1.vsix`
 3. Open a workspace (not single file)
 4. Check extension logs: `Output > OmniContext`
 
@@ -973,6 +984,6 @@ vsce publish 0.14.0
 
 ---
 
-**Last Updated**: 2026-03-09  
-**Maintainer**: SteelTroops AI  
+**Last Updated**: 2026-03-13
+**Maintainer**: SteelTroops AI
 **License**: MIT

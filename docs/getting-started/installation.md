@@ -1,13 +1,13 @@
 ---
 title: Installation
-description: Install OmniContext v1.2.0 on your machine
+description: Install OmniContext v1.2.1 on your machine
 category: Getting Started
 order: 2
 ---
 
 # Installation
 
-Get OmniContext **v1.2.0** running on your machine in under two minutes. Index your codebase and start serving context to your AI agents across 16 supported AI clients.
+Get OmniContext **v1.2.1** running on your machine in under two minutes. Index your codebase and start serving context to your AI agents across 17 supported AI clients.
 
 ## Quick install
 
@@ -91,13 +91,13 @@ omnicontext-mcp --version
 Expected output:
 
 ```
-omnicontext 1.2.0
-omnicontext-mcp 1.2.0
+omnicontext 1.2.1
+omnicontext-mcp 1.2.1
 ```
 
 ## Supported AI clients
 
-OmniContext v1.2.0 supports **16 AI clients** out of the box:
+OmniContext v1.2.1 supports **17 AI clients** out of the box:
 
 | Client | Type |
 |--------|------|
@@ -114,7 +114,7 @@ OmniContext v1.2.0 supports **16 AI clients** out of the box:
 | Kiro | IDE |
 | PearAI | IDE |
 | Trae | IDE |
-| Antigravity | IDE *(new in v1.2.0)* |
+| Antigravity | IDE |
 | Gemini CLI | CLI agent |
 | Amazon Q CLI | CLI agent |
 | Augment Code | IDE extension |

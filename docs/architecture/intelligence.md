@@ -1,6 +1,6 @@
 # Intelligence Architecture
 
-**Version**: v0.14.0 | **Updated**: March 2026 | **Status**: Production
+**Version**: v1.2.1 | **Updated**: March 2026 | **Status**: Production
 
 Semantic code search architecture combining syntactic analysis, vector embeddings, and graph reasoning.
 
@@ -114,7 +114,7 @@ graph TB
 2. Query expansion (synonyms + HyDE)
 3. Multi-signal retrieval (keyword + semantic + symbol)
 4. RRF fusion (adaptive weights)
-5. Cross-encoder reranking (jina-reranker-v2-base-multilingual)
+5. Cross-encoder reranking (ms-marco-MiniLM-L-6-v2)
 6. Graph boosting (dependency proximity)
 
 **Impact**: 40-60% MRR improvement

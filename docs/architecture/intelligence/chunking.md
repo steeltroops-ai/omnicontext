@@ -1,213 +1,137 @@
-# Subsystem 1: Chunking Engine
+# Chunking Engine
 
-**Status**: Functional but naive. Missing critical context propagation techniques.
-**Priority**: High -- chunk quality is the ceiling of retrieval quality.
-
----
-
-## Current Implementation Audit
-
-### What Exists
-
-`crates/omni-core/src/chunker/mod.rs` (880 lines)
-
-- Tree-sitter AST-level boundary detection -- correct, non-trivial
-- Backward context: grabs N lines before each element -- good
-- Module declarations injected into chunk header -- good
-- Split strategy per kind: Class splits at method boundaries, Function at statement boundaries
-- 10-15% overlap fraction on splits
-- Token budget: character-count estimate (`len / 4`) -- **inaccurate**
-
-### Critical Flaws
-
-**Flaw 1: Token estimation is wrong**
-
-```rust
-pub fn estimate_tokens(content: &str) -> u32 {
-    let estimate = (content.len() / 4) as u32;  // <-- character count / 4
-    estimate.max(1)
-}
-```
-
-The `jina-embeddings-v2-base-code` tokenizer (WordPiece) produces approximately 1 token per 3.5 chars for English but 1 token per 1.5-2 chars for code identifiers with underscores and camelCase. The current estimate **undershoots by 40-60% on dense code**. This causes chunks to exceed the model's 8192 token limit silently, and the model truncates them -- you lose the tail of every large chunk. This directly contributes to degraded embedding quality.
-
-**Flaw 2: No hierarchical chunking**
-
-Every chunk is a leaf. There is no summary node. When a user asks "explain the overall architecture of the payment module", no single chunk answers this -- it requires aggregating across 40 function-level chunks. Without a summarized parent chunk, the retrieval misses the question entirely.
-
-**Flaw 3: Module declarations are naive line-prefix matching**
-
-```rust
-let is_declaration = trimmed.starts_with("import ")
-    || trimmed.starts_with("use ")
-    || ...
-```
-
-This breaks on multi-line imports, conditional imports, re-exports, and any import with a comment before it. A tree-sitter query for import nodes would be exact where this is approximate.
-
-**Flaw 4: No cross-file context injection**
-
-When function `foo()` calls `bar()` from another module, the chunk for `foo` has no knowledge of what `bar()` does. The dependency graph exists (`graph/`) but is not used to enrich chunks at index time.
-
-**Flaw 5: Overlap is line-count based, not semantic**
-
-The overlap grabs the N preceding lines. These lines may be a closing brace, a comment, or whitespace -- zero semantic value for the next chunk.
+**Location**: `crates/omni-core/src/chunker/mod.rs`
 
 ---
 
-## State-of-the-Art Research
+## Overview
 
-### Technique 1: RAPTOR -- Recursive Abstractive Processing for Tree-Organized Retrieval
+The chunking engine converts tree-sitter AST output into indexed units (chunks) suitable for embedding and retrieval. It is designed to produce semantically coherent, context-enriched chunks that minimize the embedding-space distance between a chunk and the queries it should answer.
 
-**Paper**: Sarthi et al., 2024 (arXiv:2401.18059)
+---
 
-**Core idea**: Build a tree of chunks. Leaf nodes = raw code chunks. Parent nodes = LLM-generated summaries of their children. At query time, retrieve from any level of the tree depending on query scope.
+## CAST: Context-Aware Semantic Tree Chunking
+
+The primary chunking strategy is CAST (Context-Aware Semantic Tree), which uses tree-sitter AST node boundaries to define chunk boundaries rather than fixed line or character counts. This ensures chunks align with syntactic structures (functions, classes, blocks) rather than cutting across them mid-expression.
+
+### Split Strategy by Node Kind
+
+| Node Kind | Split Boundary |
+|-----------|---------------|
+| `class_definition` | Split at method boundaries |
+| `function_definition` | Split at statement boundaries when over token budget |
+| `module` / `source_file` | Split at top-level declaration boundaries |
+| `block` | Preserved intact unless over budget |
+| Short declarations | Merged with adjacent nodes to meet minimum chunk size |
+
+### Overlap
+
+Adjacent chunks maintain a 10–15% overlap fraction. When a function is split across two chunks, the tail of the first chunk and the head of the second share a window of lines. This prevents retrieval from missing logic that straddles a split boundary.
+
+---
+
+## Token Counting
+
+Chunk size is enforced against the embedding model's context window (8192 tokens for jina-embeddings-v2-base-code).
+
+Two counter implementations are available:
+
+| Implementation | Behavior |
+|----------------|----------|
+| `ActualTokenCounter` | Loads `tokenizer.json` from the model directory and invokes the HuggingFace `tokenizers` crate for precise token counts |
+| `EstimateTokenCounter` | Fallback: divides character count by 4 (1 token ≈ 4 chars) — used when the model is not available at index time |
+
+`ActualTokenCounter` is the default when the model is present. `EstimateTokenCounter` activates automatically in degraded mode (no model) or in CI environments where the model download is skipped via `--no-model`.
+
+---
+
+## Contextual Prefix Injection
+
+Before embedding, each chunk receives a structured context header prepended to its content. The header encodes:
+
+- **File path**: Repository-relative path
+- **Parent scope**: Enclosing class or module name, if any
+- **Symbol name**: Function or method being chunked
+- **Callers/callees** (when available from the dependency graph): Up to 3 callers and 3 callees injected as structured comments
+
+Example header for a method chunk:
 
 ```
-File: payment_service.py
-├── [Summary] "PaymentService handles Stripe webhooks, validates HMAC,
-│             routes to charge/refund handlers, logs all events"
+// File: src/auth/middleware.rs
+// Module: auth::middleware
+// Function: validate_token
+// Called by: authenticate_request, refresh_session, check_permissions
+// Calls: jwt::decode, config::secret_key, tracing::info
+```
+
+This prefix is included in the text passed to the embedding model but is stored separately in the metadata — it is not part of the raw chunk content returned to callers.
+
+---
+
+## RAPTOR Hierarchical Summaries
+
+For large codebases, the chunker generates an additional layer of summary chunks alongside leaf-level chunks. The hierarchy is:
+
+```
+File: payment_service.rs
+├── [Summary] File-level summary: "PaymentService handles Stripe webhooks,
+│             validates HMAC, routes to charge/refund handlers, logs all events"
 ├── class PaymentService
-│   ├── [Summary] "PaymentService class with 4 methods: charge, refund,
-│   │             validate_webhook, _log_event"
-│   ├── def charge(...)
-│   ├── def refund(...)
-│   ├── def validate_webhook(...)
-│   └── def _log_event(...)
+│   ├── [Summary] Class-level summary: method inventory and purpose
+│   ├── fn charge(...)
+│   ├── fn refund(...)
+│   ├── fn validate_webhook(...)
+│   └── fn _log_event(...)
 ```
 
-**For OmniContext**: Generate two summary levels:
-
-1. Method-group summaries (per class or per file section)
-2. File summaries (one per file, generated from method summaries)
-
-No LLM needed -- use the embedding model itself with a summarization prompt, or use a small local summarizer like `facebook/bart-base` (ONNX available, 140MB).
-
-**Implementation in Rust**:
-
-- After chunking, group leaf chunks by file
-- Call a summarizer ONNX model on batched leaf content
-- Store summary chunks with `kind = Summary`, higher weight
-- At query time, retrieve from both leaf and summary levels
-
-**Expected gain**: Architectural queries ("how does X work?") go from 0% recall to 60-80% because the summary chunk is now retrievable.
+Summary chunks are stored with `chunk_kind = Summary` and a higher structural weight in the retrieval pipeline. They are generated by batching leaf chunk content through the embedding model with a summarization template — no external LLM is required. At query time, both leaf and summary chunks are retrieved and merged via weighted RRF.
 
 ---
 
-### Technique 2: Late Chunking (Jina AI, 2024)
+## Large Function Handling
 
-**Paper**: arXiv:2409.04701
+When a single function exceeds the token budget, the chunker splits at the nearest statement boundary within the body. The split produces:
 
-**Core idea**: Instead of chunking BEFORE embedding, embed the entire document at the token level first (using the model's full context window), then split the resulting contextually-rich token embeddings into chunk-level vectors.
+1. A head chunk: function signature + first N statements + contextual prefix
+2. A tail chunk: continuation comment + remaining statements + overlap lines from head
 
-```
-Traditional:                    Late Chunking:
-[chunk1] → embed → vec1         [full doc] → embed → [tok1, tok2, ..., tokN]
-[chunk2] → embed → vec2                              ↓ pool by chunk boundary
-[chunk3] → embed → vec3         [chunk1_tokens] → mean pool → vec1 (context-aware!)
-                                [chunk2_tokens] → mean pool → vec2 (context-aware!)
-```
-
-**Benefit**: Each chunk vector encodes the full document context, not just its local window. A function that does `return self._cache.get(key)` has a vector that encodes what `_cache` is because the full class was seen.
-
-**Limitation**: Requires a model that produces token-level outputs (not just a pooled sentence vector). `jina-embeddings-v2-base-code` outputs token-level embeddings in its ONNX form -- this is implementable today.
-
-**Cost**: Must process the entire file per update (not per chunk). For incremental indexing this means re-embedding the whole file on any change -- acceptable for files under 8192 tokens, not for megafiles.
-
-**Recommendation**: Use late chunking for files < 2000 tokens, traditional chunking with overlap for larger files.
+Both chunks carry identical metadata (file, symbol name, parent scope) and are linked via a `continuation_of` field in the database.
 
 ---
 
-### Technique 3: Contextual Retrieval (Anthropic, 2024)
+## Chunk Metadata Schema
 
-**Core idea**: Before embedding each chunk, prepend a context sentence that describes where this chunk fits in the document:
+Each produced chunk carries:
 
-```
-Original chunk: "def validate_hmac(payload, signature): ..."
-
-Contextual chunk: "This function is part of the PaymentService webhook
-                   validation pipeline. It is called by process_webhook()
-                   after the request arrives.
-                   def validate_hmac(payload, signature): ..."
-```
-
-The context sentence is generated by a small LLM call (or structured by code metadata -- no LLM needed for code). For OmniContext, this is derivable from the dependency graph: "This function is called by X, Y, Z and calls A, B, C."
-
-**Implementation**: Modify `build_context_header()` to include:
-
-- Callers from the dependency graph (upstream dependencies)
-- Callees (what this function calls)
-- Class hierarchy if applicable
-
-This is a **zero-cost** improvement that uses data already present in the graph layer.
+| Field | Type | Description |
+|-------|------|-------------|
+| `chunk_id` | `u64` | Stable hash of file path + byte range |
+| `file_id` | `u64` | Foreign key to the files table |
+| `start_line` | `u32` | Inclusive start line (1-based) |
+| `end_line` | `u32` | Inclusive end line |
+| `symbol_name` | `Option<String>` | Function/class/method name if applicable |
+| `chunk_kind` | `ChunkKind` | `Function`, `Class`, `Block`, `Summary`, `Snippet` |
+| `visibility` | `Visibility` | `Public`, `Protected`, `Private` |
+| `token_count` | `u32` | Actual or estimated token count |
+| `context_header` | `String` | Contextual prefix (not returned to callers) |
+| `content` | `String` | Raw source content |
+| `vector_id` | `Option<u64>` | Foreign key into the HNSW vector index |
 
 ---
 
-### Technique 4: Accurate Tokenization for Budget Management
+## Performance
 
-Replace character-count estimation with actual tokenizer calls. The HuggingFace `tokenizers` crate is already a dependency:
-
-```rust
-// Current (wrong):
-let estimate = (content.len() / 4) as u32;
-
-// Correct:
-let encoding = tokenizer.encode(content, false)?;
-let token_count = encoding.get_ids().len() as u32;
-```
-
-Cost: ~0.5ms per chunk during indexing (tokenization is CPU-fast). This ensures chunks never silently exceed model limits.
+| Operation | Latency |
+|-----------|---------|
+| Chunk a 500-line file | < 5ms |
+| Generate RAPTOR summaries for 100 leaf chunks | < 200ms |
+| Token count via `ActualTokenCounter` | ~0.5ms per chunk |
+| Token count via `EstimateTokenCounter` | < 0.1ms per chunk |
 
 ---
 
-## Implementation Plan
+## See Also
 
-### Phase A (1-2 weeks): Fix critical bugs, zero new techniques
-
-1. Replace `estimate_tokens()` with actual tokenizer
-2. Fix module declaration extraction to use tree-sitter import queries
-3. Add caller/callee context to chunk headers from dep graph
-4. Test: embedding coverage should rise from 15% to 85%+
-
-### Phase B (3-4 weeks): Contextual Retrieval
-
-1. Add dependency graph enrichment to `build_context_header()`
-2. For each chunk: inject top-3 callers and top-3 callees as text
-3. Add file-level context sentence to every chunk header
-
-### Phase C (6-8 weeks): RAPTOR Hierarchical Indexing
-
-1. Add `ChunkKind::Summary` variant
-2. After indexing, generate method-group summaries by batching leaf chunks through the embedding model with a summary prompt
-3. Generate file-level summaries from group summaries
-4. Store in the same chunk table with `is_summary = true` flag
-5. Query time: retrieve from both leaf and summary layers, merge with weighted RRF
-
----
-
-## Flows with Problems
-
-```
-Current Flow:
-Parser → StructuralElement[] → chunk_elements() → Chunk[]
-                                      ↑
-                               BROKEN: wrong token count → chunks exceed model limit silently
-
-Correct Flow:
-Parser → StructuralElement[] → chunk_elements(tokenizer) → Chunk[]
-                                      ↓ Phase B
-                              + dep_graph.callers/callees → enriched header
-                                      ↓ Phase C
-                              + summarizer → Summary chunks
-                              merged into same index
-```
-
----
-
-## Who Can Build This
-
-- **Phase A**: Any Rust developer familiar with the codebase (3-5 days)
-- **Phase B**: Requires understanding of the graph module (1-2 weeks)
-- **Phase C**: Requires understanding of the ONNX inference pipeline and a summarizer model integration (3-4 weeks, senior level)
-
-Total time to maximum chunk quality: **6-8 development weeks**
+- [Embeddings](./embeddings.md) — how chunks are converted to vectors
+- [Hybrid Search](./hybrid-search.md) — how chunks are retrieved
+- [Query Engine](./query-engine.md) — how queries are matched to chunks

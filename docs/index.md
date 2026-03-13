@@ -11,7 +11,7 @@ OmniContext is a natively-compiled semantic code search engine that provides AI 
 
 ## What is OmniContext?
 
-OmniContext indexes your codebase using AST parsing, semantic chunking, and vector embeddings to enable fast, accurate code search. It exposes 16 MCP tools that AI agents can use to understand your code, navigate dependencies, and assemble relevant context.
+OmniContext indexes your codebase using AST parsing, semantic chunking, and vector embeddings to enable fast, accurate code search. It exposes 19 MCP tools that AI agents can use to understand your code, navigate dependencies, and assemble relevant context.
 
 ## Key features
 
@@ -52,12 +52,13 @@ Full AST parsing support for:
 
 ## Architecture
 
-OmniContext is a Cargo workspace with four crates:
+OmniContext is a Cargo workspace with five crates:
 
 - `omni-core`: Core library (indexing, search, embeddings)
 - `omni-cli`: Command-line interface
 - `omni-daemon`: Background process with IPC
 - `omni-mcp`: MCP server for AI agent integration
+- `omni-ffi`: Foreign function interface for embedding
 
 ## Get started
 

@@ -68,4 +68,4 @@ Performance constraints are strictly managed via `cargo bench` and the `criterio
 
 The Engine executes an NDCG (Normalized Discounted Cumulative Gain) validation suite targeting heuristic accuracy over dense and sparse querying.
 
-**Target Threshold**: `NDCG@10 > 0.75` across standard fixture repositories.
+**Target Threshold**: `NDCG@10 > 0.85` across standard fixture repositories.

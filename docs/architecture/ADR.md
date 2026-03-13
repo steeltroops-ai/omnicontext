@@ -190,7 +190,7 @@ Use **usearch** (HNSW algorithm) with mmap-backed persistence.
 ```mermaid
 graph LR
     A[Code Chunk] -->|Embed| B[ONNX Model]
-    B -->|384-dim vector| C[usearch Index]
+    B -->|768-dim vector| C[usearch Index]
     C -->|mmap| D[Disk File]
     
     E[Search Query] -->|Embed| B
@@ -236,7 +236,7 @@ graph LR
 | Index build (100k vectors) | ~5 seconds |
 | Query latency (P99) | <1ms |
 | Memory overhead | ~20 bytes per vector |
-| Disk size (100k vectors, 384-dim) | ~150MB |
+| Disk size (100k vectors, 768-dim) | ~300MB |
 
 ---
 
@@ -312,9 +312,9 @@ sequenceDiagram
     participant Engine as OmniContext Engine
     
     Agent->>MCP: tools/list
-    MCP-->>Agent: [search_code, get_symbol, ...]
-    
-    Agent->>MCP: tools/call search_code
+    MCP-->>Agent: [search_codebase, get_symbol_context, ...]
+
+    Agent->>MCP: tools/call search_codebase
     MCP->>Engine: search("authentication")
     Engine-->>MCP: [chunk1, chunk2, ...]
     MCP-->>Agent: Formatted results
@@ -355,16 +355,20 @@ sequenceDiagram
 
 ### MCP Tools Exposed
 
+OmniContext exposes 19 MCP tools. The full catalog is documented in the [MCP Tools Reference](/docs/api-reference/mcp-tools). Core tools include:
+
 | Tool | Purpose | Input | Output |
 |------|---------|-------|--------|
-| `search_code` | Hybrid search | query, limit | Ranked chunks |
-| `get_symbol` | Symbol lookup | name | Symbol definition |
-| `get_file_summary` | File structure | path | Exports, classes, functions |
-| `get_dependencies` | Graph traversal | symbol, direction | Upstream/downstream deps |
-| `find_patterns` | Pattern detection | pattern | Similar code examples |
-| `get_architecture` | Overview | - | Architecture summary |
-| `explain_codebase` | Onboarding | - | Project explanation |
-| `get_status` | Health check | - | Index statistics |
+| `search_codebase` | Hybrid search | query, limit | Ranked chunks |
+| `get_symbol_context` | Symbol lookup | name | Symbol definition |
+| `get_file_context` | File structure | path | Exports, classes, functions |
+| `get_dependency_graph` | Graph traversal | symbol, direction | Upstream/downstream deps |
+| `search_by_pattern` | Pattern detection | pattern | Similar code examples |
+| `get_module_map` | Architecture overview | - | Architecture summary |
+| `index_repository` | Trigger indexing | path | Index status |
+| `check_index_status` | Health check | - | Index statistics |
+| `preflight_check` | Validate runtime | - | Configuration validity |
+| `get_code_context` | Token-optimized context | query | LLM-ready context |
 
 ---
 
@@ -395,16 +399,22 @@ graph TB
         B[omni-mcp<br/>Binary]
         C[omni-cli<br/>Binary]
         D[omni-daemon<br/>Binary]
-        
+        E[omni-ffi<br/>Library]
+        F[omni-api<br/>Library]
+
         B -->|depends on| A
         C -->|depends on| A
         D -->|depends on| A
+        E -->|depends on| A
+        F -->|depends on| A
     end
-    
+
     style A fill:#e1f5ff
     style B fill:#fff4e1
     style C fill:#fff4e1
     style D fill:#fff4e1
+    style E fill:#fff4e1
+    style F fill:#fff4e1
 ```
 
 ### Crate Responsibilities
@@ -414,7 +424,9 @@ graph TB
 | **omni-core** | lib | Core engine (parser, embedder, index, search, graph) | Yes |
 | **omni-mcp** | bin | MCP server (stdio/SSE transports) | No |
 | **omni-cli** | bin | CLI interface (index, search, status) | No |
-| **omni-daemon** | bin | Background file watcher | No |
+| **omni-daemon** | bin | Background file watcher and IPC state management | No |
+| **omni-ffi** | lib | Foreign function interface for embedding in other runtimes | Yes |
+| **omni-api** | lib | Enterprise endpoint logic | Yes |
 
 ### Consequences
 
@@ -516,8 +528,8 @@ Sort by score descending
 
 ## ADR-008: Dependency Graph with petgraph
 
-**Status**: ✅ Accepted  
-**Date**: 2026-03-01  
+**Status**: ✅ Accepted
+**Date**: 2026-03-01
 **Deciders**: Core Team
 
 ### Context
@@ -530,7 +542,10 @@ Understanding code dependencies is critical for:
 
 ### Decision
 
-Use **petgraph** to build and query a directed dependency graph.
+Use a two-tier graph representation:
+
+- **File-level graph**: HashMap-based adjacency lists in `crates/omni-core/src/graph/dependencies.rs`. Provides O(1) neighbor lookup for file-to-file relationships (IMPORTS, INHERITS, CALLS, INSTANTIATES edges).
+- **Symbol-level graph**: **petgraph** directed graph in `crates/omni-core/src/graph/symbol_graph.rs`. Used for symbol-to-symbol dependency traversal, cycle detection, PageRank scoring, and shortest-path queries.
 
 ### Graph Structure
 

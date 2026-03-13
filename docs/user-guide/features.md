@@ -1,6 +1,6 @@
 # Features
 
-**Version**: v0.14.0 | **Updated**: March 2026 | **Status**: Production
+**Version**: v1.2.1 | **Updated**: March 2026 | **Status**: Production
 
 Semantic code search engine features.
 
@@ -34,7 +34,7 @@ graph LR
 - Impact: 30-50% accuracy ↑
 
 ### Cross-Encoder Reranking
-- jina-reranker-v2-base-multilingual (~280MB)
+- ms-marco-MiniLM-L-6-v2 (~90MB)
 - Batch processing (default: 32)
 - Early termination (40-60% faster)
 - Graceful degradation
@@ -82,7 +82,7 @@ graph LR
 | Feature | Impact | Status |
 |---------|--------|--------|
 | Hash-Based Change Detection | 50-80% re-index ↓ | ✅ |
-| INT8 Quantization | 4x memory ↓, 1.75x speed ↑ | 🔧 |
+| INT8 Quantization | 4x memory ↓, 1.75x speed ↑ | ✅ |
 | Dynamic Batching | 2-3x throughput ↑ | ✅ |
 | Connection Pooling | 2-3x read ↑ | ✅ |
 | Query Caching | <1ms cached | ✅ |
