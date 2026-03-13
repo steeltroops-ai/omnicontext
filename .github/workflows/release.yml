@@ -138,12 +138,9 @@ jobs:
         run: |
           new_version="${{ needs.analyze.outputs.new_version }}"
 
-          # Update all Cargo.toml files
-          sed -i "s/^version = \".*\"/version = \"${new_version}\"/" Cargo.toml
-          for f in crates/*/Cargo.toml; do
-            sed -i "s/^version = \".*\"/version = \"${new_version}\"/" "$f"
-            sed -i "s/omni-core = { version = \".*\"/omni-core = { version = \"${new_version}\"/" "$f"
-          done
+          # Update all Cargo.toml files using cargo-edit (safe workspace bump)
+          cargo install cargo-edit --locked --quiet
+          cargo set-version --workspace "${new_version}"
 
           # Update package.json
           if [ -f editors/vscode/package.json ]; then
