@@ -1,6 +1,16 @@
 # Changelog
 
 All notable changes to the OmniContext VS Code extension are documented here.
+
+## [1.2.2] - 2026-03-13
+
+
+- implement SCC cycle detection, fix extension context bug, remove phase labels ([fdc0033](https://github.com/steeltroops-ai/omnicontext/commit/fdc0033))
+- normalize file extensions to lowercase before language detection ([f0f8459](https://github.com/steeltroops-ai/omnicontext/commit/f0f8459))
+
+- fill extension changelog gaps for versions 0.16.0 through 1.2.1 ([d592c4e](https://github.com/steeltroops-ai/omnicontext/commit/d592c4e))
+- rewrite changelogs to enterprise standards and fix cliff.toml ([629e07a](https://github.com/steeltroops-ai/omnicontext/commit/629e07a))
+
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
