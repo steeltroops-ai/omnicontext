@@ -17,6 +17,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Restore distribution manifest fields stripped by release automation from Homebrew formula
   and Scoop manifest
 - Fix unused-variable CI failures on Linux in the core engine build
+- File extension normalization in daemon now case-insensitive; improves indexed file coverage displayed in sidebar
 
 ## [1.2.0] - 2026-03-12
 
@@ -58,6 +59,7 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   stalling mid-scan
 - Stabilize daemon lifecycle management: prevent premature daemon shutdown during active
   indexing and ensure clean process teardown on workspace close
+- Daemon lifecycle stability improvements reflected in connection state UI and status bar
 
 ## [1.1.1] - 2026-03-09
 
@@ -71,8 +73,7 @@ _No extension-specific changes. See root changelog for documentation site additi
 
 ### Fixed
 - Align changelog version headers with git tags to correct mismatched entries
-- Fix `engines.vscode` compatibility field to correctly specify the minimum required VS Code
-  version
+- `engines.vscode` minimum version specifier corrected to `^1.109.0`
 
 ## [0.16.1] - 2026-03-09
 
@@ -80,8 +81,8 @@ _No extension-specific changes. See root changelog for core engine compilation f
 
 ## [0.16.0] - 2026-03-09
 
-_No extension-specific changes. See root changelog for connection pooling, contextual chunking,
-and query result caching additions to the core engine._
+### Changed
+- Search result cache metrics now visible in performance panel
 
 ## [0.15.0] - 2026-03-09
 
