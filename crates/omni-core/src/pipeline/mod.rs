@@ -91,6 +91,8 @@ pub struct Engine {
     commit_engine: CommitEngine,
     /// Semantic reasoning engine for Graph-Augmented Retrieval (GAR).
     reasoning_engine: ReasoningEngine,
+    /// Timestamp of the most recent completed index run.
+    last_indexed_at: Option<std::time::SystemTime>,
 }
 
 impl Engine {
@@ -214,6 +216,7 @@ impl Engine {
             vector_breaker,
             commit_engine,
             reasoning_engine,
+            last_indexed_at: None,
         };
 
         // Load dependency graph from SQLite index
@@ -567,6 +570,9 @@ impl Engine {
                  Run `omnicontext embed --retry-failed` to retry failed embeddings."
             );
         }
+
+        // Record the completion timestamp for IPC consumers (e.g., system_status handler).
+        self.last_indexed_at = Some(std::time::SystemTime::now());
 
         Ok(result)
     }
@@ -1388,6 +1394,13 @@ impl Engine {
     /// Get a reference to the semantic reasoning engine.
     pub fn reasoning_engine(&self) -> &ReasoningEngine {
         &self.reasoning_engine
+    }
+
+    /// Return the timestamp of the most recently completed index run, if any.
+    ///
+    /// Returns `None` if no index has been run in this daemon session.
+    pub fn last_indexed_at(&self) -> Option<std::time::SystemTime> {
+        self.last_indexed_at
     }
 
     /// Bridge historical co-change file pairs into the symbol-level dependency graph.

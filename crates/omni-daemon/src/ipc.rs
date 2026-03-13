@@ -434,7 +434,7 @@ async fn dispatch(
             Ok(serde_json::json!({ "shutdown": true }))
         }
 
-        // Phase 1: Intelligence Layer Methods
+        // Intelligence Layer Methods
         "reranker/get_metrics" => handle_reranker_metrics(engine.clone()).await,
 
         "graph/get_metrics" => handle_graph_metrics(engine.clone()).await,
@@ -447,7 +447,7 @@ async fn dispatch(
             handle_search_intent(engine.clone(), params).await
         }
 
-        // Phase 2: Resilience Monitoring Methods
+        // Resilience Monitoring Methods
         "resilience/get_status" => {
             handle_resilience_status(engine.clone(), event_dedup.clone(), backpressure.clone())
                 .await
@@ -461,7 +461,7 @@ async fn dispatch(
             handle_reset_circuit_breaker(engine.clone(), params).await
         }
 
-        // Phase 3: Historical Context Methods
+        // Historical Context Methods
         "history/get_commit_context" => {
             let params: protocol::CommitContextParams = match parse_params(&req) {
                 Ok(p) => p,
@@ -488,7 +488,7 @@ async fn dispatch(
             handle_audit_plan(engine.clone(), params).await
         }
 
-        // Phase 4: Graph Visualization Methods
+        // Graph Visualization Methods
         "graph/get_architectural_context" => {
             let params: protocol::ArchitecturalContextParams = match parse_params(&req) {
                 Ok(p) => p,
@@ -499,7 +499,7 @@ async fn dispatch(
 
         "graph/find_cycles" => handle_find_cycles(engine.clone()).await,
 
-        // Phase 5: Multi-Repository Support
+        // Multi-Repository Support
         "workspace/list_repos" => handle_list_repos(engine.clone()).await,
 
         "workspace/add_repo" => {
@@ -526,7 +526,7 @@ async fn dispatch(
             handle_remove_repo(engine.clone(), params).await
         }
 
-        // Phase 6: Performance Controls
+        // Performance Controls
         "embedder/get_metrics" => {
             handle_embedder_metrics(engine.clone(), daemon_start_time.clone()).await
         }
@@ -622,9 +622,13 @@ async fn handle_system_status(
     // Connection health is always "connected" if we're handling this request
     let connection_health = "connected";
 
-    // For now, we don't track last index time, so return None
-    // This can be enhanced later by storing index timestamps
-    let last_index_time: Option<u64> = None;
+    // Read last index timestamp from the engine (set at the end of run_index()).
+    // Serialized as Unix timestamp milliseconds; None when no index has completed this session.
+    let last_index_time: Option<u64> = eng.last_indexed_at().and_then(|t| {
+        t.duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_millis().min(u128::from(u64::MAX)) as u64)
+    });
 
     let response = protocol::SystemStatusResponse {
         initialization_status: initialization_status.to_string(),
@@ -1378,7 +1382,7 @@ async fn handle_clear_index(
 }
 
 // ---------------------------------------------------------------------------
-// Phase 1: Intelligence Layer Handlers
+// Intelligence Layer Handlers
 // ---------------------------------------------------------------------------
 
 /// Handle request for reranker metrics.
@@ -1482,7 +1486,7 @@ async fn handle_search_intent(
     }))
 }
 
-// Phase 2: Resilience Monitoring Handlers
+// Resilience Monitoring Handlers
 // ---------------------------------------------------------------------------
 
 /// Handle request for resilience status (circuit breakers, health, dedup, backpressure).
@@ -1641,7 +1645,7 @@ async fn handle_reset_circuit_breaker(
     }))
 }
 
-// Phase 3: Historical Context Handlers
+// Historical Context Handlers
 // ---------------------------------------------------------------------------
 
 /// Handle request for commit context for a file.
@@ -1721,7 +1725,7 @@ async fn handle_index_commits(
     }))
 }
 
-// Phase 4: Graph Visualization Handlers
+// Graph Visualization Handlers
 // ---------------------------------------------------------------------------
 
 /// Handle request for architectural context (N-hop neighborhood).
