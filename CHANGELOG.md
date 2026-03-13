@@ -4,6 +4,11 @@ All notable changes to OmniContext are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.3] - 2026-03-13
+
+### Fixed
+- Restore audit-check continue-on-error; supply-chain is authoritative gate ([98301bd](https://github.com/steeltroops-ai/omnicontext/commit/98301bd3299e1d1dcd1742629d5f6aae6eb040da))
+
 ## [1.2.2] - 2026-03-13
 
 ### Documentation
