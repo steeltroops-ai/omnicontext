@@ -54,6 +54,7 @@ tests.log
 # Internal Planning & Agent Workspaces
 .claude/
 .agents/
+CLAUDE.md
 log/local/
 
 # JS/TS and VSCode Extension
