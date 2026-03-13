@@ -4,220 +4,229 @@ All notable changes to the OmniContext VS Code extension are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.2.1] - 2026-03-12
-
-_No direct changes in this release._
-
-
-## [1.2.0] - 2026-03-13
-
-### Added
-- **Antigravity IDE support**: OmniContext MCP server now auto-configures in Antigravity
-  (`~/.config/Antigravity/User/mcp.json` on Linux/macOS, `%APPDATA%\Antigravity\User\mcp.json` on Windows)
-  using the `servers` key format compatible with Antigravity's MCP protocol implementation
-- **16 AI client auto-configuration**: Distribution scripts and `setup --all` now cover
-  Claude Desktop, Claude Code, Cursor, Windsurf, VS Code, VS Code Insiders, Cline, RooCode,
-  Continue.dev, Zed, Kiro, PearAI, Trae, Antigravity, Gemini CLI, Amazon Q CLI, Augment Code
-- **Model selection command**: New `OmniContext: Select Embedding Model` command lets users
-  choose their embedding model from the Command Palette (jina-embeddings-v2-base-code 550 MB,
-  jina-embeddings-v2-small-en 130 MB, or all-minilm-l6-v2 22 MB); saved to
-  `omnicontext.embeddingModel` setting; daemon restarts automatically on change
-- **Improved IPC startup resilience**: Added 2-second initial delay before first IPC
-  connection attempt when daemon starts cold (allowing ONNX model to initialize); status bar
-  now shows `$(sync~spin) OmniContext: Engine loading...` during startup instead of immediately
-  showing disconnected
-- **Cross-platform ONNX detection**: `resolveBinaries()` now checks for `libonnxruntime.so`,
-  `libonnxruntime.dylib`, and versioned variants on Linux/macOS so ONNX is correctly detected
-  and not re-downloaded unnecessarily
-- **Security audit**: `quinn-proto` updated to 0.11.14 (fixes CVE RUSTSEC-2026-0037 DoS
-  vulnerability); bun audit passes with no vulnerabilities on all Node.js dependencies
+## [Unreleased]
 
 ### Fixed
-- **Distribution scripts hardened**: Install, uninstall, and update scripts now include
-  `--help` / `-Help` flags, `--no-model`, `--no-mcp`, `--no-onnx`, `--dry-run`, `--dir`,
-  `--model` options for enterprise deployments
-- **FFI tests no longer hang**: ONNX-dependent integration tests in `omni-ffi` now carry
-  `#[ignore = "requires ONNX model download (~550 MB)"]` so `cargo test --workspace` completes
-  in a reasonable time; run with `cargo test -- --ignored` for full integration coverage
-- **Linux unused-variable CI**: All platform-gated code in `orchestrator.rs` and `main.rs`
-  now uses the pre-declared `app_support` / `appdata` variables instead of inlining the path;
-  eliminates the `unused variable` error that was failing the Linux CI Check job
-- **Clippy pedantic compliance**: Fixed 29 clippy warnings across `omni-core`, `omni-mcp`,
-  `omni-daemon`, `omni-ffi`, and `omni-cli` (doc_markdown, map_or_else, manual_clamp,
-  similar_names, clone_on_copy, case_sensitive_file_extension_comparisons, and more)
-- **Distribution manifests restored**: Homebrew formula and Scoop manifest had `license`,
-  `bottle :unneeded`, `post_install`, and `caveats` / `notes` fields stripped by release
-  automation; restored in both current manifests and the release workflow template
-- **Release automation template**: Updated `.github/workflows/release.yml` Homebrew and
-  Scoop embedded templates to preserve all distribution enhancements across future releases
-- **Rust crate improvements** (context engine):
-  - `omni-core`: FNV hash constants with digit separators; `similar_names` suppressed for
-    legitimate `file_a_str` / `file_b_str` pairs; `map_or(false, …)` → `is_some_and(…)`;
-    `clone_on_copy` for `Kind` enum; `case_sensitive_file_extension_comparisons` for `.rs`,
-    `.py` etc.; graph `unnecessary_sort_by` → `sort_by_key` with `Reverse`
-  - `omni-mcp`: `doc_markdown` fixes; `write_with_newline` → `writeln!`; `manual_clamp`
-  - `omni-daemon`: `manual_clamp` in 4 IPC backpressure locations; `single_match_else` fixes
-  - `omni-ffi`: 4 integration tests marked `#[ignore]` for ONNX dependency
+- Core engine now correctly indexes files with uppercase or mixed-case extensions on
+  case-insensitive filesystems (macOS, Windows); `Main.RS`, `App.PY`, `Index.TS` are no
+  longer silently skipped during directory scans
+
+## [1.2.1] - 2026-03-12
+
+### Fixed
+- Restore distribution manifest fields stripped by release automation from Homebrew formula
+  and Scoop manifest
+- Fix unused-variable CI failures on Linux in the core engine build
+
+## [1.2.0] - 2026-03-12
+
+### Added
+- **Antigravity IDE support**: OmniContext MCP server now auto-configures in Antigravity IDE
+  (`~/.config/Antigravity/User/mcp.json` on Linux/macOS, `%APPDATA%\Antigravity\User\mcp.json`
+  on Windows)
+- **17 AI client auto-configuration**: `setup --all` now covers Claude Desktop, Claude Code,
+  Cursor, Windsurf, VS Code, VS Code Insiders, Cline, RooCode, Continue.dev, Zed, Kiro,
+  PearAI, Trae, Antigravity, Gemini CLI, Amazon Q CLI, and Augment Code
+- **Embedding model selection**: New `OmniContext: Select Embedding Model` command in the
+  Command Palette; choose between `jina-embeddings-v2-base-code` (550 MB),
+  `jina-embeddings-v2-small-en` (130 MB), or `all-minilm-l6-v2` (22 MB); saved to
+  `omnicontext.embeddingModel`; daemon restarts automatically on change
+- **IPC startup resilience**: 2-second initial delay before first IPC connection attempt when
+  daemon starts cold; status bar shows `$(sync~spin) OmniContext: Engine loading...` during
+  initialization rather than immediately showing disconnected
+- **Cross-platform ONNX detection**: `resolveBinaries()` now checks for `libonnxruntime.so`,
+  `libonnxruntime.dylib`, and versioned variants so ONNX is correctly detected on Linux/macOS
+  without unnecessary re-downloads
+- **Improved repository visibility**: Sidebar registry shows all indexed repositories with
+  normalized paths, repository count at top level, and one-click re-index actions per entry
+- **Distribution script enterprise flags**: Install, uninstall, and update scripts now accept
+  `--help`, `--no-model`, `--no-mcp`, `--no-onnx`, `--dry-run`, `--dir`, and `--model`
+
+### Fixed
+- Auto-sync MCP configuration now runs after every binary update, ensuring newly supported
+  IDE clients are registered without manual re-sync
+- Addressed `quinn-proto` CVE RUSTSEC-2026-0037 by updating to 0.11.14; all Node.js
+  dependencies pass `bun audit` with no vulnerabilities
 
 ### Changed
-- Sidebar now shows repo registry with indexed repository list and one-click re-index actions
-- Improved indexed repo visibility in sidebar: paths normalized, repo count shown at top level
-- Auto-sync MCP now runs after every update (not just first install) to register new IDEs
-
-
-
+- Sidebar repository list now shows normalized, consistently formatted paths
 
 ## [1.1.2] - 2026-03-11
 
-
-- harden index pipeline and extension daemon lifecycle ([57b67e5](https://github.com/steeltroops-ai/omnicontext/commit/57b67e5))
-
-
+### Fixed
+- Harden indexing pipeline against partial file-parse failures to prevent the pipeline from
+  stalling mid-scan
+- Stabilize daemon lifecycle management: prevent premature daemon shutdown during active
+  indexing and ensure clean process teardown on workspace close
 
 ## [1.1.1] - 2026-03-09
 
-_No direct changes in this release._
-
+_No extension-specific changes. See root changelog for website fixes._
 
 ## [1.1.0] - 2026-03-09
 
-_No direct changes in this release._
-
+_No extension-specific changes. See root changelog for documentation site additions._
 
 ## [1.0.1] - 2026-03-09
 
-
-- align changelog versions with git tags and fix vscode engines compatibility ([f22c2e0](https://github.com/steeltroops-ai/omnicontext/commit/f22c2e0))
-
-
+### Fixed
+- Align changelog version headers with git tags to correct mismatched entries
+- Fix `engines.vscode` compatibility field to correctly specify the minimum required VS Code
+  version
 
 ## [0.16.1] - 2026-03-09
 
-_No direct changes in this release._
+_No extension-specific changes. See root changelog for core engine compilation fixes._
 
 ## [0.16.0] - 2026-03-09
 
-_No direct changes in this release._
+_No extension-specific changes. See root changelog for connection pooling, contextual chunking,
+and query result caching additions to the core engine._
 
 ## [0.15.0] - 2026-03-09
 
-_No direct changes in this release._
+### Added
+- **Graph visualization panel**: Sidebar panel showing dependency graph metrics and symbol
+  connectivity statistics powered by the new `FileDependencyGraph` in the core engine
+- **Performance monitoring panel**: Real-time P50/P95/P99 search latency, embedding
+  throughput, and index pool utilization exposed through new IPC handlers in the daemon
 
 ## [0.14.0] - 2026-03-08
 
 ### Added
-- Branch-aware diff indexing and SOTA performance optimizations ([464ab1f](https://github.com/steeltroops-ai/omnicontext/commit/464ab1f))
+- **Branch-aware context**: Extension benefits from branch-aware diff indexing in the core
+  engine; search results automatically surface files changed on the current branch
 
 ## [0.13.1] - 2026-03-08
 
 ### Fixed
-- Hardened path resolution to prevent silent wrong-directory indexing ([38ad9a0](https://github.com/steeltroops-ai/omnicontext/commit/38ad9a0))
+- Hardened path resolution in MCP tools prevents silent wrong-directory indexing when the
+  workspace path is ambiguous
 
 ## [0.13.0] - 2026-03-08
 
 ### Added
-- Batch embedding and backpressure for indexing ([ea880bf](https://github.com/steeltroops-ai/omnicontext/commit/ea880bf))
+- **Batch embedding with backpressure**: Core engine now batches embedding requests before ONNX
+  inference with queue-depth flow control, reducing memory pressure during large repo indexing
 
 ## [0.12.0] - 2026-03-07
 
-_No direct changes in this release._
+_No extension-specific changes. See root changelog for release workflow fix._
 
 ## [0.11.0] - 2026-03-07
 
 ### Added
-- Overhauled sidebar UI with path normalization and set_workspace tool ([4a8cf35](https://github.com/steeltroops-ai/omnicontext/commit/4a8cf35))
+- **Sidebar UI overhaul**: Repository selector, indexed file counts, language distribution
+  chart, and one-click workspace switching
+- **Path normalization**: All file paths stored and displayed with consistent cross-platform
+  normalization, eliminating duplicates from mixed Windows UNC and forward-slash paths
+- **`set_workspace` MCP tool**: AI agents can explicitly switch the active repository context
+  without restarting the daemon
 
 ### Changed
-- Added marketplace badges and pre-rendered mermaid diagrams to READMEs ([1b38992](https://github.com/steeltroops-ai/omnicontext/commit/1b38992))
+- Add VS Code Marketplace badges and pre-rendered Mermaid architecture diagrams to README
 
 ## [0.10.0] - 2026-03-07
 
 ### Added
-- Core MCP and daemon optimizations ([f4f4450](https://github.com/steeltroops-ai/omnicontext/commit/f4f4450))
+- **Engine and daemon optimizations**: Reduced per-query IPC latency via optimized message
+  serialization; eliminated redundant index lookups in the search hot path
 
 ## [0.9.4] - 2026-03-07
 
 ### Fixed
-- Generated separate scoped changelog for VS Code extension ([1f29da2](https://github.com/steeltroops-ai/omnicontext/commit/1f29da2))
-
-### Changed
-- Cleaned up unused markdown link references in VS Code changelog ([f608990](https://github.com/steeltroops-ai/omnicontext/commit/f608990))
-- Restructured VS Code changelog to correctly group 0.9.x features under 0.9.2 ([ea23b10](https://github.com/steeltroops-ai/omnicontext/commit/ea23b10))
+- Generate separate scoped changelog entries for the VS Code extension and the Rust engine
+- Correct changelog structure to accurately group 0.9.x feature entries under correct version
+  headers and restore the `[Unreleased]` header
 
 ## [0.9.2] - 2026-03-07
 
 ### Added
-- Zero-friction install: extension auto-downloads OmniContext engine and ONNX Runtime on first install
-- Auto ONNX repair: platform-specific ONNX Runtime libraries fetched automatically if missing
-- Bootstrap progress bar: VS Code notification shows real-time download progress during first-time setup
-- Sidebar offline state: clean offline state instead of freezing when engine is not running
+- **Zero-friction install**: Extension auto-downloads the OmniContext engine binary and ONNX
+  Runtime on first install with a VS Code progress notification showing download status
+- **ONNX auto-repair**: Platform-specific ONNX Runtime shared libraries are fetched
+  automatically when missing from the installation directory
+- **Sidebar offline state**: Clean offline indicator replaces the frozen sidebar state that
+  occurred when the engine was not running
 
 ### Fixed
-- Sidebar freeze: fixed critical bug where sidebar became permanently unresponsive when daemon was not running
-- IPC timeouts: reduced from 30 seconds to 3 seconds for status/metrics requests
-- Event tracker CPU waste: keystrokes and cursor moves no longer enqueue IPC events when daemon is offline
-- Cache capacity: now reads `omnicontext.prefetch.cacheSize` setting instead of hardcoded 100
-- Resolved all CI workflow failures: license allowlist, security gate logic, release archive packaging
-- Migrated deny.toml to cargo-deny v2 schema, eliminated deprecated keys
+- **Sidebar freeze**: Fixed critical bug where the sidebar became permanently unresponsive
+  when the daemon was not running due to unbounded promise accumulation
+- **IPC timeouts**: Reduced from 30 seconds to 3 seconds for status and metrics requests,
+  preventing long UI hangs when the daemon is unreachable
+- **Event tracker CPU waste**: Keystrokes and cursor moves no longer enqueue IPC events when
+  the daemon is offline
+- **Cache capacity**: Now reads the `omnicontext.prefetch.cacheSize` setting instead of a
+  hardcoded value of 100
+- Resolve all CI workflow failures: license allowlist, security gate logic, release archive
+  packaging
+- Migrate `deny.toml` to cargo-deny v2 schema
 
 ### Changed
-- Whitelisted accepted RUSTSEC advisories in deny.toml for transitive dependencies
-- Restructured and normalized documentation to kebab-case naming conventions
-- Hardened CI pipelines and resolved supply chain audit failures
-- Removed `Phase N` terminology from codebase, replaced with descriptive category names
-- Updated distribution scripts to use consistent staging terminology
+- Whitelist accepted RUSTSEC advisories for transitive dependencies with no upstream fix
+- Restructure and normalize documentation to kebab-case naming conventions
 
 ## [0.7.2] - 2026-03-07
 
 ### Added
-- Extension now checks `~/.omnicontext/bin` (standalone installer path) as a binary candidate
-- Sidebar `Repair Environment` command triggers ONNX Runtime re-download and re-index in one click
+- Extension now checks `~/.omnicontext/bin` as a binary candidate, supporting the standalone
+  installer path without requiring VS Code settings configuration
+- `Repair Environment` sidebar command triggers ONNX Runtime re-download and re-index in one
+  action
 
 ### Fixed
-- Binary lookup no longer blocks the VS Code UI thread via `execSync`
+- Binary lookup no longer blocks the VS Code UI thread via synchronous `execSync` calls
 
 ## [0.7.1] - 2026-03-06
 
 ### Fixed
-- Version resolution now queries GitHub Releases API correctly during auto-sync
-- Removed unicode characters that caused rendering issues in some terminal environments
+- Version resolution now queries the GitHub Releases API correctly during auto-update checks
+- Remove Unicode characters that caused rendering issues in certain terminal environments
 
 ## [0.7.0] - 2026-03-06
 
 ### Added
-- Zero-config MCP sync: on daemon start, extension automatically writes MCP server entry into all detected AI client configs (Claude Desktop, Cursor, Continue.dev, Kiro, Windsurf, Cline, RooCode, Trae, Antigravity, Claude Code CLI)
-- Kiro IDE MCP support via the `powers.mcpServers` namespace
-- `OmniContext: Sync MCP` command for manual re-sync to all AI clients
+- **Zero-config MCP sync**: On daemon start, extension automatically writes the MCP server
+  entry into all detected AI client configurations (Claude Desktop, Cursor, Continue.dev, Kiro,
+  Windsurf, Cline, RooCode, Trae, Antigravity, Claude Code CLI)
+- **Kiro IDE support**: MCP server entry written using the `powers.mcpServers` namespace
+- **`OmniContext: Sync MCP` command**: Manual re-sync of MCP server entry across all detected
+  AI clients without requiring a daemon restart
 
 ## [0.6.0] - 2026-03-06
 
 ### Added
-- MCP manifest auto-published to `~/.omnicontext/mcp-manifest.json` for client auto-discovery
-- Engine status exposes language distribution (per-language file counts) in the sidebar
+- MCP manifest auto-published to `~/.omnicontext/mcp-manifest.json` for AI client
+  auto-discovery
+- Engine status exposes per-language file distribution (counts by language) in the sidebar
 
 ## [0.4.0] - 2026-03-02
 
 ### Added
-- Enhanced sidebar UI: real-time performance metrics (P50/P95/P99 search latency), activity log, repository info panel, and language distribution chart
-- Professional VS Code codicons throughout the sidebar
+- **Enhanced sidebar**: Real-time performance metrics panel (P50/P95/P99 search latency),
+  activity log with per-operation detail, repository info panel, and language distribution
+  chart; professional VS Code codicons used throughout
 - One-click cache clear button with immediate UI feedback
 
 ## [0.3.0] - 2026-03-01
 
 ### Added
-- Pre-fetch caching: extension monitors cursor position, file opens, and text edits to pre-fetch relevant code context
-- Cache statistics panel: hit rate, cache size, hits/misses visible in the sidebar
-- Context injection speed: cache hits provide context in `<10ms` vs. 50–200ms for fresh searches
+- **Pre-fetch caching**: Extension monitors cursor position, file opens, and text edits to
+  pre-fetch relevant code context in the background
+- **Cache statistics panel**: Hit rate, cache size, hits and misses visible in the sidebar
+- Context injection via cache hits delivers results in `<10ms` versus 50-200ms for fresh
+  queries
 - Configuration: `omnicontext.prefetch.enabled`, `cacheSize`, `cacheTtlSeconds`, `debounceMs`
-- Context injection now uses IPC to the daemon first, with CLI fallback
+- Context injection uses daemon IPC first with CLI fallback
 
 ### Changed
-- Extension auto-starts daemon on workspace open (`omnicontext.autoStartDaemon: true` by default)
+- Extension auto-starts daemon on workspace open (`omnicontext.autoStartDaemon: true` by
+  default)
 
 ## [0.2.0] - 2026-03-01
 
 ### Added
-- VS Code sidebar with system status, cache metrics, and one-click controls
+- **VS Code sidebar**: System status display, cache metrics panel, and one-click controls
 - `PrefetchCache` module in the engine daemon with LRU eviction and TTL expiration
 - IPC interface: `prefetch_stats`, `clear_cache`, `update_config`, `shutdown`
 
@@ -225,12 +234,18 @@ _No direct changes in this release._
 
 ### Added
 - Initial VS Code extension release
-- Commands: `Index`, `Search`, `Status`, `Start Daemon`, `Stop Daemon`, and `Preflight`
+- Commands: `Index`, `Search`, `Status`, `Start Daemon`, `Stop Daemon`, `Preflight`
 - Chat participant registration for VS Code Copilot Chat integration (context injection)
-- IPC client with named-pipe/Unix-socket transport and exponential backoff reconnection
-- Status bar item showing daemon state
+- IPC client with named-pipe and Unix-socket transport and exponential backoff reconnection
+- Status bar item showing daemon connection state
 - Basic sidebar with connection status and cache hit counter
 
+[1.2.1]: https://github.com/steeltroops-ai/omnicontext/compare/v1.2.0...v1.2.1
+[1.2.0]: https://github.com/steeltroops-ai/omnicontext/compare/v1.1.2...v1.2.0
+[1.1.2]: https://github.com/steeltroops-ai/omnicontext/compare/v1.1.1...v1.1.2
+[1.1.1]: https://github.com/steeltroops-ai/omnicontext/compare/v1.1.0...v1.1.1
+[1.1.0]: https://github.com/steeltroops-ai/omnicontext/compare/v1.0.1...v1.1.0
+[1.0.1]: https://github.com/steeltroops-ai/omnicontext/compare/v0.16.1...v1.0.1
 [0.16.1]: https://github.com/steeltroops-ai/omnicontext/compare/v0.16.0...v0.16.1
 [0.16.0]: https://github.com/steeltroops-ai/omnicontext/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/steeltroops-ai/omnicontext/compare/v0.14.0...v0.15.0

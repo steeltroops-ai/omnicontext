@@ -99,3 +99,4 @@ topo_order = false
 
 # Sort commits newest-first within each group
 sort_commits = "newest"
+
