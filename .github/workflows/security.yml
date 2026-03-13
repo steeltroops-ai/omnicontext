@@ -31,9 +31,12 @@ jobs:
 
       - name: Security audit
         uses: rustsec/audit-check@v2.0.0
+        continue-on-error: true
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-        # Accepted risks are managed in supply-chain job via cargo-deny (deny.toml [advisories].ignore).
+        # rustsec/audit-check does not respect deny.toml [advisories].ignore.
+        # It is used for annotation only. cargo-deny (supply-chain job) is the
+        # authoritative advisory gate; it respects all accepted risks in deny.toml.
 
   # ---------------------------------------------------------------------------
   # job: supply-chain
@@ -205,11 +208,11 @@ jobs:
              exit 1
           fi
 
-          # audit-check now fails on real issues (removed continue-on-error).
-          # Accepted risks must be in deny.toml [advisories].ignore.
+          # audit-check uses continue-on-error because it does not respect deny.toml.
+          # supply-chain (cargo-deny) is the authoritative gate for accepted risks.
+          # We log audit failures here for visibility but do not block on them.
           if [[ "$audit" != "success" ]]; then
-            echo "::error::Security audit failed. Review advisories and add accepted risks to deny.toml with documented reasons."
-            exit 1
+            echo "::warning::rustsec/audit-check reported advisories. Review annotations and ensure all accepted risks are documented in deny.toml."
           fi
 
           echo "Security gate passed."
