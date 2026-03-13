@@ -611,9 +611,7 @@ async function runRepairEnvironment() {
     vscode.window.showInformationMessage(
       "OmniContext: Re-downloading ONNX Runtime. This may take a moment...",
     );
-    const context = (globalThis as any).__omniExtensionContext as
-      | vscode.ExtensionContext
-      | undefined;
+    const context = extensionContext;
     if (context) {
       await bootstrap(context, (status) => {
         outputChannel.appendLine(`[repair] ${status.phase}: ${status.message}`);

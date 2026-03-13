@@ -393,6 +393,37 @@ impl FileDependencyGraph {
             inner.incoming.clear();
         }
     }
+
+    /// Snapshot the adjacency list for offline graph algorithms.
+    ///
+    /// Returns a map of `source → Vec<target>` using only the `Imports`,
+    /// `Inherits`, `Calls`, and `Instantiates` edge types (structural edges).
+    /// `HistoricalCoChange` edges are excluded because they are undirected
+    /// in practice and would produce spurious cycles.
+    pub fn snapshot_structural_adjacency(&self) -> HashMap<PathBuf, Vec<PathBuf>> {
+        let inner = match self.inner.read() {
+            Ok(g) => g,
+            Err(_) => return HashMap::new(),
+        };
+
+        let mut adj: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
+
+        // Ensure every node appears as a key even if it has no outgoing edges.
+        for path in inner.nodes.keys() {
+            adj.entry(path.clone()).or_default();
+        }
+
+        for (src, edges) in &inner.outgoing {
+            let targets = adj.entry(src.clone()).or_default();
+            for (tgt, edge_type, _weight) in edges {
+                if !matches!(edge_type, EdgeType::HistoricalCoChange) {
+                    targets.push(tgt.clone());
+                }
+            }
+        }
+
+        adj
+    }
 }
 
 impl Default for FileDependencyGraph {

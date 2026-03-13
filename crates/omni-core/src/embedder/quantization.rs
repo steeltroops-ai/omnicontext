@@ -129,8 +129,10 @@ impl ModelQuantizer {
         // Create cache directory
         std::fs::create_dir_all(&self.cache_dir)?;
 
-        // TODO: Implement actual quantization
-        // For now, log a warning and return the original model
+        // INT8/FP16 quantization requires an external ONNX quantization tool (e.g.,
+        // onnxruntime.quantization or onnxconverter-common). This runtime cannot
+        // perform in-process weight reduction without re-linking against a quantization
+        // library. Deferred to a future integration — return the FP32 model and warn.
         tracing::warn!(
             model = %model_path.display(),
             mode = ?mode,

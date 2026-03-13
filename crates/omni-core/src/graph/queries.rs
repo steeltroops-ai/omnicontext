@@ -11,6 +11,7 @@
 //! - 3-hop queries: <50ms
 //! - Importance computation: <100ms for 10K files
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::error::OmniResult;
@@ -184,9 +185,104 @@ impl GraphQueryEngine {
     /// - Refactoring guidance
     /// - Code quality metrics
     pub fn detect_circular_dependencies(&self) -> OmniResult<Vec<Vec<PathBuf>>> {
-        // TODO: Implement Tarjan's SCC algorithm for file-level graph
-        // For now, return empty (no cycles detected)
-        Ok(Vec::new())
+        // Snapshot the structural adjacency list (forward edges, excluding co-change).
+        let adj = self.graph.snapshot_structural_adjacency();
+
+        if adj.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // -----------------------------------------------------------------------
+        // Kosaraju's two-pass SCC algorithm on the HashMap adjacency list.
+        //
+        // Pass 1: DFS on forward graph, push nodes to stack in finish order.
+        // Pass 2: DFS on reversed graph, following finish order (highest first).
+        //         Each DFS in pass 2 yields one SCC.
+        // -----------------------------------------------------------------------
+
+        // Assign stable integer indices to paths for O(1) lookup.
+        let paths: Vec<&PathBuf> = adj.keys().collect();
+        let path_to_idx: HashMap<&PathBuf, usize> =
+            paths.iter().enumerate().map(|(i, p)| (*p, i)).collect();
+
+        // Forward adjacency as index arrays.
+        let fwd: Vec<Vec<usize>> = paths
+            .iter()
+            .map(|src| {
+                adj.get(*src)
+                    .map(|targets| {
+                        targets
+                            .iter()
+                            .filter_map(|tgt| path_to_idx.get(tgt).copied())
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            })
+            .collect();
+
+        // Reverse adjacency.
+        let mut rev: Vec<Vec<usize>> = vec![Vec::new(); paths.len()];
+        for (src, targets) in fwd.iter().enumerate() {
+            for &tgt in targets {
+                rev[tgt].push(src);
+            }
+        }
+
+        // Pass 1: iterative DFS on forward graph, build finish order.
+        let n = paths.len();
+        let mut visited = vec![false; n];
+        let mut finish_order: Vec<usize> = Vec::with_capacity(n);
+
+        for start in 0..n {
+            if visited[start] {
+                continue;
+            }
+            // Iterative DFS using explicit stack: (node, next_child_index)
+            let mut stack: Vec<(usize, usize)> = vec![(start, 0)];
+            visited[start] = true;
+            while let Some((node, child_idx)) = stack.last_mut() {
+                let node = *node;
+                if *child_idx < fwd[node].len() {
+                    let next = fwd[node][*child_idx];
+                    *child_idx += 1;
+                    if !visited[next] {
+                        visited[next] = true;
+                        stack.push((next, 0));
+                    }
+                } else {
+                    finish_order.push(node);
+                    stack.pop();
+                }
+            }
+        }
+
+        // Pass 2: iterative DFS on reverse graph in reverse finish order.
+        let mut assigned = vec![false; n];
+        let mut sccs: Vec<Vec<PathBuf>> = Vec::new();
+
+        for &start in finish_order.iter().rev() {
+            if assigned[start] {
+                continue;
+            }
+            let mut component: Vec<PathBuf> = Vec::new();
+            let mut stack: Vec<usize> = vec![start];
+            assigned[start] = true;
+            while let Some(node) = stack.pop() {
+                component.push(paths[node].clone());
+                for &prev in &rev[node] {
+                    if !assigned[prev] {
+                        assigned[prev] = true;
+                        stack.push(prev);
+                    }
+                }
+            }
+            // Only report SCCs with more than one member (actual cycles).
+            if component.len() > 1 {
+                sccs.push(component);
+            }
+        }
+
+        Ok(sccs)
     }
 
     /// Find files related to a query file by structural similarity.

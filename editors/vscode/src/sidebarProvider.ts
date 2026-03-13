@@ -309,7 +309,7 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
       });
     }
 
-    // Phase 1: Send intelligence layer metrics (already fetched in parallel)
+    // Merge intelligence layer metrics into status payload (reranker + graph)
     if (rerankerMetrics) {
       this._view.webview.postMessage({
         type: "updateRerankerMetrics",
@@ -453,7 +453,7 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   /**
-   * Get reranker metrics from daemon (Phase 1).
+   * Get reranker metrics from daemon.
    */
   private async getRerankerMetrics(): Promise<any | null> {
     try {
@@ -465,7 +465,7 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   /**
-   * Get graph metrics from daemon (Phase 1).
+   * Get graph metrics from daemon.
    */
   private async getGraphMetrics(): Promise<any | null> {
     try {
@@ -1857,7 +1857,7 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
         </div>
     </div>
 
-    <!-- Section 3.5: Intelligence Layer (Phase 1) -->
+    <!-- Section 3.5: Intelligence Layer -->
     <div class="section">
         <div class="section-title"><i class="codicon codicon-sparkle"></i> Intelligence Layer</div>
         
@@ -1932,7 +1932,7 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
         </div>
     </div>
 
-    <!-- Section 3.6: Resilience Monitoring (Phase 2) -->
+    <!-- Section 3.6: Resilience Monitoring -->
     <div class="section">
         <div class="section-title"><i class="codicon codicon-shield"></i> Resilience Monitoring</div>
         
@@ -2046,7 +2046,7 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
         </div>
     </div>
 
-    <!-- Section 3.7: Graph Visualization (Phase 4) -->
+    <!-- Section 3.7: Graph Visualization -->
     <div class="section">
         <div class="section-title"><i class="codicon codicon-graph"></i> Dependency Graph</div>
         
@@ -2082,7 +2082,7 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
         </div>
     </div>
 
-    <!-- Section 3.8: Performance Controls (Phase 6) -->
+    <!-- Section 3.8: Performance Controls -->
     <div class="section">
         <div class="section-title"><i class="codicon codicon-dashboard"></i> Performance</div>
         
@@ -2716,7 +2716,7 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
                 }
             }
             
-            // Phase 4: Update graph visualization metrics
+            // Update graph visualization metrics
             const totalFilesElement = document.getElementById('graph-total-files');
             const totalEdgesElement = document.getElementById('graph-total-edges');
             const cycleCountElement = document.getElementById('graph-cycle-count');
@@ -2732,7 +2732,7 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
             }
         }
         
-        // Phase 2: Resilience Monitoring Functions
+        // Resilience Monitoring Functions
         // ---------------------------------------------------------------------------
         
         function updateResilienceMetrics(status) {
@@ -2832,7 +2832,7 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
             });
         }
 
-        // Phase 3: Historical Context Functions
+        // Historical Context Functions
         // ---------------------------------------------------------------------------
         
         function updateCommitContext(context) {
