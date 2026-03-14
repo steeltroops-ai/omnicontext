@@ -99,13 +99,18 @@ pub mod watcher;
 // Extended Capabilities
 pub mod branch_diff;
 pub mod commits;
+pub mod memory;
 pub mod patterns;
 pub mod plan_auditor;
+pub mod rules;
+pub mod scip;
 pub mod workspace;
 
 // Service Layer
 pub mod server;
 
+/// Re-export commit and external-doc types used by Phase 5 MCP tools.
+pub use commits::CommitInfo;
 pub use config::normalize_repo_hash;
 pub use config::Config;
 pub use error::OmniError;
@@ -113,5 +118,6 @@ pub use error::OmniError;
 pub use graph::data_flow::{DataFlowEdge, DataFlowExtractor, FlowInference};
 /// Re-export the semantic reasoning engine types for Graph-Augmented Retrieval (GAR).
 pub use graph::reasoning::{EdgeWeights, ReasoningEngine, ReasoningHit};
+pub use index::ExternalDoc;
 /// Re-export the primary engine interface.
-pub use pipeline::{Engine, FileProcessStats, RetryEmbeddingResult};
+pub use pipeline::{Engine, FileProcessStats, IndexDelta, RetryEmbeddingResult};
