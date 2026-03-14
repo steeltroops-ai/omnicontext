@@ -4,6 +4,12 @@ All notable changes to OmniContext are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-03-14
+
+### Fixed
+- Increase mtime sleep to 20 ms in hash_cache Windows test ([242568b](https://github.com/steeltroops-ai/omnicontext/commit/242568bdae2e9432c279ffa2f9f06c81cff0b153))
+- Allow BSL-1.0 license in cargo-deny allowlist ([d9af544](https://github.com/steeltroops-ai/omnicontext/commit/d9af544b7bd30c2d5a24e1a44f5cd3c2da362781))
+
 ## [1.3.0] - 2026-03-14
 
 ### Added
