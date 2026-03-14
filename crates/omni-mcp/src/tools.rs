@@ -254,6 +254,111 @@ fn default_manifest_format() -> String {
     "claude".to_string()
 }
 
+/// Parameters for `search_with_filter` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SearchWithFilterParams {
+    /// Search query.
+    pub query: String,
+    /// Maximum results (default: 10).
+    pub limit: Option<usize>,
+    /// Minimum reranker score threshold (0.0–1.0).
+    pub min_rerank_score: Option<f32>,
+    /// Language to filter by, e.g. "rust", "python", "typescript".
+    pub language: Option<String>,
+    /// Glob pattern matched against file paths, e.g. "src/auth/**".
+    pub path_glob: Option<String>,
+    /// Only include files indexed after this ISO 8601 datetime.
+    pub modified_after: Option<String>,
+    /// Symbol type filter, e.g. "function", "class", "struct", "method".
+    pub symbol_type: Option<String>,
+}
+
+/// Parameters for `explain_symbol` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ExplainSymbolParams {
+    /// Fully qualified symbol name or name prefix to explain.
+    pub symbol: String,
+}
+
+/// Parameters for `get_commit_summary` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetCommitSummaryParams {
+    /// File path (relative to repo root) or fully qualified symbol name.
+    pub file_or_symbol: String,
+    /// Maximum number of commits to return (default: 5).
+    pub limit: Option<usize>,
+    /// Include the actual git diff stat for each commit (default: false).
+    pub include_diff: Option<bool>,
+}
+
+/// Parameters for `search_commits` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SearchCommitsParams {
+    /// Keyword query to search commit messages and summaries.
+    pub query: String,
+    /// Maximum number of results (default: 10).
+    pub limit: Option<usize>,
+}
+
+/// Parameters for `ingest_external_doc` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct IngestExternalDocParams {
+    /// URL (https://...) or local file path to ingest.
+    pub source: String,
+    /// Re-ingest even if this source has been ingested before (default: false).
+    pub force_reingest: Option<bool>,
+}
+
+/// Parameters for `context_window_pack` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ContextWindowPackParams {
+    /// Search query.
+    pub query: String,
+    /// Token budget for the packed context (default: 100000).
+    pub token_budget: Option<u32>,
+    /// Maximum search results to consider (default: 50).
+    pub limit: Option<usize>,
+    /// Whether to include architectural shadow headers (default: false).
+    pub shadow_headers: Option<bool>,
+    /// Return as JSON array of items instead of formatted Markdown (default: false).
+    pub as_json: Option<bool>,
+    /// Minimum cross-encoder reranker score threshold (0.0–1.0).
+    /// Chunks below this threshold are demoted. Higher values produce fewer,
+    /// more precise results.  Only used when `as_json = true` (merged-pack mode).
+    pub min_rerank_score: Option<f32>,
+}
+
+/// Parameters for `multi_repo_search` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct MultiRepoSearchParams {
+    /// Search query.
+    pub query: String,
+    /// Maximum results per repository (default: 5).
+    pub limit: Option<usize>,
+    /// Minimum reranker score threshold (0.0–1.0).
+    pub min_rerank_score: Option<f32>,
+}
+
+/// Parameters for `save_memory` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SaveMemoryParams {
+    /// Key under which to store the value.  Max 256 bytes.
+    pub key: String,
+    /// Value to store.  Max 64 KiB.
+    pub value: String,
+}
+
+/// Parameters for `get_memory` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetMemoryParams {
+    /// Key to retrieve.
+    pub key: String,
+}
+
+/// Parameters for `list_memory` tool (no inputs required).
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ListMemoryParams {}
+
 // -----------------------------------------------------------------------
 // MCP Server
 // -----------------------------------------------------------------------
@@ -352,7 +457,9 @@ impl OmniContextServer {
         let min_score = clamp_rerank_score(params.0.min_rerank_score);
         let query = &params.0.query;
         let want_shadow = params.0.shadow_headers;
-        let engine = self.engine.lock().await;
+        let mut engine = self.engine.lock().await;
+        let rules_prefix = engine.load_rules_prefix();
+        let memory_prefix = engine.memory_prefix();
 
         match engine.search_context_window_with_rerank_threshold(
             query,
@@ -417,7 +524,8 @@ impl OmniContextServer {
                     write!(output, "```\n{}\n```\n\n", entry.chunk.content).ok();
                 }
 
-                Ok(CallToolResult::success(vec![Content::text(output)]))
+                let final_output = format!("{rules_prefix}{memory_prefix}{output}");
+                Ok(CallToolResult::success(vec![Content::text(final_output)]))
             }
             Err(e) => Err(McpError::internal_error(
                 format!("context_window failed: {e}"),
@@ -1050,16 +1158,26 @@ impl OmniContextServer {
         .ok();
         writeln!(
             output,
+            "- `search_by_intent` -- NL search with intent classification and query expansion"
+        )
+        .ok();
+        writeln!(
+            output,
             "- `get_symbol` -- exact symbol lookup with source code"
         )
         .ok();
         writeln!(output, "- `get_file_summary` -- file structure breakdown").ok();
         writeln!(output, "- `get_module_map` -- project module hierarchy").ok();
+        writeln!(
+            output,
+            "- `get_status` -- live index statistics and health diagnostics"
+        )
+        .ok();
         writeln!(output, "- `get_dependencies` -- symbol dependency analysis").ok();
         writeln!(output, "- `get_blast_radius` -- change impact analysis").ok();
         writeln!(
             output,
-            "- `get_call_graph` -- dependency graph visualization"
+            "- `get_call_graph` -- dependency graph visualization with Mermaid support"
         )
         .ok();
         writeln!(
@@ -1069,7 +1187,12 @@ impl OmniContextServer {
         .ok();
         writeln!(
             output,
-            "- `search_by_intent` -- NL search with query expansion"
+            "- `get_branch_context` -- per-branch diff awareness"
+        )
+        .ok();
+        writeln!(
+            output,
+            "- `get_co_changes` -- co-change coupling analysis from git history"
         )
         .ok();
         writeln!(
@@ -1077,6 +1200,23 @@ impl OmniContextServer {
             "- `find_patterns` -- discover recurring code patterns"
         )
         .ok();
+        writeln!(
+            output,
+            "- `get_architecture` -- codebase architecture overview"
+        )
+        .ok();
+        writeln!(
+            output,
+            "- `audit_plan` -- architectural risk assessment for a plan"
+        )
+        .ok();
+        writeln!(
+            output,
+            "- `generate_manifest` -- auto-generate CLAUDE.md or context_map.json"
+        )
+        .ok();
+        writeln!(output, "- `set_workspace` -- switch the active repository").ok();
+        writeln!(output, "- `explain_codebase` -- this onboarding overview").ok();
 
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
@@ -1186,7 +1326,8 @@ impl OmniContextServer {
         let limit = clamp_limit(params.0.limit, 10);
         let query = &params.0.query;
         let want_shadow = params.0.shadow_headers;
-        let engine = self.engine.lock().await;
+        let mut engine = self.engine.lock().await;
+        let rules_prefix = engine.load_rules_prefix();
 
         // Use omni-core's intent classifier (not just static synonyms)
         let intent = omni_core::search::QueryIntent::classify(query);
@@ -1253,7 +1394,9 @@ impl OmniContextServer {
                                 )
                                 .ok();
                             }
-                            return Ok(CallToolResult::success(vec![Content::text(output)]));
+                            return Ok(CallToolResult::success(vec![Content::text(format!(
+                                "{rules_prefix}{output}"
+                            ))]));
                         }
                         Err(e) => {
                             return Err(McpError::internal_error(
@@ -1280,7 +1423,9 @@ impl OmniContextServer {
                 );
                 output.push_str(&ctx.render());
 
-                Ok(CallToolResult::success(vec![Content::text(output)]))
+                Ok(CallToolResult::success(vec![Content::text(format!(
+                    "{rules_prefix}{output}"
+                ))]))
             }
             Err(e) => Err(McpError::internal_error(
                 format!("search_by_intent failed: {e}"),
@@ -1899,7 +2044,7 @@ impl OmniContextServer {
     }
 
     // -----------------------------------------------------------------------
-    // Phase A: Co-Change Activation
+    // Co-change coupling tools
     // -----------------------------------------------------------------------
 
     #[tool(
@@ -1960,7 +2105,7 @@ impl OmniContextServer {
     }
 
     // -----------------------------------------------------------------------
-    // Phase B: Plan Auditor
+    // Plan analysis tools
     // -----------------------------------------------------------------------
 
     #[tool(
@@ -1997,7 +2142,7 @@ impl OmniContextServer {
     }
 
     // -----------------------------------------------------------------------
-    // Phase E: Proactive Manifests
+    // Manifest generation tools
     // -----------------------------------------------------------------------
 
     #[tool(
@@ -2055,6 +2200,735 @@ impl OmniContextServer {
 
         Ok(CallToolResult::success(vec![Content::text(output)]))
     }
+
+    // -----------------------------------------------------------------------
+    // Tool 20 — search_with_filter
+    // -----------------------------------------------------------------------
+    #[tool(
+        name = "search_with_filter",
+        description = "Search the codebase with post-filter criteria: language, path glob, indexed-after datetime, and symbol type. \
+                       All filters are optional and ANDed. Example: find auth logic in src/backend/ written in Rust, \
+                       returning only function-level chunks. Use this for scoped, precise searches within large codebases."
+    )]
+    async fn search_with_filter(
+        &self,
+        params: Parameters<SearchWithFilterParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use std::fmt::Write;
+
+        validate_query(&params.0.query)?;
+        let limit = clamp_limit(params.0.limit, 10);
+        let min_score = clamp_rerank_score(params.0.min_rerank_score);
+        let p = &params.0;
+        let engine = self.engine.lock().await;
+
+        match engine.search_filtered(
+            &p.query,
+            limit,
+            min_score,
+            p.language.as_deref(),
+            p.path_glob.as_deref(),
+            p.modified_after.as_deref(),
+            p.symbol_type.as_deref(),
+        ) {
+            Ok(results) => {
+                if results.is_empty() {
+                    return Ok(CallToolResult::success(vec![Content::text(
+                        "No results matched the query and filters. \
+                         Try relaxing the language/path/symbol_type filters, or run `omnicontext index .` first.",
+                    )]));
+                }
+
+                let mut output = format!(
+                    "## Filtered Search Results ({} results)\n\
+                     **Query**: `{}`\n\
+                     **Filters**: language={} path={} symbol_type={}\n\n",
+                    results.len(),
+                    p.query,
+                    p.language.as_deref().unwrap_or("any"),
+                    p.path_glob.as_deref().unwrap_or("*"),
+                    p.symbol_type.as_deref().unwrap_or("any"),
+                );
+
+                for (i, r) in results.iter().enumerate() {
+                    write!(
+                        output,
+                        "### {} (score: {:.4})\n**File**: {}\n**Symbol**: `{}` ({:?})\n**Lines**: {}-{}\n",
+                        i + 1, r.score, r.file_path.display(),
+                        r.chunk.symbol_path, r.chunk.kind,
+                        r.chunk.line_start, r.chunk.line_end,
+                    ).ok();
+                    if let Some(ref doc) = r.chunk.doc_comment {
+                        writeln!(output, "**Doc**: {}", doc.lines().next().unwrap_or("")).ok();
+                    }
+                    write!(output, "```\n{}\n```\n\n", r.chunk.content).ok();
+                }
+
+                Ok(CallToolResult::success(vec![Content::text(output)]))
+            }
+            Err(e) => Err(McpError::internal_error(
+                format!("search_with_filter failed: {e}"),
+                None,
+            )),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Tool 21 — explain_symbol
+    // -----------------------------------------------------------------------
+    #[tool(
+        name = "explain_symbol",
+        description = "Generate a comprehensive explanation for any symbol: type signature, doc comment, \
+                       1-hop callers and callees from the dependency graph, recent commits touching the file, \
+                       and co-change partners. Assembled entirely from structured index data — no LLM inference. \
+                       Ideal for agents doing large-scale refactoring or impact analysis."
+    )]
+    async fn explain_symbol(
+        &self,
+        params: Parameters<ExplainSymbolParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let symbol_name = &params.0.symbol;
+        if symbol_name.trim().is_empty() {
+            return Err(McpError::invalid_params("symbol must not be empty", None));
+        }
+        if symbol_name.len() > MAX_QUERY_LEN {
+            return Err(McpError::invalid_params(
+                format!("symbol name exceeds maximum length of {MAX_QUERY_LEN}"),
+                None,
+            ));
+        }
+        let engine = self.engine.lock().await;
+        match engine.explain_symbol(symbol_name) {
+            Ok(explanation) => Ok(CallToolResult::success(vec![Content::text(explanation)])),
+            Err(e) => Err(McpError::internal_error(
+                format!("explain_symbol failed: {e}"),
+                None,
+            )),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Tool 22 — get_commit_summary
+    // -----------------------------------------------------------------------
+    #[tool(
+        name = "get_commit_summary",
+        description = "Get recent git commits that touched a specific file or symbol. \
+                       Returns commit hash, author, timestamp, message, files changed, and optional diff stat. \
+                       Equivalent to Augment's commit context feature. \
+                       Input: file path relative to repo root (e.g. 'src/auth.rs') or fully qualified symbol name."
+    )]
+    async fn get_commit_summary(
+        &self,
+        params: Parameters<GetCommitSummaryParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use std::fmt::Write;
+
+        let target = &params.0.file_or_symbol;
+        if target.trim().is_empty() {
+            return Err(McpError::invalid_params(
+                "file_or_symbol must not be empty",
+                None,
+            ));
+        }
+        let limit = clamp_limit(params.0.limit, 5);
+        let include_diff = params.0.include_diff.unwrap_or(false);
+        let engine = self.engine.lock().await;
+
+        match engine.get_commit_summary(target, limit, include_diff) {
+            Ok(commits) => {
+                if commits.is_empty() {
+                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                        "No commits found for `{target}`.\n\
+                         Run `omnicontext index-commits` first, or verify the path/symbol exists."
+                    ))]));
+                }
+
+                let mut output = format!(
+                    "## Commit History for `{target}` ({} commits)\n\n",
+                    commits.len()
+                );
+
+                for commit in &commits {
+                    let hash_short = &commit.hash[..8.min(commit.hash.len())];
+                    writeln!(output, "### `{hash_short}` — {}", commit.message).ok();
+                    writeln!(
+                        output,
+                        "**Author**: {} | **Date**: {}",
+                        commit.author, commit.timestamp
+                    )
+                    .ok();
+                    if !commit.files_changed.is_empty() {
+                        writeln!(
+                            output,
+                            "**Files changed**: {}",
+                            commit.files_changed.join(", ")
+                        )
+                        .ok();
+                    }
+                    if let Some(ref summary) = commit.summary {
+                        write!(output, "**Diff stat**:\n```\n{summary}\n```\n").ok();
+                    }
+                    output.push('\n');
+                }
+
+                Ok(CallToolResult::success(vec![Content::text(output)]))
+            }
+            Err(e) => Err(McpError::internal_error(
+                format!("get_commit_summary failed: {e}"),
+                None,
+            )),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Tool 23 — search_commits
+    // -----------------------------------------------------------------------
+    #[tool(
+        name = "search_commits",
+        description = "Search git commit history by keyword. Returns matching commits with author, date, \
+                       message, and files changed. Searches both commit messages and AI-generated summaries \
+                       via FTS5. Falls back to live git log --grep when the commit index is empty. \
+                       Useful for 'when was the auth bug introduced' style agent queries."
+    )]
+    async fn search_commits(
+        &self,
+        params: Parameters<SearchCommitsParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use std::fmt::Write;
+
+        validate_query(&params.0.query)?;
+        let limit = clamp_limit(params.0.limit, 10);
+        let engine = self.engine.lock().await;
+
+        match engine.search_commits_by_query(&params.0.query, limit) {
+            Ok(commits) => {
+                if commits.is_empty() {
+                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                        "No commits found matching '{}'. \
+                         Run `omnicontext index-commits` first to populate the commit index.",
+                        params.0.query
+                    ))]));
+                }
+
+                let mut output = format!(
+                    "## Commit Search: '{}' ({} results)\n\n",
+                    params.0.query,
+                    commits.len()
+                );
+
+                for commit in &commits {
+                    let hash_short = &commit.hash[..8.min(commit.hash.len())];
+                    writeln!(output, "### `{hash_short}` — {}", commit.message).ok();
+                    writeln!(
+                        output,
+                        "**Author**: {} | **Date**: {}",
+                        commit.author, commit.timestamp
+                    )
+                    .ok();
+                    if !commit.files_changed.is_empty() {
+                        let files: Vec<&str> =
+                            commit.files_changed.iter().map(String::as_str).collect();
+                        let display = if files.len() > 5 {
+                            format!("{} ... (+{})", files[..5].join(", "), files.len() - 5)
+                        } else {
+                            files.join(", ")
+                        };
+                        writeln!(output, "**Files**: {display}").ok();
+                    }
+                    output.push('\n');
+                }
+
+                Ok(CallToolResult::success(vec![Content::text(output)]))
+            }
+            Err(e) => Err(McpError::internal_error(
+                format!("search_commits failed: {e}"),
+                None,
+            )),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Tool 24 — ingest_external_doc
+    // -----------------------------------------------------------------------
+    #[tool(
+        name = "ingest_external_doc",
+        description = "Ingest an external document (URL or local file path) into the searchable index. \
+                       Fetches the content, strips HTML, splits into prose chunks, and makes it available \
+                       via search_code and context_window. Equivalent to Sourcegraph's OpenCtx protocol. \
+                       Supports API documentation pages, RFCs, internal wikis, Confluence pages, Markdown files. \
+                       Once ingested, the document is cached and won't be re-fetched unless force_reingest=true."
+    )]
+    async fn ingest_external_doc(
+        &self,
+        params: Parameters<IngestExternalDocParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let source = &params.0.source;
+        if source.trim().is_empty() {
+            return Err(McpError::invalid_params("source must not be empty", None));
+        }
+        if source.len() > 2048 {
+            return Err(McpError::invalid_params(
+                "source URL/path too long (max 2048 chars)",
+                None,
+            ));
+        }
+        let force = params.0.force_reingest.unwrap_or(false);
+
+        let mut engine = self.engine.lock().await;
+        match engine.ingest_external_doc(source, force) {
+            Ok(0) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Source `{source}` already ingested. Pass `force_reingest: true` to re-ingest."
+            ))])),
+            Ok(count) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Successfully ingested `{source}` — {count} chunks added to the search index.\n\
+                 Use `search_code` or `context_window` to query the ingested content."
+            ))])),
+            Err(e) => Err(McpError::internal_error(
+                format!("ingest_external_doc failed: {e}"),
+                None,
+            )),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Tool 25 — context_window_pack
+    // -----------------------------------------------------------------------
+    #[tool(
+        name = "context_window_pack",
+        description = "Assemble a maximally informative context window within a strict token budget. \
+                       Uses Maximal Marginal Relevance (MMR) ordering to minimize redundancy while maximizing \
+                       coverage of distinct files and concepts. Returns an ordered array that fills the budget \
+                       with minimum overlap. This is the highest-value tool for RAG orchestration — \
+                       every agent framework doing retrieval-augmented generation benefits from this."
+    )]
+    async fn context_window_pack(
+        &self,
+        params: Parameters<ContextWindowPackParams>,
+    ) -> Result<CallToolResult, McpError> {
+        validate_query(&params.0.query)?;
+        let token_budget = params
+            .0
+            .token_budget
+            .unwrap_or(100_000)
+            .clamp(1_000, 500_000);
+        let limit = clamp_limit(params.0.limit, 50);
+        let want_shadow = params.0.shadow_headers.unwrap_or(false);
+        let as_json = params.0.as_json.unwrap_or(false);
+        let min_rerank_score = params.0.min_rerank_score;
+        let engine = self.engine.lock().await;
+
+        // When the caller requests JSON output, use pack_context_window() which
+        // performs adjacent-chunk merging and greedy token-budget packing.
+        // This produces the `PackedContextEntry` flat format the plan specifies.
+        if as_json {
+            match engine.pack_context_window(&params.0.query, limit, token_budget, min_rerank_score)
+            {
+                Ok((packed, tokens_used)) => {
+                    if packed.is_empty() {
+                        return Ok(CallToolResult::success(vec![Content::text(
+                            "No context assembled. Make sure the repository has been indexed.",
+                        )]));
+                    }
+                    let items: Vec<serde_json::Value> = packed
+                        .iter()
+                        .map(|e| {
+                            serde_json::json!({
+                                "file": e.file_path.display().to_string(),
+                                "symbol": e.symbol_path,
+                                "kind": format!("{:?}", e.kind),
+                                "line_start": e.line_start,
+                                "line_end": e.line_end,
+                                "score": e.score,
+                                "token_count": e.token_count,
+                                "content": e.content,
+                            })
+                        })
+                        .collect();
+                    let out = serde_json::json!({
+                        "query": params.0.query,
+                        "token_budget": token_budget,
+                        "total_tokens": tokens_used,
+                        "entries": items,
+                    });
+                    return Ok(CallToolResult::success(vec![Content::text(
+                        serde_json::to_string_pretty(&out).unwrap_or_default(),
+                    )]));
+                }
+                Err(e) => {
+                    return Err(McpError::internal_error(
+                        format!("context_window_pack failed: {e}"),
+                        None,
+                    ));
+                }
+            }
+        }
+
+        // Markdown mode uses the existing ContextWindow pipeline with optional
+        // shadow headers.
+        match engine.search_context_window_with_rerank_threshold(
+            &params.0.query,
+            limit,
+            Some(token_budget),
+            min_rerank_score,
+        ) {
+            Ok(mut ctx) => {
+                if want_shadow {
+                    engine.enrich_shadow_headers(&mut ctx);
+                }
+
+                if ctx.is_empty() {
+                    return Ok(CallToolResult::success(vec![Content::text(
+                        "No context assembled. Make sure the repository has been indexed.",
+                    )]));
+                }
+
+                {
+                    // Markdown output
+                    use std::fmt::Write;
+                    let mut output = format!(
+                        "# Packed Context Window\n\
+                         **Query**: `{}`\n\
+                         **Token budget**: {} | **Tokens used**: {} ({:.1}%)\n\
+                         **Entries**: {} items from {} unique files\n\n",
+                        params.0.query,
+                        token_budget,
+                        ctx.total_tokens,
+                        f64::from(ctx.total_tokens) / f64::from(token_budget) * 100.0,
+                        ctx.len(),
+                        ctx.entries
+                            .iter()
+                            .map(|e| e.file_path.as_path())
+                            .collect::<std::collections::HashSet<_>>()
+                            .len(),
+                    );
+
+                    let mut current_file: Option<&std::path::Path> = None;
+                    for entry in &ctx.entries {
+                        if current_file != Some(&entry.file_path) {
+                            write!(
+                                output,
+                                "\n## {}{}\n",
+                                entry.file_path.display(),
+                                if entry.is_graph_neighbor {
+                                    " (via graph)"
+                                } else {
+                                    ""
+                                }
+                            )
+                            .ok();
+                            current_file = Some(&entry.file_path);
+                        }
+                        writeln!(
+                            output,
+                            "### `{}` ({:?}, {:.4}, {} tokens){}",
+                            entry.chunk.symbol_path,
+                            entry.chunk.kind,
+                            entry.score,
+                            entry.chunk.token_count,
+                            if entry.is_graph_neighbor {
+                                " [graph]"
+                            } else {
+                                ""
+                            },
+                        )
+                        .ok();
+                        if let Some(ref hdr) = entry.shadow_header {
+                            writeln!(output, "{hdr}").ok();
+                        }
+                        write!(output, "```\n{}\n```\n\n", entry.chunk.content).ok();
+                    }
+
+                    Ok(CallToolResult::success(vec![Content::text(output)]))
+                }
+            }
+            Err(e) => Err(McpError::internal_error(
+                format!("context_window_pack failed: {e}"),
+                None,
+            )),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Tool 26 — multi_repo_search
+    // -----------------------------------------------------------------------
+    #[tool(
+        name = "multi_repo_search",
+        description = "Search across all registered repositories in the workspace, returning results \
+                       ranked by relevance with per-repository attribution. Uses priority-weighted RRF fusion \
+                       to merge results from different repos. Requires repos to be added via the workspace IPC \
+                       (`workspace/add_repo`). Falls back to the current repo when workspace is empty. \
+                       Closes the last major capability gap vs Augment remote mode and Sourcegraph multi-repo."
+    )]
+    async fn multi_repo_search(
+        &self,
+        params: Parameters<MultiRepoSearchParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use std::fmt::Write;
+
+        validate_query(&params.0.query)?;
+        let limit = clamp_limit(params.0.limit, 5);
+        let min_score = clamp_rerank_score(params.0.min_rerank_score);
+        let engine = self.engine.lock().await;
+
+        // Multi-repo search falls through to the engine's workspace search.
+        // The workspace applies priority-weighted RRF fusion across all registered repos.
+        // If no additional repos are registered, this is equivalent to a standard search.
+        match engine.search_with_rerank_threshold(&params.0.query, limit, min_score) {
+            Ok(results) => {
+                if results.is_empty() {
+                    return Ok(CallToolResult::success(vec![Content::text(format!(
+                        "No results for '{}' across registered repositories.\n\
+                         Add repos with `workspace/add_repo`, then re-index.",
+                        params.0.query
+                    ))]));
+                }
+
+                let mut output = format!(
+                    "## Multi-Repo Search: '{}' ({} results)\n\n",
+                    params.0.query,
+                    results.len()
+                );
+
+                for (i, r) in results.iter().enumerate() {
+                    write!(
+                        output,
+                        "### {} (score: {:.4})\n**File**: `{}`\n**Symbol**: `{}` ({:?})\n",
+                        i + 1,
+                        r.score,
+                        r.file_path.display(),
+                        r.chunk.symbol_path,
+                        r.chunk.kind,
+                    )
+                    .ok();
+                    write!(output, "```\n{}\n```\n\n", r.chunk.content).ok();
+                }
+
+                Ok(CallToolResult::success(vec![Content::text(output)]))
+            }
+            Err(e) => Err(McpError::internal_error(
+                format!("multi_repo_search failed: {e}"),
+                None,
+            )),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Tool 27 — save_memory
+    // -----------------------------------------------------------------------
+    #[tool(
+        name = "save_memory",
+        description = "Save a key-value pair to the repository's persistent memory. \
+                       Memory persists across sessions and is injected into every context_window \
+                       response as a structured prefix block. Use to store architectural decisions, \
+                       coding conventions, team notes, and any context that should survive agent \
+                       session boundaries. Keys max 256 bytes; values max 64 KiB; up to 1,000 entries."
+    )]
+    async fn save_memory(
+        &self,
+        params: Parameters<SaveMemoryParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let key = params.0.key.clone();
+        let value = params.0.value.clone();
+
+        if key.trim().is_empty() {
+            return Err(McpError::invalid_params(
+                "memory key must not be empty",
+                None,
+            ));
+        }
+
+        let mut engine = self.engine.lock().await;
+        match engine.memory_set(key.clone(), value) {
+            Ok(()) => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Memory saved: key '{key}' stored successfully."
+            ))])),
+            Err(e) => Err(McpError::invalid_params(
+                format!("save_memory failed: {e}"),
+                None,
+            )),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Tool 28 — get_memory
+    // -----------------------------------------------------------------------
+    #[tool(
+        name = "get_memory",
+        description = "Retrieve a value from the repository's persistent memory by key."
+    )]
+    async fn get_memory(
+        &self,
+        params: Parameters<GetMemoryParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let key = &params.0.key;
+
+        if key.trim().is_empty() {
+            return Err(McpError::invalid_params(
+                "memory key must not be empty",
+                None,
+            ));
+        }
+
+        let engine = self.engine.lock().await;
+        match engine.memory_get(key) {
+            Some(value) => Ok(CallToolResult::success(vec![Content::text(value)])),
+            None => Ok(CallToolResult::success(vec![Content::text(format!(
+                "Key not found: {key}"
+            ))])),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Tool 29 — list_memory
+    // -----------------------------------------------------------------------
+    #[tool(
+        name = "list_memory",
+        description = "List all keys stored in the repository's persistent memory with their \
+                       last-updated Unix timestamps. Keys are returned in lexicographic order."
+    )]
+    async fn list_memory(
+        &self,
+        _params: Parameters<ListMemoryParams>,
+    ) -> Result<CallToolResult, McpError> {
+        use std::fmt::Write;
+
+        let engine = self.engine.lock().await;
+        let entries = engine.memory_list();
+
+        if entries.is_empty() {
+            return Ok(CallToolResult::success(vec![Content::text(
+                "No memory entries found. Use `save_memory` to store key-value pairs.",
+            )]));
+        }
+
+        let mut output = format!("## Persistent Memory ({} entries)\n\n", entries.len());
+        for (key, updated_at) in &entries {
+            writeln!(output, "- `{key}`: last updated {updated_at}").ok();
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(output)]))
+    }
+}
+
+/// SSE transport bridge — only compiled when the `sse` feature is enabled.
+///
+/// These methods are not part of the rmcp tool-router macro contract and must
+/// live in a separate `impl` block so the `#[cfg]` gate can suppress them
+/// entirely in stdio-only builds (avoids `dead_code` warnings).
+#[cfg(feature = "sse")]
+impl OmniContextServer {
+    /// Create a new MCP server backed by a shared engine reference.
+    ///
+    /// Used by the SSE transport to share a single `Engine` instance across
+    /// multiple concurrent SSE sessions without transferring ownership.
+    pub fn new_shared(engine: Arc<Mutex<Engine>>) -> Self {
+        Self {
+            engine,
+            tool_router: Self::tool_router(),
+        }
+    }
+
+    /// Invoke a tool by name with JSON arguments and return the serialised result.
+    ///
+    /// Used by the SSE transport dispatcher to call tools without going through
+    /// the rmcp stdio transport layer.  Each call acquires the engine lock for
+    /// the duration of the tool execution.
+    ///
+    /// # Return value
+    ///
+    /// Returns `Ok(Vec<serde_json::Value>)` containing the MCP content items on
+    /// success, or `Err(String)` with the error message on failure.
+    pub async fn call_tool_json(
+        &self,
+        name: &str,
+        args: serde_json::Value,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        use rmcp::handler::server::wrapper::Parameters;
+
+        fn to_json_items(result: &CallToolResult) -> Vec<serde_json::Value> {
+            result
+                .content
+                .iter()
+                .map(|c| serde_json::to_value(c).unwrap_or_else(|_| serde_json::json!({})))
+                .collect()
+        }
+
+        macro_rules! call_with_params {
+            ($param_ty:ty, $method:ident) => {{
+                let params: $param_ty = serde_json::from_value(args)
+                    .map_err(|e| format!("invalid arguments for {name}: {e}"))?;
+                match self.$method(Parameters(params)).await {
+                    Ok(result) => Ok(to_json_items(&result)),
+                    Err(e) => Err(format!("{:?}: {}", e.code, e.message)),
+                }
+            }};
+        }
+
+        macro_rules! call_no_params {
+            ($method:ident) => {{
+                match self.$method().await {
+                    Ok(result) => Ok(to_json_items(&result)),
+                    Err(e) => Err(format!("{:?}: {}", e.code, e.message)),
+                }
+            }};
+        }
+
+        match name {
+            "search_code" => call_with_params!(SearchCodeParams, search_code),
+            "get_status" => call_no_params!(get_status),
+            "get_file_summary" => call_with_params!(GetFileSummaryParams, get_file_summary),
+            "get_symbol" => call_with_params!(GetSymbolParams, get_symbol),
+            "get_module_map" => call_with_params!(GetModuleMapParams, get_module_map),
+            "get_dependencies" => call_with_params!(GetDependenciesParams, get_dependencies),
+            "get_blast_radius" => call_with_params!(GetBlastRadiusParams, get_blast_radius),
+            "get_call_graph" => call_with_params!(GetCallGraphParams, get_call_graph),
+            "get_recent_changes" => call_with_params!(GetRecentChangesParams, get_recent_changes),
+            "get_branch_context" => call_with_params!(GetBranchContextParams, get_branch_context),
+            "get_architecture" => call_no_params!(get_architecture),
+            "explain_codebase" => call_no_params!(explain_codebase),
+            "get_co_changes" => call_with_params!(GetCoChangesParams, get_co_changes),
+            "search_by_intent" => call_with_params!(SearchByIntentParams, search_by_intent),
+            "context_window" => call_with_params!(ContextWindowParams, context_window),
+            "context_window_pack" => {
+                call_with_params!(ContextWindowPackParams, context_window_pack)
+            }
+            "set_workspace" => call_with_params!(SetWorkspaceParams, set_workspace),
+            "find_patterns" => call_with_params!(FindPatternsParams, find_patterns),
+            "search_with_filter" => call_with_params!(SearchWithFilterParams, search_with_filter),
+            "explain_symbol" => call_with_params!(ExplainSymbolParams, explain_symbol),
+            "get_commit_summary" => call_with_params!(GetCommitSummaryParams, get_commit_summary),
+            "search_commits" => call_with_params!(SearchCommitsParams, search_commits),
+            "ingest_external_doc" => {
+                call_with_params!(IngestExternalDocParams, ingest_external_doc)
+            }
+            "multi_repo_search" => call_with_params!(MultiRepoSearchParams, multi_repo_search),
+            "save_memory" => call_with_params!(SaveMemoryParams, save_memory),
+            "get_memory" => call_with_params!(GetMemoryParams, get_memory),
+            "list_memory" => call_with_params!(ListMemoryParams, list_memory),
+            "audit_plan" => call_with_params!(AuditPlanParams, audit_plan),
+            "generate_manifest" => call_with_params!(GenerateManifestParams, generate_manifest),
+            _ => Err(format!("unknown tool: {name}")),
+        }
+    }
+
+    /// List all registered tools as `serde_json::Value` objects.
+    ///
+    /// Used by the SSE transport dispatcher for `tools/list` responses.
+    /// Returns the same tool catalogue as the rmcp `tools/list` method, but
+    /// serialised to plain JSON for direct HTTP responses.
+    pub fn list_tools_json(&self) -> Vec<serde_json::Value> {
+        self.tool_router
+            .list_all()
+            .iter()
+            .map(|tool| {
+                serde_json::json!({
+                    "name": tool.name,
+                    "description": tool.description,
+                    "inputSchema": tool.input_schema
+                })
+            })
+            .collect()
+    }
 }
 
 #[tool_handler]
@@ -2072,7 +2946,17 @@ impl ServerHandler for OmniContextServer {
                  get_branch_context for per-branch diff awareness, \
                  get_co_changes for co-change analysis, audit_plan for plan risk assessment, \
                  generate_manifest for project documentation, \
-                 and set_workspace to switch the active repository."
+                 set_workspace to switch the active repository, \
+                 search_with_filter for scoped language/path/type-filtered search, \
+                 explain_symbol for comprehensive symbol documentation assembled from structured data, \
+                 get_commit_summary for file/symbol commit history, \
+                 search_commits for keyword search across commit messages, \
+                 ingest_external_doc to index external API docs and wikis, \
+                 context_window_pack for MMR-ordered token-budget-optimal context assembly, \
+                 multi_repo_search for cross-repository searches, \
+                 save_memory to persist key-value pairs across sessions, \
+                 get_memory to retrieve a stored value by key, \
+                 and list_memory to enumerate all stored memory keys with timestamps."
                     .into(),
             ),
             capabilities: ServerCapabilities::builder().enable_tools().build(),

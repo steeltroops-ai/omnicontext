@@ -1,7 +1,15 @@
 //! `OmniContext` MCP Server.
 //!
 //! Exposes code intelligence tools to AI coding agents via the
-//! Model Context Protocol (MCP). Supports stdio transport.
+//! Model Context Protocol (MCP).
+//!
+//! Two transport modes are supported:
+//!
+//! - **stdio** (default): JSON-RPC over stdin/stdout. Used by local AI agent
+//!   launchers (Claude Desktop, Cursor, Windsurf).
+//!
+//! - **sse**: HTTP Server-Sent Events. Used for remote/enterprise deployments
+//!   where the MCP server runs as a persistent network-accessible daemon.
 //!
 //! ## Auto-Index on Startup
 //!
@@ -15,11 +23,15 @@
 //! # Start the MCP server (AI agents connect via stdio)
 //! omnicontext-mcp --repo /path/to/repo
 //!
+//! # Start with HTTP SSE transport (remote/enterprise)
+//! omnicontext-mcp --repo /path/to/repo --transport sse --port 8080
+//!
 //! # Skip auto-index (use existing index only)
 //! omnicontext-mcp --repo /path/to/repo --no-auto-index
 //!
 //! # Or from the CLI
 //! omnicontext mcp --repo .
+//! omnicontext serve --port 8080
 //! ```
 
 // Suppress common test-helper lints that are intentional in unit tests
@@ -35,11 +47,26 @@
 )]
 
 mod tools;
+mod transport;
 
 use anyhow::Result;
 use clap::Parser;
 use rmcp::ServiceExt;
+#[cfg(feature = "sse")]
+use std::sync::Arc;
 use std::time::Duration;
+
+/// MCP transport backend.
+#[derive(Debug, Clone, clap::ValueEnum, Default)]
+enum TransportMode {
+    /// JSON-RPC over stdin/stdout (default). Used by local AI agent launchers.
+    #[default]
+    Stdio,
+    /// HTTP Server-Sent Events. Used for remote/enterprise deployments.
+    /// Requires the `sse` feature flag: `cargo build --features sse`.
+    #[cfg(feature = "sse")]
+    Sse,
+}
 
 /// `OmniContext` MCP Server
 #[derive(Parser, Debug)]
@@ -75,6 +102,25 @@ struct Args {
     /// By default, the server indexes the repo if no index exists.
     #[arg(long)]
     no_auto_index: bool,
+
+    /// Transport backend.
+    ///
+    /// - `stdio` (default): JSON-RPC over stdin/stdout. Used by Claude Desktop,
+    ///   Cursor, Windsurf, and other local AI agent launchers.
+    /// - `sse`: HTTP Server-Sent Events. Used for remote/enterprise deployments
+    ///   where the daemon runs as a persistent network service.
+    #[arg(long, value_enum, default_value = "stdio")]
+    transport: TransportMode,
+
+    /// Host to bind to when using SSE transport (default: 127.0.0.1).
+    #[cfg(feature = "sse")]
+    #[arg(long, default_value = "127.0.0.1")]
+    host: String,
+
+    /// Port to listen on when using SSE transport (default: 8080).
+    #[cfg(feature = "sse")]
+    #[arg(long, default_value_t = 8080)]
+    port: u16,
 }
 
 #[allow(clippy::too_many_lines)]
@@ -232,21 +278,48 @@ async fn main() -> Result<()> {
         }
     }
 
-    tracing::info!("engine ready, starting MCP server on stdio");
+    tracing::info!("engine ready, starting MCP server");
 
-    // Create and start the MCP server
-    let server = tools::OmniContextServer::new(engine);
-    let service = server
-        .serve(rmcp::transport::stdio())
-        .await
-        .inspect_err(|e| {
-            tracing::error!(error = %e, "failed to start MCP server");
-        })?;
+    match args.transport {
+        TransportMode::Stdio => {
+            tracing::info!("transport: stdio");
 
-    // Wait for the service to complete (client disconnects)
-    service.waiting().await?;
+            // Create and start the MCP server
+            let server = tools::OmniContextServer::new(engine);
+            let service = server
+                .serve(rmcp::transport::stdio())
+                .await
+                .inspect_err(|e| {
+                    tracing::error!(error = %e, "failed to start MCP server");
+                })?;
 
-    tracing::info!("MCP server shut down");
+            // Wait for the service to complete (client disconnects)
+            service.waiting().await?;
+
+            tracing::info!("MCP server shut down");
+        }
+
+        #[cfg(feature = "sse")]
+        TransportMode::Sse => {
+            // Start from env-var defaults, then override with explicit CLI flags.
+            let mut sse_config = transport::sse::SseConfig::from_env();
+            sse_config.host = args.host;
+            sse_config.port = args.port;
+            // OMNI_SERVER_TOKEN already loaded by from_env(); CLI has no --token flag.
+
+            tracing::info!(
+                addr = %sse_config.bind_addr(),
+                auth = sse_config.token.is_some(),
+                "transport: sse"
+            );
+
+            let engine_arc = Arc::new(tokio::sync::Mutex::new(engine));
+            transport::sse::serve(sse_config, engine_arc).await?;
+
+            tracing::info!("SSE MCP server shut down");
+        }
+    }
+
     Ok(())
 }
 

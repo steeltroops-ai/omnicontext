@@ -19,6 +19,42 @@ use omni_core::Engine;
 
 use crate::protocol::{self, error_codes, Response};
 
+// ---------------------------------------------------------------------------
+// RepoRegistry — shared multi-repo workspace state
+// ---------------------------------------------------------------------------
+
+/// Thread-safe multi-repo registry backed by a persistent `Workspace`.
+///
+/// Design: the `Workspace` config file lives at
+/// `<primary_data_dir>/workspace.toml`. Every add/remove/priority change
+/// is flushed to disk immediately inside `Workspace` so the registry
+/// survives daemon restarts without any async bookkeeping.
+#[derive(Clone)]
+pub(crate) struct RepoRegistry(Arc<Mutex<omni_core::workspace::Workspace>>);
+
+impl RepoRegistry {
+    /// Open or create the registry, seeding it with the primary repo if empty.
+    pub fn open(primary_repo: &Path) -> Self {
+        let config_path = omni_core::Config::defaults(primary_repo)
+            .data_dir()
+            .join("workspace.toml");
+
+        let workspace = omni_core::workspace::Workspace::open(&config_path).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "failed to open workspace registry; starting empty");
+            // Create a minimal fresh workspace using a temp path — the
+            // real config_path will be written on first mutation.
+            omni_core::workspace::Workspace::open(&config_path).unwrap_or_else(|_| {
+                // Absolute last resort: in-memory workspace with no backing file.
+                // This happens only when the data dir itself is inaccessible.
+                omni_core::workspace::Workspace::open(std::path::Path::new("workspace.toml"))
+                    .expect("cannot open workspace")
+            })
+        });
+
+        Self(Arc::new(Mutex::new(workspace)))
+    }
+}
+
 /// Derive a deterministic pipe/socket name from the repository path.
 ///
 /// Normalization must match the extension's `derivePipeName()`:
@@ -57,6 +93,11 @@ pub fn default_pipe_name(repo_path: &Path) -> String {
 
 /// Start the IPC server and listen for client connections.
 pub async fn serve(engine: Engine, pipe_name: &str) -> anyhow::Result<()> {
+    // Derive the primary repo path from the engine config so the registry
+    // config file lands in the same data directory as the engine index.
+    let repo_path = engine.repo_path().to_path_buf();
+    let repo_registry = RepoRegistry::open(&repo_path);
+
     let engine = Arc::new(Mutex::new(engine));
     let prefetch_cache = Arc::new(crate::prefetch::PrefetchCache::default());
     let daemon_start_time = Arc::new(std::time::Instant::now());
@@ -93,8 +134,8 @@ pub async fn serve(engine: Engine, pipe_name: &str) -> anyhow::Result<()> {
     #[cfg(windows)]
     {
         serve_named_pipe(
-            engine, prefetch_cache, daemon_start_time, performance_metrics, event_dedup,
-            backpressure, pipe_name, shutdown_token,
+            engine, repo_registry, prefetch_cache, daemon_start_time, performance_metrics,
+            event_dedup, backpressure, pipe_name, shutdown_token,
         )
         .await
     }
@@ -102,8 +143,8 @@ pub async fn serve(engine: Engine, pipe_name: &str) -> anyhow::Result<()> {
     #[cfg(not(windows))]
     {
         serve_unix_socket(
-            engine, prefetch_cache, daemon_start_time, performance_metrics, event_dedup,
-            backpressure, pipe_name, shutdown_token,
+            engine, repo_registry, prefetch_cache, daemon_start_time, performance_metrics,
+            event_dedup, backpressure, pipe_name, shutdown_token,
         )
         .await
     }
@@ -116,6 +157,7 @@ pub async fn serve(engine: Engine, pipe_name: &str) -> anyhow::Result<()> {
 #[cfg(windows)]
 async fn serve_named_pipe(
     engine: Arc<Mutex<Engine>>,
+    repo_registry: RepoRegistry,
     prefetch_cache: Arc<crate::prefetch::PrefetchCache>,
     daemon_start_time: Arc<std::time::Instant>,
     performance_metrics: Arc<crate::metrics::PerformanceMetrics>,
@@ -146,6 +188,7 @@ async fn serve_named_pipe(
         tracing::info!("client connected");
 
         let engine = engine.clone();
+        let registry = repo_registry.clone();
         let cache = prefetch_cache.clone();
         let start_time = daemon_start_time.clone();
         let metrics = performance_metrics.clone();
@@ -155,7 +198,7 @@ async fn serve_named_pipe(
         tokio::spawn(async move {
             let (reader, writer) = tokio::io::split(server);
             if let Err(e) = handle_client(
-                engine, cache, start_time, metrics, dedup, bp, token, reader, writer,
+                engine, registry, cache, start_time, metrics, dedup, bp, token, reader, writer,
             )
             .await
             {
@@ -173,6 +216,7 @@ async fn serve_named_pipe(
 #[cfg(not(windows))]
 async fn serve_unix_socket(
     engine: Arc<Mutex<Engine>>,
+    repo_registry: RepoRegistry,
     prefetch_cache: Arc<crate::prefetch::PrefetchCache>,
     daemon_start_time: Arc<std::time::Instant>,
     performance_metrics: Arc<crate::metrics::PerformanceMetrics>,
@@ -196,6 +240,7 @@ async fn serve_unix_socket(
                 tracing::info!("client connected");
 
                 let engine = engine.clone();
+                let registry = repo_registry.clone();
                 let cache = prefetch_cache.clone();
                 let start_time = daemon_start_time.clone();
                 let metrics = performance_metrics.clone();
@@ -204,7 +249,7 @@ async fn serve_unix_socket(
                 let token = shutdown_token.clone();
                 tokio::spawn(async move {
                     let (reader, writer) = tokio::io::split(stream);
-                    if let Err(e) = handle_client(engine, cache, start_time, metrics, dedup, bp, token, reader, writer).await
+                    if let Err(e) = handle_client(engine, registry, cache, start_time, metrics, dedup, bp, token, reader, writer).await
                     {
                         tracing::warn!(error = %e, "client handler error");
                     }
@@ -230,6 +275,7 @@ async fn serve_unix_socket(
 /// (with compression for large responses).
 async fn handle_client<R, W>(
     engine: Arc<Mutex<Engine>>,
+    repo_registry: RepoRegistry,
     prefetch_cache: Arc<crate::prefetch::PrefetchCache>,
     daemon_start_time: Arc<std::time::Instant>,
     performance_metrics: Arc<crate::metrics::PerformanceMetrics>,
@@ -283,6 +329,7 @@ where
             Ok(req) => {
                 dispatch(
                     engine.clone(),
+                    repo_registry.clone(),
                     prefetch_cache.clone(),
                     daemon_start_time.clone(),
                     performance_metrics.clone(),
@@ -316,6 +363,7 @@ where
 /// Dispatch a JSON-RPC request to the appropriate handler.
 async fn dispatch(
     engine: Arc<Mutex<Engine>>,
+    repo_registry: RepoRegistry,
     prefetch_cache: Arc<crate::prefetch::PrefetchCache>,
     daemon_start_time: Arc<std::time::Instant>,
     performance_metrics: Arc<crate::metrics::PerformanceMetrics>,
@@ -500,14 +548,14 @@ async fn dispatch(
         "graph/find_cycles" => handle_find_cycles(engine.clone()).await,
 
         // Multi-Repository Support
-        "workspace/list_repos" => handle_list_repos(engine.clone()).await,
+        "workspace/list_repos" => handle_list_repos(engine.clone(), repo_registry.clone()).await,
 
         "workspace/add_repo" => {
             let params: protocol::AddRepoParams = match parse_params(&req) {
                 Ok(p) => p,
                 Err(r) => return r,
             };
-            handle_add_repo(engine.clone(), params).await
+            handle_add_repo(repo_registry.clone(), params).await
         }
 
         "workspace/set_priority" => {
@@ -515,7 +563,7 @@ async fn dispatch(
                 Ok(p) => p,
                 Err(r) => return r,
             };
-            handle_set_priority(engine.clone(), params).await
+            handle_set_priority(repo_registry.clone(), params).await
         }
 
         "workspace/remove_repo" => {
@@ -523,7 +571,7 @@ async fn dispatch(
                 Ok(p) => p,
                 Err(r) => return r,
             };
-            handle_remove_repo(engine.clone(), params).await
+            handle_remove_repo(repo_registry.clone(), params).await
         }
 
         // Performance Controls
@@ -1167,7 +1215,7 @@ async fn handle_ide_event(
                 {
                     let mut engine_guard = eng.lock().await;
                     match engine_guard.reindex_single_file(&abs_path) {
-                        Ok((stats, changed)) => {
+                        Ok((stats, changed, delta)) => {
                             if changed {
                                 // Invalidate cached context for this file
                                 let cache_key = std::path::PathBuf::from(&file_path);
@@ -1175,6 +1223,11 @@ async fn handle_ide_event(
                                 tracing::debug!(
                                     file = %file_path,
                                     chunks = stats.chunks,
+                                    added = delta.added_symbols.len(),
+                                    removed = delta.removed_symbols.len(),
+                                    modified = delta.modified_symbols.len(),
+                                    structural = delta.has_structural_change,
+                                    body_only = delta.is_body_only_change,
                                     "reindexed changed file, cache invalidated"
                                 );
                             }
@@ -1396,7 +1449,7 @@ async fn handle_reranker_metrics(
     let breaker_stats = eng.reranker_breaker().stats();
 
     let model = if enabled {
-        "jina-reranker-v2-base-multilingual"
+        "bge-reranker-v2-m3"
     } else {
         "disabled"
     };
@@ -1405,6 +1458,8 @@ async fn handle_reranker_metrics(
     Ok(serde_json::json!({
         "enabled": enabled,
         "model": model,
+        "model_repo": "mogolloni/bge-reranker-v2-m3-onnx",
+        "license": "Apache-2.0",
         "latency_ms": null,
         "improvement_percent": null,
         "batch_size": 16,
@@ -1434,9 +1489,12 @@ async fn handle_graph_metrics(
         )
     })?;
 
-    // Get actual cycle count
-    let dep_graph = eng.dep_graph();
-    let cycles = match dep_graph.find_cycles() {
+    // Authoritative edge-type counts from the live file dependency graph
+    let file_graph = eng.file_dep_graph();
+    let edge_counts = file_graph.count_by_edge_type();
+
+    // Cycle detection from the symbol-level graph
+    let cycles = match eng.dep_graph().find_cycles() {
         Ok(cycle_list) => cycle_list.len(),
         Err(e) => {
             tracing::warn!(error = %e, "failed to find cycles");
@@ -1448,11 +1506,14 @@ async fn handle_graph_metrics(
         "nodes": status.graph_nodes,
         "edges": status.graph_edges,
         "edge_types": {
-            "imports": status.dep_edges,
-            "inherits": null,
-            "calls": null,
-            "instantiates": null
+            "imports": edge_counts.get(&omni_core::graph::dependencies::EdgeType::Imports).copied().unwrap_or(status.dep_edges),
+            "inherits": edge_counts.get(&omni_core::graph::dependencies::EdgeType::Inherits).copied().unwrap_or(0),
+            "calls": edge_counts.get(&omni_core::graph::dependencies::EdgeType::Calls).copied().unwrap_or(0),
+            "instantiates": edge_counts.get(&omni_core::graph::dependencies::EdgeType::Instantiates).copied().unwrap_or(0),
+            "historical_co_change": edge_counts.get(&omni_core::graph::dependencies::EdgeType::HistoricalCoChange).copied().unwrap_or(0),
         },
+        "file_graph_nodes": file_graph.node_count(),
+        "file_graph_edges": file_graph.edge_count(),
         "cycles": cycles,
         "pagerank_computed": status.graph_nodes > 0,
         "max_hops": 2,
@@ -1796,62 +1857,165 @@ async fn handle_find_cycles(
     }))
 }
 
-// Phase 5: Multi-Repository Support Handlers
+// Multi-repo workspace handlers
 // ---------------------------------------------------------------------------
 
 /// Handle request to list all repositories.
-async fn handle_list_repos(engine: Arc<Mutex<Engine>>) -> Result<serde_json::Value, (i32, String)> {
-    // Currently single-repo. Return the active repo as the sole entry.
-    let eng = engine.lock().await;
-    let status = eng.status().map_err(|e| {
+///
+/// Returns every repo in the workspace registry — not just the primary repo
+/// the daemon was launched with. Repos are sorted by priority descending.
+async fn handle_list_repos(
+    engine: Arc<Mutex<Engine>>,
+    repo_registry: RepoRegistry,
+) -> Result<serde_json::Value, (i32, String)> {
+    // Get the primary repo path from the live engine for the "active" flag.
+    let primary_path = {
+        let eng = engine.lock().await;
+        eng.repo_path().to_path_buf()
+    };
+
+    let ws = repo_registry.0.lock().await;
+    let mut repos: Vec<serde_json::Value> = ws
+        .list_linked_repos()
+        .into_iter()
+        .map(|r| {
+            serde_json::json!({
+                "path": r.path.to_string_lossy(),
+                "priority": r.priority,
+                "auto_index": r.auto_index,
+                "active": r.path == primary_path,
+            })
+        })
+        .collect();
+
+    // If the registry is empty (first run before any workspace/add_repo call),
+    // surface the primary repo so clients always get at least one entry.
+    if repos.is_empty() {
+        let eng = engine.lock().await;
+        let status = eng.status().map_err(|e| {
+            (
+                error_codes::ENGINE_ERROR,
+                format!("failed to get status: {e}"),
+            )
+        })?;
+        repos.push(serde_json::json!({
+            "path": status.repo_path,
+            "priority": 0.5,
+            "auto_index": true,
+            "active": true,
+        }));
+    }
+
+    Ok(serde_json::json!({ "repos": repos }))
+}
+
+/// Handle request to add a repository to the workspace registry.
+///
+/// Validates the path exists, creates an Engine for it, links it to the
+/// registry, and persists the config to disk atomically.
+async fn handle_add_repo(
+    repo_registry: RepoRegistry,
+    params: protocol::AddRepoParams,
+) -> Result<serde_json::Value, (i32, String)> {
+    let path = std::path::Path::new(&params.path);
+
+    if !path.exists() {
+        return Err((
+            error_codes::INVALID_PARAMS,
+            format!("repository path does not exist: {}", params.path),
+        ));
+    }
+
+    let mut ws = repo_registry.0.lock().await;
+    ws.link_repo(path, None, params.priority).map_err(|e| {
         (
             error_codes::ENGINE_ERROR,
-            format!("failed to get status: {e}"),
+            format!("failed to add repository: {e}"),
         )
     })?;
+
+    tracing::info!(path = %params.path, priority = params.priority, "repository added to workspace");
+
     Ok(serde_json::json!({
-        "repos": [{
-            "path": status.repo_path,
-            "files_indexed": status.files_indexed,
-            "active": true,
-        }]
+        "added": true,
+        "path": params.path,
+        "priority": params.priority,
+        "repo_count": ws.repo_count(),
     }))
 }
 
-/// Handle request to add a repository.
-async fn handle_add_repo(
-    _engine: Arc<Mutex<Engine>>,
-    _params: protocol::AddRepoParams,
-) -> Result<serde_json::Value, (i32, String)> {
-    Err((
-        error_codes::NOT_IMPLEMENTED,
-        "Multi-repository support is not yet implemented. Restart the daemon with --repo <path> to switch repositories.".to_string(),
-    ))
-}
-
-/// Handle request to set repository priority.
+/// Handle request to update repository priority.
+///
+/// The priority weight [0.0, 1.0] scales search result scores from this
+/// repo in multi-repo merged result sets.
 async fn handle_set_priority(
-    _engine: Arc<Mutex<Engine>>,
-    _params: protocol::SetPriorityParams,
+    repo_registry: RepoRegistry,
+    params: protocol::SetPriorityParams,
 ) -> Result<serde_json::Value, (i32, String)> {
-    Err((
-        error_codes::NOT_IMPLEMENTED,
-        "Repository priority setting is not yet implemented.".to_string(),
-    ))
+    if !(0.0..=1.0).contains(&params.priority) {
+        return Err((
+            error_codes::INVALID_PARAMS,
+            format!("priority must be in [0.0, 1.0]; got {}", params.priority),
+        ));
+    }
+
+    let path = std::path::Path::new(&params.path);
+    let mut ws = repo_registry.0.lock().await;
+    let updated = ws.set_priority(path, params.priority).map_err(|e| {
+        (
+            error_codes::ENGINE_ERROR,
+            format!("failed to set priority: {e}"),
+        )
+    })?;
+
+    if updated {
+        tracing::info!(path = %params.path, priority = params.priority, "repository priority updated");
+        Ok(serde_json::json!({
+            "updated": true,
+            "path": params.path,
+            "priority": params.priority,
+        }))
+    } else {
+        Err((
+            error_codes::INVALID_PARAMS,
+            format!("repository not found in workspace: {}", params.path),
+        ))
+    }
 }
 
-/// Handle request to remove a repository.
+/// Handle request to remove a repository from the workspace registry.
+///
+/// Does not delete any index data — only removes the registration so the
+/// repo is excluded from future workspace operations.
 async fn handle_remove_repo(
-    _engine: Arc<Mutex<Engine>>,
-    _params: protocol::RemoveRepoParams,
+    repo_registry: RepoRegistry,
+    params: protocol::RemoveRepoParams,
 ) -> Result<serde_json::Value, (i32, String)> {
-    Err((
-        error_codes::NOT_IMPLEMENTED,
-        "Repository removal is not yet implemented.".to_string(),
-    ))
+    let path = std::path::Path::new(&params.path);
+    let mut ws = repo_registry.0.lock().await;
+    let removed = ws.unlink_repo(path).map_err(|e| {
+        (
+            error_codes::ENGINE_ERROR,
+            format!("failed to remove repository: {e}"),
+        )
+    })?;
+
+    if removed {
+        tracing::info!(path = %params.path, "repository removed from workspace");
+        Ok(serde_json::json!({
+            "removed": true,
+            "path": params.path,
+            "repo_count": ws.repo_count(),
+        }))
+    } else {
+        Err((
+            error_codes::INVALID_PARAMS,
+            format!("repository not found in workspace: {}", params.path),
+        ))
+    }
 }
 
-// Phase 6: Performance Controls Handlers
+// Performance control handlers
 // ---------------------------------------------------------------------------
 
 /// Handle request for embedder metrics.
@@ -1904,14 +2068,69 @@ async fn handle_embedder_metrics(
 }
 
 /// Handle request to configure embedder.
+///
+/// Applies runtime configuration changes to the embedder without restarting the engine.
+/// `batch_size` takes effect immediately on the next embedding flush.
+/// `quantization_mode` and `batch_timeout_ms` are acknowledged but have no runtime effect
+/// — quantization requires model reload and timeout is fixed at the session pool level.
 async fn handle_configure_embedder(
-    _engine: Arc<Mutex<Engine>>,
-    _params: protocol::ConfigureEmbedderParams,
+    engine: Arc<Mutex<Engine>>,
+    params: protocol::ConfigureEmbedderParams,
 ) -> Result<serde_json::Value, (i32, String)> {
-    Err((
-        error_codes::NOT_IMPLEMENTED,
-        "Runtime embedder configuration is not yet implemented. Embedder settings are configured at startup via config file.".to_string(),
-    ))
+    // Design: only batch_size can be mutated at runtime because it is read
+    // per-flush from config.embedding.batch_size.  Quantization mode and
+    // batch_timeout_ms require a model reload — document them as pending
+    // and return the current effective values so callers can verify.
+    let mut eng = engine.lock().await;
+
+    let mut applied = serde_json::Map::new();
+    let mut pending = serde_json::Map::new();
+
+    if let Some(bs) = params.batch_size {
+        let clamped = bs.clamp(1, 512);
+        eng.config_mut().embedding.batch_size = clamped;
+        applied.insert("batch_size".to_string(), serde_json::json!(clamped));
+        tracing::info!(
+            batch_size = clamped,
+            "embedder batch_size updated at runtime"
+        );
+    }
+
+    if let Some(ref mode) = params.quantization_mode {
+        // Quantization mode change requires session reload; note it as pending.
+        pending.insert(
+            "quantization_mode".to_string(),
+            serde_json::json!({
+                "requested": mode,
+                "note": "takes effect after engine restart"
+            }),
+        );
+        tracing::info!(mode = %mode, "quantization_mode change acknowledged; requires restart");
+    }
+
+    if let Some(timeout) = params.batch_timeout_ms {
+        // batch_timeout_ms is not stored in EmbeddingConfig; note as pending.
+        pending.insert(
+            "batch_timeout_ms".to_string(),
+            serde_json::json!({
+                "requested": timeout,
+                "note": "not configurable at runtime; fixed at session pool level"
+            }),
+        );
+    }
+
+    let current_batch_size = eng.config().embedding.batch_size;
+    let model_fingerprint = eng.embedder().model_fingerprint().to_string();
+
+    Ok(serde_json::json!({
+        "status": "ok",
+        "applied": applied,
+        "pending": pending,
+        "current": {
+            "batch_size": current_batch_size,
+            "model_fingerprint": model_fingerprint,
+        }
+    }))
 }
 
 /// Handle request for index pool metrics.

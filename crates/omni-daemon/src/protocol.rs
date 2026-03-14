@@ -292,7 +292,7 @@ pub struct SearchIntentParams {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 2: Resilience Monitoring Types
+// Resilience monitoring types
 // ---------------------------------------------------------------------------
 
 /// Parameters for resilience status request (no parameters needed).
@@ -370,7 +370,7 @@ pub struct ResetCircuitBreakerParams {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 3: Historical Context Types
+// Historical context types
 // ---------------------------------------------------------------------------
 
 /// Parameters for commit context request.
@@ -492,7 +492,7 @@ pub struct AuditPlanParams {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 4: Graph Visualization Types
+// Graph visualization types
 // ---------------------------------------------------------------------------
 
 /// Parameters for architectural context request.
@@ -545,7 +545,7 @@ pub struct CyclesResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 5: Multi-Repository Support Types
+// Multi-repo workspace types
 // ---------------------------------------------------------------------------
 
 /// Repository information.
@@ -597,7 +597,7 @@ pub struct RemoveRepoParams {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 6: Performance Controls Types
+// Performance control types
 // ---------------------------------------------------------------------------
 
 /// Embedder metrics.
