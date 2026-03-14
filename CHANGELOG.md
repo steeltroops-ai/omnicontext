@@ -4,6 +4,11 @@ All notable changes to OmniContext are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.4] - 2026-03-14
+
+### Fixed
+- Make node-audit advisory-only; cargo-deny is authoritative gate ([7a30e1e](https://github.com/steeltroops-ai/omnicontext/commit/7a30e1e4543201cc71f9e4651d86ec31b9e18962))
+
 ## [1.3.3] - 2026-03-14
 
 ### Fixed

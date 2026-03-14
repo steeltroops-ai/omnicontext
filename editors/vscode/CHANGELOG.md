@@ -2,6 +2,13 @@
 
 All notable changes to the OmniContext VS Code extension are documented here.
 
+## [1.3.4] - 2026-03-14
+
+
+- make node-audit advisory-only; cargo-deny is authoritative gate ([7a30e1e](https://github.com/steeltroops-ai/omnicontext/commit/7a30e1e))
+
+
+
 ## [1.3.3] - 2026-03-14
 
 _No direct changes in this release._
