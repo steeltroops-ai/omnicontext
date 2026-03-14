@@ -42,9 +42,9 @@ OPTIONS
       --dir <path>        Override install directory for binaries
                           Default: ~/.local/bin
       --model <name>      Select the embedding model to download
-                          Default: jina-embeddings-v2-base-code
+                          Default: CodeRankEmbed
+      --no-reranker       Skip cross-encoder reranker model download
       --no-model          Skip embedding model download entirely
-      --no-mcp            Skip MCP client auto-configuration
       --no-onnx           Skip ONNX Runtime shared-library download
       --dry-run           Print every action that would be taken without
                           actually modifying the system; implies --no-model,
@@ -132,6 +132,10 @@ while [ $# -gt 0 ]; do
             SKIP_MODEL=1
             shift
             ;;
+        --no-reranker)
+            SKIP_RERANKER=1
+            shift
+            ;;
         --no-mcp)
             SKIP_MCP=1
             shift
@@ -143,6 +147,7 @@ while [ $# -gt 0 ]; do
         --dry-run)
             DRY_RUN=1
             SKIP_MODEL=1
+            SKIP_RERANKER=1
             SKIP_MCP=1
             SKIP_ONNX=1
             shift
@@ -693,7 +698,7 @@ else
 
     if [ "$HAS_SETUP" = "true" ]; then
         MODEL_READY="false"
-        MODEL_NAME="${SELECTED_MODEL:-jina-embeddings-v2-base-code}"
+        MODEL_NAME="${SELECTED_MODEL:-CodeRankEmbed}"
         MODEL_SIZE="?"
 
         if status_json=$("$OMNI_BIN" setup model-status --json 2>/dev/null); then
@@ -714,7 +719,7 @@ else
         if [ "$MODEL_READY" = "true" ]; then
             ok "Model ready: ${BOLD}${MODEL_NAME}${RESET}  ${DIM}(${MODEL_SIZE})${RESET}"
         else
-            info "Downloading model: ${BOLD}${MODEL_NAME}${RESET}  ${DIM}(~550 MB, HuggingFace)${RESET}"
+            info "Downloading model: ${BOLD}${MODEL_NAME}${RESET}  ${DIM}(~521 MB, HuggingFace)${RESET}"
             blank
             printf "  ${DIM}────────────────────────────────────────${RESET}\n"
             # Build model-download command — pass --model if the user requested one
@@ -738,12 +743,39 @@ else
             fi
         fi
     else
-        # Legacy fallback
-        if [ -f "${DATA_DIR}/models/jina-embeddings-v2-base-code/model.onnx" ]; then
+        # Legacy fallback — accept either the current CodeRankEmbed path or the
+        # old jina-embeddings-v2-base-code path so cached installations heal
+        # automatically without requiring a full re-download.
+        if [ -f "${DATA_DIR}/models/CodeRankEmbed/model.onnx" ] || \
+           [ -f "${DATA_DIR}/models/jina-embeddings-v2-base-code/model.onnx" ]; then
             ok "Model ready (cached)"
         else
             warn "Legacy binary detected — model will be initialized on first index."
             info "Run: ${DIM}omnicontext index .${RESET}  to trigger model download."
+        fi
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# step 6b - reranker model (bge-reranker-v2-m3, ~568 MB)
+# ---------------------------------------------------------------------------
+if [ "${SKIP_MODEL:-0}" != "1" ] && [ "${SKIP_RERANKER:-0}" != "1" ]; then
+    blank
+    step "6b" "Setting up cross-encoder reranker (bge-reranker-v2-m3)"
+    if [ "${HAS_SETUP:-false}" = "true" ]; then
+        RERANKER_DL_CMD=("$OMNI_BIN" setup reranker-download)
+        if ! "${RERANKER_DL_CMD[@]}" 2>&1; then
+            warn "Reranker download interrupted or failed."
+            warn "Run later: ${DIM}omnicontext setup reranker-download${RESET}"
+        else
+            ok "Reranker model ready: ${BOLD}bge-reranker-v2-m3${RESET}"
+        fi
+    else
+        # Legacy fallback
+        if [ -f "${DATA_DIR}/models/bge-reranker-v2-m3/model.onnx" ]; then
+            ok "Reranker model ready (cached)"
+        else
+            info "Reranker will be downloaded on first search requiring reranking."
         fi
     fi
 fi

@@ -35,11 +35,14 @@
 
 .PARAMETER Model
     Select the embedding model to download.
-    Default: jina-embeddings-v2-base-code
+    Default: CodeRankEmbed
+
+.PARAMETER NoReranker
+    Skip cross-encoder reranker model download (bge-reranker-v2-m3).
 
 .PARAMETER DryRun
     Print every action that would be taken without modifying the system.
-    Implies -NoModel, -NoMcp, and -NoOnnx.
+    Implies -NoModel, -NoReranker, -NoMcp, and -NoOnnx.
 
 .PARAMETER Help
     Show this help message and exit.
@@ -86,6 +89,7 @@ param(
     [string] $Version     = "",
     [switch] $Force,
     [switch] $NoModel,
+    [switch] $NoReranker,
     [switch] $NoMcp,
     [switch] $NoOnnx,
     [string] $InstallDir  = "",
@@ -116,7 +120,7 @@ OPTIONS
   -InstallDir <path>      Override binary install directory
                           Default: %USERPROFILE%\.omnicontext\bin
   -Model <name>           Select the embedding model to download
-                          Default: jina-embeddings-v2-base-code
+                          Default: CodeRankEmbed
   -NoModel                Skip embedding model download
   -NoMcp                  Skip MCP client auto-configuration
   -NoOnnx                 Skip ONNX Runtime DLL download
@@ -153,9 +157,10 @@ NOTES
 
 # DryRun implies skipping all slow/destructive steps
 if ($DryRun) {
-    $NoModel = $true
-    $NoMcp   = $true
-    $NoOnnx  = $true
+    $NoModel    = $true
+    $NoReranker = $true
+    $NoMcp      = $true
+    $NoOnnx     = $true
 }
 
 # Allow env-var version pin (mirrors the bash installer)
@@ -754,8 +759,8 @@ if ($NoModel) {
             # Prefer -Model override, then status object, then default
             $modelName = if ($Model) { $Model } `
                          elseif ($statusObj -and $statusObj.model_name) { $statusObj.model_name } `
-                         else { "jina-embeddings-v2-base-code" }
-            Write-Info ("Downloading model: " + $BOLD + $modelName + $RESET + $DIM + " (~550 MB, HuggingFace)" + $RESET)
+                         else { "CodeRankEmbed" }
+            Write-Info ("Downloading model: " + $BOLD + $modelName + $RESET + $DIM + " (~521 MB, HuggingFace)" + $RESET)
             Write-Blank
 
             try {
@@ -783,14 +788,45 @@ if ($NoModel) {
             }
         }
     } else {
-        # Legacy binary fallback
-        $ModelPath = Join-Path $DataDir "models\jina-embeddings-v2-base-code\model.onnx"
-        if (Test-Path $ModelPath) {
+        # Legacy binary fallback — accept either the current CodeRankEmbed path or the
+        # old jina-embeddings-v2-base-code path so cached installations heal automatically.
+        $ModelPathNew = Join-Path $DataDir "models\CodeRankEmbed\model.onnx"
+        $ModelPathLegacy = Join-Path $DataDir "models\jina-embeddings-v2-base-code\model.onnx"
+        $ModelPath = if (Test-Path $ModelPathNew) { $ModelPathNew } `
+                     elseif (Test-Path $ModelPathLegacy) { $ModelPathLegacy } `
+                     else { $null }
+        if ($ModelPath) {
             $sizeMb = [math]::Round((Get-Item $ModelPath).Length / 1MB, 0)
             Write-Ok ("Model ready (cached)  " + $DIM + "($sizeMb MB)" + $RESET)
         } else {
             Write-Info "Legacy binary detected — model will be initialized on first index."
             Write-Info "Run: ${DIM}omnicontext index .${RESET}  in your project directory."
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
+# step 6b - reranker model (bge-reranker-v2-m3, ~568 MB)
+# ---------------------------------------------------------------------------
+if (-not $NoModel -and -not $NoReranker) {
+    Write-Blank
+    Write-Step "6b" "Setting up cross-encoder reranker (bge-reranker-v2-m3)"
+    $helpText = & $OutExe --help 2>&1 | Out-String
+    if ($helpText -like "*setup*") {
+        try {
+            & $OutExe setup reranker-download
+            Write-Ok ("Reranker model ready: " + $BOLD + "bge-reranker-v2-m3" + $RESET)
+        } catch {
+            Write-Warn "Reranker download interrupted or failed: $_"
+            Write-Info "Run later: ${DIM}omnicontext setup reranker-download${RESET}"
+        }
+    } else {
+        # Legacy fallback
+        $RerankerPath = Join-Path $DataDir "models\bge-reranker-v2-m3\model.onnx"
+        if (Test-Path $RerankerPath) {
+            Write-Ok "Reranker model ready (cached)"
+        } else {
+            Write-Info "Reranker will be downloaded on first search requiring reranking."
         }
     }
 }
