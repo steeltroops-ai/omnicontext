@@ -2657,7 +2657,7 @@ checksum = "830b246a0e5f20af87141b25c173cd1b609bd7779a4617d6ec582abaf90870f3"
 
 [[package]]
 name = "omni-cli"
-version = "1.3.1"
+version = "1.3.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -2672,7 +2672,7 @@ dependencies = [
 
 [[package]]
 name = "omni-core"
-version = "1.3.1"
+version = "1.3.2"
 dependencies = [
  "bincode",
  "criterion",
@@ -2722,7 +2722,7 @@ dependencies = [
 
 [[package]]
 name = "omni-daemon"
-version = "1.3.1"
+version = "1.3.2"
 dependencies = [
  "anyhow",
  "clap",
@@ -2746,7 +2746,7 @@ dependencies = [
 
 [[package]]
 name = "omni-ffi"
-version = "1.3.1"
+version = "1.3.2"
 dependencies = [
  "omni-core",
  "rusqlite",
@@ -2757,7 +2757,7 @@ dependencies = [
 
 [[package]]
 name = "omni-mcp"
-version = "1.3.1"
+version = "1.3.2"
 dependencies = [
  "anyhow",
  "axum",

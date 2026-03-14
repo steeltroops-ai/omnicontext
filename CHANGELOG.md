@@ -4,6 +4,11 @@ All notable changes to OmniContext are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.2] - 2026-03-14
+
+### Fixed
+- Fix flaky hash_cache and cloud env-var tests ([ca67f42](https://github.com/steeltroops-ai/omnicontext/commit/ca67f429577c479f1d1051efcb29e2e56318cfed))
+
 ## [1.3.1] - 2026-03-14
 
 ### Fixed
