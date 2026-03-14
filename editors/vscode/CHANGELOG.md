@@ -2,6 +2,13 @@
 
 All notable changes to the OmniContext VS Code extension are documented here.
 
+## [1.3.0] - 2026-03-14
+
+
+- migrate model surface from jina to CodeRankEmbed ([b7a1162](https://github.com/steeltroops-ai/omnicontext/commit/b7a1162))
+
+
+
 ## [1.2.3] - 2026-03-13
 
 _No direct changes in this release._

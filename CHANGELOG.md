@@ -4,6 +4,19 @@ All notable changes to OmniContext are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-03-14
+
+### Added
+- Pipeline, search, index, graph, parser, watcher improvements ([a672dc3](https://github.com/steeltroops-ai/omnicontext/commit/a672dc3dec8e91983d3b080b3f6f7f2e4187f872))
+- Expand tool registry to 29 tools; add SSE transport ([e89ea5d](https://github.com/steeltroops-ai/omnicontext/commit/e89ea5d0f741693358f63cd645ce4cc4042dad65))
+- Add SCIP interchange, rules injection, and memory store ([0fcd88b](https://github.com/steeltroops-ai/omnicontext/commit/0fcd88b9dd7c2dee6c1e151956b7cdfd0e3467ac))
+- Replace jina with CodeRankEmbed; add cloud embedder ([db75b9a](https://github.com/steeltroops-ai/omnicontext/commit/db75b9a5d1e9399b72d4850aaf7cbaec86f28451))
+- Add reranker model download step to install scripts ([d29b17f](https://github.com/steeltroops-ai/omnicontext/commit/d29b17f30bc9aa1e2466681f6722c2f7713f6ebd))
+- Add reranker-download setup subcommand ([2b471da](https://github.com/steeltroops-ai/omnicontext/commit/2b471da040a1bb2a4fe01dbeba154fed30e980e8))
+
+### Fixed
+- Migrate model surface from jina to CodeRankEmbed ([b7a1162](https://github.com/steeltroops-ai/omnicontext/commit/b7a11629647845ef7965dfa0ba697658ad9a19e6))
+
 ## [1.2.3] - 2026-03-13
 
 ### Fixed
