@@ -541,9 +541,10 @@ mod tests {
         }
 
         // On Windows the NTFS mtime resolution is 100 ns, but the kernel may
-        // batch updates within the same tick. Sleep 2 ms to guarantee the mtime
-        // of the rewritten file is strictly later than the cached entry.
-        std::thread::sleep(std::time::Duration::from_millis(2));
+        // batch updates within the same tick. Sleep 20 ms to guarantee the mtime
+        // of the rewritten file is strictly later than the cached entry, even
+        // under heavy CI load where the scheduler may delay the sleep.
+        std::thread::sleep(std::time::Duration::from_millis(20));
 
         // check_and_read must detect the change
         let (changed2, content2) = cache.check_and_read(&path).expect("second");
