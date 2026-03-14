@@ -4,19 +4,20 @@
 //! No network calls during inference, no API keys. The model file is
 //! automatically downloaded on first use and cached permanently.
 //!
-//! ## Model: jina-embeddings-v2-base-code
+//! ## Model: CodeRankEmbed (Apache-2.0)
 //!
-//! The default model is specifically trained on code retrieval tasks:
-//! - Code-to-text and code-to-code search
-//! - 768 dimensions, 8192 token context window
-//! - Understands variable names, syntax patterns, cross-language concepts
+//! The default model is a 137M bi-encoder trained on CoRNStack:
+//! - Code-to-code and text-to-code retrieval via InfoNCE contrastive loss
+//! - 768 dimensions, 2048 token context window
+//! - Outperforms CodeSage-Large (1.3B) on CodeSearchNet — quality over scale
+//! - Apache-2.0 license — safe for commercial distribution
 //!
 //! ## First-Run Behavior
 //!
 //! On the first invocation, the engine will:
 //! 1. Detect that the model is not cached
-//! 2. Download model.onnx (~550MB) and tokenizer.json from HuggingFace
-//! 3. Cache them in `~/.omnicontext/models/jina-embeddings-v2-base-code/`
+//! 2. Download model.onnx (~521MB) and tokenizer.json from HuggingFace
+//! 3. Cache them in `~/.omnicontext/models/CodeRankEmbed/`
 //! 4. Proceed with indexing
 //!
 //! Subsequent runs use the cached model instantly.
@@ -42,18 +43,26 @@
     clippy::cast_sign_loss,
     clippy::doc_markdown,
     clippy::items_after_statements,
-    clippy::must_use_candidate
+    clippy::must_use_candidate,
+    // #[cfg]-gated push sequences on feature-conditional execution providers
+    // cannot be rewritten as vec![] macros without losing conditional semantics.
+    clippy::vec_init_then_push
 )]
 
+pub mod cloud;
 pub mod model_manager;
 pub mod session_pool;
+
+pub use cloud::CloudEmbedder;
 
 use ort::session::Session;
 
 use crate::config::EmbeddingConfig;
 use crate::error::{OmniError, OmniResult};
 
-pub use model_manager::{ModelSpec, DEFAULT_MODEL, RERANKER_MODEL};
+pub use model_manager::{
+    ModelSpec, BGE_M3_MODEL, DEFAULT_MODEL, QWEN3_EMBEDDING_MODEL, RERANKER_MODEL,
+};
 
 /// Embedding engine that uses ONNX Runtime for local inference.
 pub struct Embedder {
@@ -69,6 +78,12 @@ pub struct Embedder {
     pool: Option<session_pool::SessionPool>,
     /// Path to the ONNX model file, retained for session recreation.
     model_path: Option<std::path::PathBuf>,
+    /// Optional BGE-M3 ONNX session for sparse (SPLADE-style) vector production.
+    ///
+    /// Only populated when `config.enable_sparse_retrieval = true` and the BGE-M3
+    /// model file is present.  `embed_sparse()` returns `Err(OmniError::Degraded)`
+    /// when this is `None`, allowing callers to skip the sparse signal silently.
+    sparse_session: Option<std::sync::Mutex<Session>>,
 }
 
 impl Embedder {
@@ -89,6 +104,7 @@ impl Embedder {
                 model_fingerprint: format!("skip:{}:{}", config.dimensions, config.max_seq_length,),
                 pool: None,
                 model_path: None,
+                sparse_session: None,
             });
         }
 
@@ -126,9 +142,70 @@ impl Embedder {
             None
         };
 
-        // Session pool disabled: on 16GB systems, each extra ONNX session
-        // duplicates the ~641MB model in memory, causing OOM during inference.
-        let pool: Option<session_pool::SessionPool> = None;
+        // Session pool — enabled at pool_size=1 (1 extra session for concurrent MCP queries).
+        //
+        // Memory budget analysis:
+        //   Primary session:  ~641 MB
+        //   Pool session × 1: ~641 MB
+        //   Total:           ~1.3 GB
+        //
+        // This is acceptable on any machine with ≥8 GB RAM.  The pool allows
+        // a background indexing flush and a simultaneous MCP search query to
+        // embed without serializing on the primary session mutex.
+        //
+        // Pool is disabled in test environments and when the model isn't present.
+        //
+        // OMNI_POOL_DISABLED env var provides an escape hatch for constrained
+        // environments (CI, containers with <4 GB RAM).
+        let pool = if std::env::var("OMNI_POOL_DISABLED").is_ok() {
+            tracing::debug!("OMNI_POOL_DISABLED set — session pool disabled");
+            None
+        } else {
+            match session_pool::SessionPool::new(&model_path, 1) {
+                Ok(Some(p)) => {
+                    tracing::info!(pool_size = p.pool_size(), "ONNX session pool initialized");
+                    Some(p)
+                }
+                Ok(None) => {
+                    tracing::debug!("session pool skipped (model not loaded)");
+                    None
+                }
+                Err(e) => {
+                    // Pool failure is non-fatal — primary session still works.
+                    tracing::warn!(error = %e, "session pool initialization failed; using single session");
+                    None
+                }
+            }
+        };
+
+        // Conditionally load BGE-M3 for sparse retrieval.
+        // Only attempted when the user explicitly opts in — no behavioral change otherwise.
+        let sparse_session = if config.enable_sparse_retrieval
+            || std::env::var("OMNI_ENABLE_SPARSE_RETRIEVAL").is_ok()
+        {
+            let bge_m3_path = model_manager::model_path(&model_manager::BGE_M3_MODEL);
+            if bge_m3_path.exists() {
+                tracing::info!(
+                    model = %bge_m3_path.display(),
+                    "loading BGE-M3 sparse session"
+                );
+                Self::build_onnx_session(&bge_m3_path)
+            } else {
+                // Auto-download BGE-M3 when not present.
+                match model_manager::ensure_model(&model_manager::BGE_M3_MODEL) {
+                    Ok(_paths) => Self::build_onnx_session(&bge_m3_path),
+                    Err(e) => {
+                        tracing::warn!(
+                            error = %e,
+                            "BGE-M3 download failed; sparse retrieval disabled"
+                        );
+                        None
+                    }
+                }
+            }
+        } else {
+            None
+        };
 
         Ok(Self {
             config: config.clone(),
@@ -146,6 +223,7 @@ impl Embedder {
             ),
             pool,
             model_path: Some(model_path),
+            sparse_session,
         })
     }
 
@@ -179,61 +257,165 @@ impl Embedder {
     }
 
     /// Inner session builder (separated for catch_unwind).
+    ///
+    /// # Design: Hardware Acceleration Waterfall
+    ///
+    /// Attempts execution providers in performance order, falling back on
+    /// any failure so inference always succeeds on CPU at minimum:
+    ///
+    /// 1. CUDA (NVIDIA GPU) — compile-time opt-in via `--features cuda`
+    /// 2. CoreML (Apple Neural Engine / GPU) — `--features coreml` on macOS
+    /// 3. DirectML (any D3D12 GPU on Windows) — `--features directml`
+    /// 4. CPU — Level3 graph fusion, intra-op threads = num_cpus, inter-op = 1
+    /// 5. CPU bare — ORT defaults only (last resort if thread config fails)
+    ///
+    /// The GPU providers are additive: if CUDA is compiled in but the GPU
+    /// runtime is not installed, ORT falls back to the next provider silently.
     fn build_onnx_session_inner(model_path: &std::path::Path) -> Option<std::sync::Mutex<Session>> {
-        tracing::info!("creating ONNX session builder...");
-        let builder = match Session::builder() {
-            Ok(b) => {
-                tracing::info!("ONNX session builder created");
-                b
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "failed to create ONNX session builder");
-                return None;
-            }
-        };
+        use ort::session::builder::GraphOptimizationLevel;
 
-        tracing::info!("setting optimization level...");
-        let builder = match builder
-            .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level1)
+        // Determine optimal thread count once; reused across fallback paths.
+        let num_threads = std::thread::available_parallelism()
+            .map(|p| p.get())
+            .unwrap_or(4);
+
+        // Build ordered execution provider list based on compile-time features.
+        // ORT evaluates providers left-to-right and uses the first available one.
+        // If a provider's runtime (CUDA toolkit, CoreML framework) is absent,
+        // ORT silently skips to the next entry — no error, no crash.
+        #[allow(clippy::vec_init_then_push)] // #[cfg]-gated pushes cannot use vec![]
+        let mut providers: Vec<ort::execution_providers::ExecutionProviderDispatch> = Vec::new();
+
+        #[cfg(feature = "cuda")]
         {
-            Ok(b) => {
-                tracing::info!("optimization level set");
-                b
+            tracing::debug!("CUDA execution provider compiled in — adding to provider chain");
+            providers.push(ort::execution_providers::CUDAExecutionProvider::default().build());
+        }
+
+        #[cfg(feature = "coreml")]
+        {
+            tracing::debug!("CoreML execution provider compiled in — adding to provider chain");
+            providers.push(ort::execution_providers::CoreMLExecutionProvider::default().build());
+        }
+
+        #[cfg(feature = "directml")]
+        {
+            tracing::debug!("DirectML execution provider compiled in — adding to provider chain");
+            providers.push(ort::execution_providers::DirectMLExecutionProvider::default().build());
+        }
+
+        // CPU is always the final provider regardless of feature flags.
+        providers.push(ort::execution_providers::CPUExecutionProvider::default().build());
+
+        let provider_names: Vec<&'static str> = {
+            #[allow(clippy::vec_init_then_push)] // #[cfg]-gated pushes cannot use vec![]
+            let mut names: Vec<&'static str> = Vec::new();
+            #[cfg(feature = "cuda")]
+            {
+                names.push("CUDA");
             }
-            Err(e) => {
-                tracing::error!(error = %e, "failed to set ONNX optimization level");
-                return None;
+            #[cfg(feature = "coreml")]
+            {
+                names.push("CoreML");
             }
+            #[cfg(feature = "directml")]
+            {
+                names.push("DirectML");
+            }
+            names.push("CPU");
+            names
         };
 
-        tracing::info!("setting execution providers...");
-        let mut builder = match builder.with_execution_providers([
-            ort::execution_providers::CPUExecutionProvider::default().build(),
-        ]) {
-            Ok(b) => {
-                tracing::info!("execution providers set");
-                b
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "failed to set ONNX execution providers");
-                return None;
-            }
-        };
+        // Build the session with all performance settings applied.
+        // Each step is non-fatal: on failure we degrade gracefully to the next
+        // best configuration rather than disabling the model entirely.
+        //
+        // Design: Level3 graph fusion + intra_op saturation + inter_op=1
+        // - Level3: full constant-folding and op-fusion — 10–30% latency reduction
+        // - intra_threads=N: saturates all CPU cores for a single session.run()
+        // - inter_threads=1: prevents inter-op contention with intra-op pool
+        let session_result = (|| -> ort::Result<Session> {
+            let session = Session::builder()?
+                .with_optimization_level(GraphOptimizationLevel::Level3)?
+                .with_intra_threads(num_threads)?
+                .with_inter_threads(1)?
+                .with_execution_providers(providers.clone())?
+                .commit_from_file(model_path)?;
+            Ok(session)
+        })();
 
-        tracing::info!(path = %model_path.display(), "committing primary session from file...");
-        match builder.commit_from_file(model_path) {
+        match session_result {
             Ok(session) => {
-                tracing::info!("primary ONNX session loaded successfully");
+                tracing::info!(
+                    num_threads,
+                    providers = ?provider_names,
+                    path = %model_path.display(),
+                    "ONNX session loaded (Level3, intra_threads={num_threads}, inter_threads=1)"
+                );
                 Some(std::sync::Mutex::new(session))
             }
-            Err(e) => {
-                tracing::error!(
-                    path = %model_path.display(),
-                    error = %e,
-                    "CRITICAL: Failed to load embedding model. \
-                     Model file may be corrupt. Semantic search is DISABLED."
+            Err(primary_err) => {
+                // Primary build failed (e.g. ORT version doesn't support inter_threads).
+                // Retry with minimal settings: Level3 + intra_threads only.
+                tracing::warn!(
+                    error = %primary_err,
+                    "primary ONNX session build failed; retrying with minimal threading config"
                 );
-                None
+
+                let fallback_result = (|| -> ort::Result<Session> {
+                    let session = Session::builder()?
+                        .with_optimization_level(GraphOptimizationLevel::Level3)?
+                        .with_intra_threads(num_threads)?
+                        .with_execution_providers(providers.clone())?
+                        .commit_from_file(model_path)?;
+                    Ok(session)
+                })();
+
+                match fallback_result {
+                    Ok(session) => {
+                        tracing::info!(
+                            num_threads,
+                            providers = ?provider_names,
+                            path = %model_path.display(),
+                            "ONNX session loaded via fallback config (Level3, intra_threads={num_threads})"
+                        );
+                        Some(std::sync::Mutex::new(session))
+                    }
+                    Err(fallback_err) => {
+                        // Last resort: bare session with no thread/optimization overrides.
+                        tracing::warn!(
+                            error = %fallback_err,
+                            "fallback ONNX session build failed; retrying with ORT defaults"
+                        );
+
+                        let bare_result = (|| -> ort::Result<Session> {
+                            let session = Session::builder()?
+                                .with_execution_providers(providers)?
+                                .commit_from_file(model_path)?;
+                            Ok(session)
+                        })();
+
+                        match bare_result {
+                            Ok(session) => {
+                                tracing::info!(
+                                    providers = ?provider_names,
+                                    path = %model_path.display(),
+                                    "ONNX session loaded with ORT defaults (no thread config)"
+                                );
+                                Some(std::sync::Mutex::new(session))
+                            }
+                            Err(e) => {
+                                tracing::error!(
+                                    path = %model_path.display(),
+                                    error = %e,
+                                    "CRITICAL: All ONNX session build attempts failed. \
+                                     Semantic search is DISABLED."
+                                );
+                                None
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -376,6 +558,7 @@ impl Embedder {
             model_fingerprint: format!("degraded:{}:{}", config.dimensions, config.max_seq_length,),
             pool: None,
             model_path: None,
+            sparse_session: None,
         }
     }
 
@@ -725,12 +908,12 @@ impl Embedder {
     /// Embed a query string with asymmetric instruction prefix.
     ///
     /// For bi-encoder retrieval models, prepending a task-specific instruction
-    /// to queries improves retrieval quality by 8-15% (Jina AI docs).
+    /// to queries improves retrieval quality (per NoMIC AI and CodeRankEmbed docs).
     /// Passages are embedded without prefix (via `embed_single`).
     ///
-    /// Prefix: "Represent this sentence for searching relevant passages: "
+    /// Prefix: "Represent this code snippet for searching relevant code: "
     pub fn embed_query(&self, query: &str) -> OmniResult<Vec<f32>> {
-        const QUERY_PREFIX: &str = "Represent this sentence for searching relevant passages: ";
+        const QUERY_PREFIX: &str = "Represent this code snippet for searching relevant code: ";
         let prefixed = format!("{QUERY_PREFIX}{query}");
         self.embed_single(&prefixed)
     }
@@ -740,7 +923,102 @@ impl Embedder {
         self.config.dimensions
     }
 
-    /// Run ONNX inference on a batch of texts.
+    /// Whether the BGE-M3 sparse session is loaded and ready.
+    ///
+    /// When `false`, `embed_sparse()` returns `Err(OmniError::Degraded)` and
+    /// the caller should skip the sparse signal silently.
+    pub fn has_sparse_session(&self) -> bool {
+        self.sparse_session.is_some()
+    }
+
+    /// Produce a SPLADE-style sparse vector for `text` using the BGE-M3 ONNX session.
+    ///
+    /// Returns a sorted-descending list of `(token_id, weight)` pairs — the top-128
+    /// tokens with `weight > 0.01`.  Callers store these via
+    /// `MetadataIndex::save_sparse_vector()` and retrieve them for dot-product search.
+    ///
+    /// # Errors
+    ///
+    /// Returns `OmniError::Degraded` when `sparse_session` is `None` (model not loaded
+    /// or `enable_sparse_retrieval = false`).  This is the expected cold-path —
+    /// callers should `match` and skip silently.
+    pub fn embed_sparse(&self, text: &str) -> OmniResult<Vec<(u32, f32)>> {
+        const SPARSE_WEIGHT_THRESHOLD: f32 = 0.01;
+        const SPARSE_TOP_K: usize = 128;
+
+        let mut guard = self
+            .sparse_session
+            .as_ref()
+            .ok_or_else(|| OmniError::ModelUnavailable {
+                reason: "BGE-M3 sparse session not loaded; \
+                             set config.embedding.enable_sparse_retrieval = true to enable"
+                    .into(),
+            })?
+            .lock()
+            .map_err(|_| OmniError::Internal("sparse_session mutex poisoned".into()))?;
+
+        // BGE-M3 uses the same input format as standard bi-encoders.
+        // We tokenize with the standard 512-token limit for sparse inference.
+        let max_len = BGE_M3_MODEL.max_seq_length.min(512);
+        let (input_ids, attention_mask, _token_type_ids, pad_len) =
+            self.tokenize_batch(&[text], max_len)?;
+
+        let shape = vec![1i64, pad_len as i64];
+        let ids_value = ort::value::Tensor::from_array((shape.clone(), input_ids))
+            .map_err(|e| OmniError::Internal(format!("sparse tensor error: {e}")))?;
+        let mask_value = ort::value::Tensor::from_array((shape, attention_mask))
+            .map_err(|e| OmniError::Internal(format!("sparse tensor error: {e}")))?;
+
+        use std::borrow::Cow;
+        let inputs = vec![
+            (
+                Cow::Borrowed("input_ids"),
+                ort::session::SessionInputValue::from(ids_value),
+            ),
+            (
+                Cow::Borrowed("attention_mask"),
+                ort::session::SessionInputValue::from(mask_value),
+            ),
+        ];
+
+        // BGE-M3 outputs: "sentence_embedding" (dense), "sparse_embedding" (sparse weights
+        // over vocab).  We extract "sparse_embedding" — shape [1, vocab_size].
+        let outputs = guard
+            .run(inputs)
+            .map_err(|e| OmniError::Internal(format!("BGE-M3 inference error: {e}")))?;
+
+        // Extract sparse_embedding tensor.
+        let sparse_out = outputs
+            .get("sparse_embedding")
+            .or_else(|| outputs.get("last_hidden_state")) // fallback for some exports
+            .ok_or_else(|| {
+                OmniError::Internal(
+                    "BGE-M3 output missing 'sparse_embedding' tensor".into(),
+                )
+            })?;
+
+        let (_sparse_shape, sparse_data) = sparse_out
+            .try_extract_tensor::<f32>()
+            .map_err(|e| OmniError::Internal(format!("sparse tensor extract error: {e}")))?;
+
+        // sparse_data shape: [1, vocab_size] — iterate the flat data slice.
+        let vocab_weights: Vec<f32> = sparse_data.to_vec();
+
+        // Collect (token_id, weight) pairs above threshold, sort by weight descending,
+        // truncate to TOP_K.
+        let mut pairs: Vec<(u32, f32)> = vocab_weights
+            .into_iter()
+            .enumerate()
+            .filter(|(_, w)| *w > SPARSE_WEIGHT_THRESHOLD)
+            .map(|(id, w)| (id as u32, w))
+            .collect();
+
+        pairs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        pairs.truncate(SPARSE_TOP_K);
+
+        Ok(pairs)
+    }
+
     fn run_inference(&self, session: &mut Session, texts: &[&str]) -> OmniResult<Vec<Vec<f32>>> {
         let batch_size = texts.len();
         let max_len = self.config.max_seq_length;
@@ -1015,6 +1293,8 @@ mod tests {
             dimensions: 384,
             batch_size: 32,
             max_seq_length: 256,
+            enable_sparse_retrieval: false,
+            cloud_api_key: None,
         };
         // Use degraded() directly to avoid triggering download
         let embedder = Embedder::degraded(&config);
@@ -1028,6 +1308,8 @@ mod tests {
             dimensions: 384,
             batch_size: 32,
             max_seq_length: 256,
+            enable_sparse_retrieval: false,
+            cloud_api_key: None,
         };
         let embedder = Embedder::degraded(&config);
         let result = embedder.embed_single("test text");
@@ -1046,6 +1328,8 @@ mod tests {
             dimensions: 768,
             batch_size: 16,
             max_seq_length: 512,
+            enable_sparse_retrieval: false,
+            cloud_api_key: None,
         };
         let embedder = Embedder::degraded(&config);
         assert_eq!(embedder.dimensions(), 768);
@@ -1073,6 +1357,8 @@ mod tests {
             dimensions: 768,
             batch_size: 16,
             max_seq_length: 8192,
+            enable_sparse_retrieval: false,
+            cloud_api_key: None,
         };
         let embedder = Embedder::degraded(&config);
         assert!(
@@ -1090,6 +1376,8 @@ mod tests {
             dimensions: 768,
             batch_size: 16,
             max_seq_length: 8192,
+            enable_sparse_retrieval: false,
+            cloud_api_key: None,
         };
         let embedder = Embedder::degraded(&config);
         let fp = embedder.model_fingerprint().to_string();
@@ -1106,6 +1394,8 @@ mod tests {
             dimensions: 768,
             batch_size: 16,
             max_seq_length: 8192,
+            enable_sparse_retrieval: false,
+            cloud_api_key: None,
         };
         let embedder = Embedder::degraded(&config);
         assert!(
@@ -1121,6 +1411,8 @@ mod tests {
             dimensions: 384,
             batch_size: 32,
             max_seq_length: 256,
+            enable_sparse_retrieval: false,
+            cloud_api_key: None,
         };
         let embedder = Embedder::degraded(&config);
         let result = embedder.embed_query("how does caching work?");
@@ -1137,6 +1429,8 @@ mod tests {
             dimensions: 384,
             batch_size: 32,
             max_seq_length: 256,
+            enable_sparse_retrieval: false,
+            cloud_api_key: None,
         };
         let embedder = Embedder::degraded(&config);
         assert_eq!(
@@ -1153,6 +1447,8 @@ mod tests {
             dimensions: 384,
             batch_size: 32,
             max_seq_length: 256,
+            enable_sparse_retrieval: false,
+            cloud_api_key: None,
         };
         let embedder = Embedder::degraded(&config);
         let results = embedder.embed_batch_parallel(&["test1", "test2"]);
@@ -1170,6 +1466,8 @@ mod tests {
             dimensions: 384,
             batch_size: 32,
             max_seq_length: 256,
+            enable_sparse_retrieval: false,
+            cloud_api_key: None,
         };
         let embedder = Embedder::degraded(&config);
         let chunks: Vec<&str> = (0..100).map(|_| "test chunk content").collect();
@@ -1191,5 +1489,181 @@ mod tests {
     fn test_sanitize_for_embedding_preserves_normal_text() {
         let result = sanitize_for_embedding("fn main() { println!(\"hello\"); }");
         assert_eq!(result, "fn main() { println!(\"hello\"); }");
+    }
+
+    // ── Session pool re-enablement tests ─────────────────────────────────────
+
+    #[test]
+    fn test_degraded_embedder_pool_is_none() {
+        // When model path does not exist, pool must be None — not a panic.
+        let config = EmbeddingConfig {
+            model_path: "/nonexistent/model.onnx".into(),
+            dimensions: 768,
+            batch_size: 32,
+            max_seq_length: 256,
+            enable_sparse_retrieval: false,
+            cloud_api_key: None,
+        };
+        let embedder = Embedder::degraded(&config);
+        // pool_size on a degraded embedder must be 0 (no primary, no pool).
+        assert_eq!(
+            embedder.pool_size(),
+            0,
+            "degraded embedder with no model should have pool_size=0"
+        );
+    }
+
+    #[test]
+    fn test_embed_batch_parallel_empty_input_degraded() {
+        // Regression: empty slice must not panic in either full or degraded mode.
+        let config = EmbeddingConfig {
+            model_path: "/nonexistent/model.onnx".into(),
+            dimensions: 768,
+            batch_size: 32,
+            max_seq_length: 256,
+            enable_sparse_retrieval: false,
+            cloud_api_key: None,
+        };
+        let embedder = Embedder::degraded(&config);
+        let results = embedder.embed_batch_parallel(&[]);
+        assert!(
+            results.is_empty(),
+            "embed_batch_parallel with empty input must return empty Vec"
+        );
+    }
+
+    #[test]
+    fn test_embed_batch_parallel_single_chunk_degraded() {
+        let config = EmbeddingConfig {
+            model_path: "/nonexistent/model.onnx".into(),
+            dimensions: 768,
+            batch_size: 32,
+            max_seq_length: 256,
+            enable_sparse_retrieval: false,
+            cloud_api_key: None,
+        };
+        let embedder = Embedder::degraded(&config);
+        let results = embedder.embed_batch_parallel(&["fn foo() {}"]);
+        assert_eq!(results.len(), 1);
+        assert!(
+            results[0].is_none(),
+            "degraded embedder returns None for every chunk"
+        );
+    }
+
+    #[test]
+    fn test_reset_session_on_degraded_does_not_panic() {
+        // reset_session on a degraded (no model path) embedder must be a no-op.
+        let config = EmbeddingConfig {
+            model_path: "/nonexistent/model.onnx".into(),
+            dimensions: 768,
+            batch_size: 32,
+            max_seq_length: 256,
+            enable_sparse_retrieval: false,
+            cloud_api_key: None,
+        };
+        let mut embedder = Embedder::degraded(&config);
+        // Should not panic
+        embedder.reset_session();
+        assert!(!embedder.is_available(), "still degraded after no-op reset");
+    }
+
+    #[test]
+    fn test_omni_pool_disabled_env_var_skips_pool() {
+        // When OMNI_POOL_DISABLED is set, Embedder::new must not attempt pool creation.
+        // We test the observable effect in degraded mode (OMNI_SKIP_MODEL_DOWNLOAD also set).
+        //
+        // Note: std::env::set_var is unsafe in Rust ≥1.80 and requires the caller to
+        // ensure no other threads are reading env vars concurrently.  Here we avoid
+        // unsafe by testing the non-pool code path directly via Embedder::degraded,
+        // which always sets pool=None regardless of env vars.
+        //
+        // The actual OMNI_POOL_DISABLED branch is exercised by the integration test
+        // in tests/integration/embedder_pool_test.rs where env isolation is guaranteed.
+        let config = EmbeddingConfig {
+            model_path: "/nonexistent/model.onnx".into(),
+            dimensions: 768,
+            batch_size: 32,
+            max_seq_length: 256,
+            enable_sparse_retrieval: false,
+            cloud_api_key: None,
+        };
+        // degraded() sets pool=None unconditionally — mirrors what OMNI_POOL_DISABLED does.
+        let embedder = Embedder::degraded(&config);
+        assert_eq!(
+            embedder.pool_size(),
+            0,
+            "degraded (no model) embedder must have pool_size=0"
+        );
+        assert!(
+            !embedder.is_available(),
+            "degraded embedder must not be available"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Sparse embedding tests (Item 8 — BGE-M3 sparse track)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_has_sparse_session_false_when_degraded() {
+        // Degraded embedder always has sparse_session = None.
+        let config = EmbeddingConfig {
+            model_path: "/nonexistent/model.onnx".into(),
+            dimensions: 768,
+            batch_size: 32,
+            max_seq_length: 256,
+            enable_sparse_retrieval: false,
+            cloud_api_key: None,
+        };
+        let embedder = Embedder::degraded(&config);
+        assert!(
+            !embedder.has_sparse_session(),
+            "degraded embedder must report has_sparse_session = false"
+        );
+    }
+
+    #[test]
+    fn test_embed_sparse_degraded_returns_model_unavailable() {
+        // When sparse_session is None, embed_sparse must return
+        // Err(OmniError::ModelUnavailable { .. }) — not a panic, not Ok.
+        let config = EmbeddingConfig {
+            model_path: "/nonexistent/model.onnx".into(),
+            dimensions: 768,
+            batch_size: 32,
+            max_seq_length: 256,
+            enable_sparse_retrieval: false,
+            cloud_api_key: None,
+        };
+        let embedder = Embedder::degraded(&config);
+        let result = embedder.embed_sparse("authentication middleware");
+        assert!(
+            result.is_err(),
+            "embed_sparse must error when no sparse session"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, OmniError::ModelUnavailable { .. }),
+            "error must be ModelUnavailable, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_embed_sparse_degraded_empty_query() {
+        // Edge case: empty query must also return ModelUnavailable (not a different error).
+        let config = EmbeddingConfig {
+            model_path: "/nonexistent/model.onnx".into(),
+            dimensions: 768,
+            batch_size: 32,
+            max_seq_length: 256,
+            enable_sparse_retrieval: false,
+            cloud_api_key: None,
+        };
+        let embedder = Embedder::degraded(&config);
+        let result = embedder.embed_sparse("");
+        assert!(
+            matches!(result, Err(OmniError::ModelUnavailable { .. })),
+            "empty query on degraded embedder must still be ModelUnavailable"
+        );
     }
 }

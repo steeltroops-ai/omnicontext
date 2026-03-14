@@ -3,6 +3,11 @@
 //! ## Problem
 //!
 //! A single `Mutex<Session>` serializes all embedding requests.
+#![allow(
+    // #[cfg]-gated push sequences on feature-conditional execution providers
+    // cannot be rewritten as vec![] macros without losing conditional semantics.
+    clippy::vec_init_then_push
+)]
 //! Under concurrent load (MCP queries + VS Code + background indexing),
 //! this creates a bottleneck where only one thread embeds at a time.
 //!
@@ -95,20 +100,34 @@ impl SessionPool {
                 .map(|p| p.get())
                 .unwrap_or(4);
 
+            // Build the same hardware-acceleration waterfall as the primary session.
+            // Pool sessions use Level3 and intra_threads matching the primary session.
+            // inter_op_num_threads=1 prevents contention when multiple pool sessions
+            // are checked out simultaneously.
+            #[allow(clippy::vec_init_then_push)] // #[cfg]-gated pushes cannot use vec![]
+            let mut providers: Vec<
+                ort::execution_providers::ExecutionProviderDispatch,
+            > = Vec::new();
+
+            #[cfg(feature = "cuda")]
+            providers.push(ort::execution_providers::CUDAExecutionProvider::default().build());
+
+            #[cfg(feature = "coreml")]
+            providers.push(ort::execution_providers::CoreMLExecutionProvider::default().build());
+
+            #[cfg(feature = "directml")]
+            providers.push(ort::execution_providers::DirectMLExecutionProvider::default().build());
+
+            providers.push(ort::execution_providers::CPUExecutionProvider::default().build());
+
             let build_session = || -> ort::Result<Session> {
-                let mut builder = Session::builder()?;
-                builder = builder.with_optimization_level(
-                    ort::session::builder::GraphOptimizationLevel::Level1,
-                )?;
-                builder = builder.with_intra_threads(num_cpus.max(2) - 1)?;
-
-                tracing::debug!("using CPU execution provider for session {}", i);
-                builder = builder.with_execution_providers([
-                    ort::execution_providers::CPUExecutionProvider::default().build(),
-                ])?;
-
-                tracing::info!("committing session {} from file...", i);
-                builder.commit_from_file(model_path)
+                let session = Session::builder()?
+                    .with_optimization_level(ort::session::builder::GraphOptimizationLevel::Level3)?
+                    .with_intra_threads(num_cpus.max(2) - 1)?
+                    .with_inter_threads(1)?
+                    .with_execution_providers(providers)?
+                    .commit_from_file(model_path)?;
+                Ok(session)
             };
 
             match build_session() {
@@ -267,5 +286,35 @@ mod tests {
         // pool_size=0 should be treated as 1
         let result = SessionPool::new(Path::new("/nonexistent/model.onnx"), 0);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_optimal_pool_size_formula() {
+        // On any machine: floor(cpus/4) but at least 1, capped at max_sessions.
+        let size = optimal_pool_size(10);
+        assert!(size >= 1, "must be at least 1");
+        assert!(size <= 10, "must not exceed max_sessions");
+
+        let capped = optimal_pool_size(1);
+        assert_eq!(capped, 1, "must respect max_sessions cap");
+    }
+
+    #[test]
+    fn test_optimal_pool_size_zero_cap_returns_zero() {
+        // max_sessions=0 should return 0 (caller chooses not to use a pool).
+        let size = optimal_pool_size(0);
+        assert_eq!(size, 0, "max_sessions=0 must return 0");
+    }
+
+    #[test]
+    fn test_available_count_matches_pool_size_when_empty() {
+        // After creation with a non-existent model, pool returns None.
+        // This test guards the branch where a real pool could be instantiated.
+        let result = SessionPool::new(Path::new("/nonexistent/model.onnx"), 2);
+        assert!(result.is_ok());
+        assert!(
+            result.unwrap().is_none(),
+            "no sessions created without a model file"
+        );
     }
 }

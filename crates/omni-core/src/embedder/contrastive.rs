@@ -54,7 +54,7 @@
 //! - [ ] Add contrastive loss function
 //! - [ ] Create training pipeline with data augmentation
 //! - [ ] Export trained model to ONNX
-//! - [ ] Benchmark against current embedder (jina-embeddings-v2-base-code)
+//! - [ ] Benchmark against current embedder (CodeRankEmbed, Apache-2.0)
 
 use crate::error::OmniResult;
 

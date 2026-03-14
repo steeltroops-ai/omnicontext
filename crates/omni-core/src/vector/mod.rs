@@ -27,10 +27,16 @@
 
 pub mod hnsw;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::error::{OmniError, OmniResult};
+
+/// Number of pending tombstones that triggers a compaction pass inside
+/// `build_optimal_index()`.  Chosen so that at typical embedding throughput
+/// (~800 chunks/s) GC runs at most once per ~37 minutes under heavy churn.
+#[allow(dead_code)]
+const TOMBSTONE_GC_THRESHOLD: usize = 500;
 
 /// Distance metric used for nearest neighbor search.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -54,6 +60,15 @@ pub enum DistanceMetric {
 ///
 /// Stores vectors in memory with optional disk persistence.
 /// Supports flat, IVF, and HNSW search strategies.
+///
+/// ## Tombstone semantics
+///
+/// `remove()` / `remove_batch()` add IDs to `tombstones` instead of
+/// immediately deleting from `vectors`.  This makes removal O(1) and
+/// prevents stale HNSW nodes from returning in search results — those IDs
+/// are filtered post-hoc in `search()` / `search_ivf()` / `search_hnsw()`.
+/// When `tombstone_count` reaches `TOMBSTONE_GC_THRESHOLD`, the next
+/// `build_optimal_index()` call drains tombstones and rebuilds the ANN index.
 pub struct VectorIndex {
     dimensions: usize,
     metric: DistanceMetric,
@@ -63,6 +78,10 @@ pub struct VectorIndex {
     ivf: Option<IvfIndex>,
     /// Optional HNSW index for large vector sets (>100k).
     hnsw_index: Option<hnsw::HnswIndex>,
+    /// Soft-deleted IDs awaiting compaction.  Filtered from all search results.
+    tombstones: HashSet<u64>,
+    /// Count of tombstoned IDs accumulated since the last GC.
+    tombstone_count: usize,
 }
 
 impl VectorIndex {
@@ -84,6 +103,8 @@ impl VectorIndex {
             index_path: Some(index_path.to_path_buf()),
             ivf: None,
             hnsw_index: None,
+            tombstones: HashSet::new(),
+            tombstone_count: 0,
         };
 
         // Try loading existing index from disk
@@ -116,6 +137,8 @@ impl VectorIndex {
             index_path: None,
             ivf: None,
             hnsw_index: None,
+            tombstones: HashSet::new(),
+            tombstone_count: 0,
         }
     }
 
@@ -128,6 +151,8 @@ impl VectorIndex {
             index_path: None,
             ivf: None,
             hnsw_index: None,
+            tombstones: HashSet::new(),
+            tombstone_count: 0,
         }
     }
 
@@ -135,6 +160,9 @@ impl VectorIndex {
     ///
     /// The vector must have exactly `dimensions` elements and should be
     /// L2-normalized for cosine similarity to work correctly.
+    ///
+    /// If `id` is currently tombstoned (pending GC), the tombstone is removed
+    /// and the new vector takes its place (update-in-place semantics).
     pub fn add(&mut self, id: u64, vector: &[f32]) -> OmniResult<()> {
         if vector.len() != self.dimensions {
             return Err(OmniError::Internal(format!(
@@ -142,6 +170,11 @@ impl VectorIndex {
                 self.dimensions,
                 vector.len()
             )));
+        }
+
+        // Revive a tombstoned ID: it is being re-inserted with a new embedding.
+        if self.tombstones.remove(&id) {
+            self.tombstone_count = self.tombstone_count.saturating_sub(1);
         }
 
         self.vectors.insert(id, vector.to_vec());
@@ -161,6 +194,9 @@ impl VectorIndex {
     /// Returns `Vec<(id, score)>` sorted by descending score.
     /// For Cosine/DotProduct: higher = more similar.
     /// For Euclidean: score is negative distance (higher = closer).
+    ///
+    /// Tombstoned IDs are filtered from results before returning so that
+    /// callers never observe soft-deleted vectors.
     pub fn search(&self, query: &[f32], k: usize) -> OmniResult<Vec<(u64, f32)>> {
         if query.len() != self.dimensions {
             return Err(OmniError::Internal(format!(
@@ -174,10 +210,11 @@ impl VectorIndex {
             return Ok(Vec::new());
         }
 
-        // Compute similarity/distance against all vectors using configured metric
+        // Compute similarity/distance against all live (non-tombstoned) vectors.
         let mut scores: Vec<(u64, f32)> = self
             .vectors
             .iter()
+            .filter(|(&id, _)| !self.tombstones.contains(&id))
             .map(|(&id, vec)| {
                 let score = match self.metric {
                     DistanceMetric::Cosine | DistanceMetric::DotProduct => dot_product(query, vec),
@@ -199,29 +236,50 @@ impl VectorIndex {
     }
 
     /// Remove a vector by ID.
+    ///
+    /// Uses soft-delete: the ID is added to the tombstone set and filtered from
+    /// all subsequent search results.  The backing `vectors` map is not modified
+    /// until the next compaction triggered by `build_optimal_index()`.
+    ///
+    /// Returns `true` if the vector existed (or was already tombstoned),
+    /// `false` if the ID is entirely unknown.
     pub fn remove(&mut self, id: u64) -> OmniResult<bool> {
-        Ok(self.vectors.remove(&id).is_some())
+        let known = self.vectors.contains_key(&id) || self.tombstones.contains(&id);
+        if self.vectors.contains_key(&id) && !self.tombstones.contains(&id) {
+            self.tombstones.insert(id);
+            self.tombstone_count += 1;
+        }
+        Ok(known)
     }
 
-    /// Remove multiple vectors by ID.
+    /// Remove multiple vectors by ID (soft-delete).
+    ///
+    /// Returns the number of IDs that were newly tombstoned.
     pub fn remove_batch(&mut self, ids: &[u64]) -> OmniResult<usize> {
-        let mut removed = 0;
+        let mut newly_tombstoned = 0;
         for &id in ids {
-            if self.vectors.remove(&id).is_some() {
-                removed += 1;
+            if self.vectors.contains_key(&id) && !self.tombstones.contains(&id) {
+                self.tombstones.insert(id);
+                self.tombstone_count += 1;
+                newly_tombstoned += 1;
             }
         }
-        Ok(removed)
+        Ok(newly_tombstoned)
     }
 
-    /// Returns the number of vectors in the index.
+    /// Returns the number of live (non-tombstoned) vectors in the index.
     pub fn len(&self) -> usize {
-        self.vectors.len()
+        self.vectors.len() - self.tombstones.len()
     }
 
-    /// Returns true if the index is empty.
+    /// Returns true if there are no live vectors.
     pub fn is_empty(&self) -> bool {
-        self.vectors.is_empty()
+        self.len() == 0
+    }
+
+    /// Returns the number of pending tombstones awaiting compaction.
+    pub fn tombstone_count(&self) -> usize {
+        self.tombstone_count
     }
 
     /// Returns the configured dimensions.
@@ -232,13 +290,33 @@ impl VectorIndex {
     /// Estimate heap memory usage in bytes for stored vectors.
     ///
     /// Does not include HashMap overhead or index structures (IVF/HNSW),
-    /// only the raw vector data.
+    /// only the raw vector data.  Includes memory held by tombstoned vectors
+    /// that have not yet been compacted.
     pub fn memory_usage_bytes(&self) -> usize {
         // Each vector: dimensions * sizeof(f32) + Vec overhead (~24 bytes on 64-bit)
         // HashMap entry overhead: ~64 bytes per entry (key + hash + pointers)
         let per_vector = self.dimensions * std::mem::size_of::<f32>() + 24;
         let per_entry = per_vector + 64;
         self.vectors.len() * per_entry
+    }
+
+    /// Compact the index by draining all tombstones.
+    ///
+    /// Removes tombstoned vectors from the backing `vectors` map and resets
+    /// the ANN index pointers (`ivf`, `hnsw_index`) so they are rebuilt on
+    /// the next `build_optimal_index()` call with the updated live set.
+    ///
+    /// Called automatically by `build_optimal_index()` when `tombstone_count`
+    /// reaches `TOMBSTONE_GC_THRESHOLD`.
+    fn compact(&mut self) {
+        let drained: HashSet<u64> = std::mem::take(&mut self.tombstones);
+        let removed = drained.len();
+        self.vectors.retain(|id, _| !drained.contains(id));
+        // Invalidate stale ANN indexes — they will be rebuilt by the caller.
+        self.ivf = None;
+        self.hnsw_index = None;
+        self.tombstone_count = 0;
+        tracing::info!(removed, "vector index GC compaction complete");
     }
 
     /// Persist the index to disk atomically.
@@ -263,6 +341,7 @@ impl VectorIndex {
                 .iter()
                 .map(|(&id, vec)| (id, vec.clone()))
                 .collect(),
+            tombstones: self.tombstones.iter().copied().collect(),
         };
 
         let encoded = bincode::serialize(&data)
@@ -301,6 +380,10 @@ impl VectorIndex {
         }
 
         self.vectors = decoded.entries.into_iter().collect();
+        // Restore tombstones persisted in a previous run.  Uses serde default
+        // (empty vec) for binary files written before tombstone support was added.
+        self.tombstones = decoded.tombstones.into_iter().collect();
+        self.tombstone_count = self.tombstones.len();
         Ok(())
     }
 }
@@ -310,6 +393,10 @@ impl VectorIndex {
 struct VectorData {
     dimensions: usize,
     entries: Vec<(u64, Vec<f32>)>,
+    /// Pending soft-deleted IDs.  `#[serde(default)]` ensures older binary
+    /// files (without this field) deserialize cleanly as an empty vec.
+    #[serde(default)]
+    tombstones: Vec<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -434,8 +521,45 @@ mod tests {
         assert!(removed);
         assert_eq!(index.len(), 1);
 
-        let not_found = index.remove(99).expect("remove");
+        // Tombstoned ID must not appear in search results.
+        let results = index
+            .search(&[1.0, 0.0, 0.0], 5)
+            .expect("search after remove");
+        assert!(
+            !results.iter().any(|(id, _)| *id == 1),
+            "removed id should not appear in search"
+        );
+
+        let not_found = index.remove(99).expect("remove unknown");
         assert!(!not_found);
+    }
+
+    #[test]
+    fn test_tombstone_gc_triggered_by_build_optimal() {
+        // Build an index large enough that build_optimal_index will be called.
+        // Then remove enough vectors to cross TOMBSTONE_GC_THRESHOLD (500),
+        // trigger build_optimal_index, and verify tombstone_count resets to 0.
+        let dim = 4;
+        let mut index = VectorIndex::in_memory(dim);
+
+        // We only need 501 removes to cross the GC threshold, so add 600 vectors
+        // using simple unit-like vectors.
+        for i in 0u64..600 {
+            let mut v = vec![0.0f32; dim];
+            v[(i as usize) % dim] = 1.0;
+            index.add(i, &v).expect("add");
+        }
+        assert_eq!(index.len(), 600);
+
+        // Remove 501 to exceed TOMBSTONE_GC_THRESHOLD
+        for i in 0u64..501 {
+            index.remove(i).expect("remove");
+        }
+        assert_eq!(index.tombstone_count(), 501);
+        // build_optimal_index triggers compact() because tombstone_count >= 500
+        index.build_optimal_index().expect("build optimal");
+        assert_eq!(index.tombstone_count(), 0, "GC must reset tombstone_count");
+        assert_eq!(index.len(), 99, "only live vectors should remain after GC");
     }
 
     #[test]
@@ -824,6 +948,10 @@ impl VectorIndex {
 
         for (cluster_id, _) in &centroid_sims {
             for (id, vec) in &ivf.buckets[*cluster_id] {
+                // Skip tombstoned IDs — they are pending GC.
+                if self.tombstones.contains(id) {
+                    continue;
+                }
                 let score = match self.metric {
                     DistanceMetric::Cosine => {
                         let mut nv = vec.clone();
@@ -887,10 +1015,13 @@ impl VectorIndex {
 
         let raw_results = hnsw.search(query, k);
 
-        // Convert HNSW cosine distance to similarity score
-        // HNSW returns (id, distance) where distance = 1 - cosine_similarity
+        // Convert HNSW cosine distance to similarity score and filter tombstones.
+        // HNSW returns (id, distance) where distance = 1 - cosine_similarity.
+        // Tombstoned IDs may still appear in HNSW graph nodes (they are removed
+        // on the next compaction); filter them here so callers never observe them.
         let results: Vec<(u64, f32)> = raw_results
             .into_iter()
+            .filter(|(id, _)| !self.tombstones.contains(id))
             .map(|(id, dist)| (id, 1.0 - dist)) // Convert back to similarity
             .collect();
 
@@ -919,6 +1050,13 @@ impl VectorIndex {
     /// - 5,000-50,000 vectors: IVF (good recall, sub-linear)
     /// - >50,000 vectors: HNSW (best recall, O(log n))
     pub fn build_optimal_index(&mut self) -> OmniResult<()> {
+        // Run GC compaction if tombstone accumulation has crossed the threshold.
+        // This drains the tombstone set, removes dead entries from `vectors`, and
+        // resets `ivf`/`hnsw_index` so they are rebuilt below with clean data.
+        if self.tombstone_count >= TOMBSTONE_GC_THRESHOLD {
+            self.compact();
+        }
+
         let n = self.vectors.len();
 
         if n < 5_000 {

@@ -241,7 +241,7 @@ impl HnswIndex {
         let ep = self.entry_point.unwrap();
         let mut current_ep = ep;
 
-        // Phase 1: Traverse from top layer down to new_layer+1
+        // Greedy descent from top layer to new_layer+1 (single nearest neighbor per layer)
         // (greedy search, single nearest neighbor)
         if self.max_layer > new_layer {
             for layer in (new_layer + 1..=self.max_layer).rev() {
@@ -249,8 +249,7 @@ impl HnswIndex {
             }
         }
 
-        // Phase 2: From layer min(max_layer, new_layer) down to 0,
-        // find ef_construction nearest neighbors and connect
+        // Neighbor connection: from top to layer 0, find ef_construction nearest neighbors and connect
         let top = new_layer.min(self.max_layer);
         for layer in (0..=top).rev() {
             let m_max = if layer == 0 {
@@ -309,12 +308,12 @@ impl HnswIndex {
         };
         let mut current_ep = ep;
 
-        // Phase 1: Greedy descent from top to layer 1
+        // Greedy descent from top layer to layer 1
         for layer in (1..=self.max_layer).rev() {
             current_ep = self.search_layer_greedy(query, current_ep, layer);
         }
 
-        // Phase 2: ef_search beam search on layer 0
+        // Beam search on layer 0 with ef_search candidates
         let ef = self.config.ef_search.max(k);
         let candidates = self.search_layer(query, current_ep, ef, 0);
 
