@@ -5,10 +5,15 @@
 //!
 //! ## Model Selection
 //!
-//! Default model: `jinaai/jina-embeddings-v2-base-code`
-//! - Specifically trained on code retrieval (code-to-text, code-to-code)
-//! - 768 dimensions, 8192 max sequence length
-//! - ONNX-compatible, ~550MB download
+//! Default model: `nomic-ai/CodeRankEmbed`
+//! - 137M parameter bi-encoder trained on CoRNStack with InfoNCE contrastive loss
+//! - Initialized from Arctic-Embed-M-Long; outperforms CodeSage-Large (1.3B) on CodeSearchNet
+//! - 768 dimensions, 2048 max sequence length
+//! - Apache-2.0 license — safe for commercial distribution
+//! - ONNX export: ~521MB download
+//!
+//! Enterprise / GPU tier: `Qwen/Qwen3-Embedding-8B` (Apache-2.0, 75.22 MTEB English,
+//! instruction-aware, 100+ languages) — selectable via `OMNI_EMBEDDING_MODEL=qwen3`.
 //!
 //! ## Zero-Hassle Philosophy
 //!
@@ -26,7 +31,7 @@ use crate::error::{OmniError, OmniResult};
 pub struct ModelSpec {
     /// Human-readable model name.
     pub name: &'static str,
-    /// HuggingFace model ID (e.g., "jinaai/jina-embeddings-v2-base-code").
+    /// HuggingFace model ID (e.g., "nomic-ai/CodeRankEmbed").
     pub hf_repo: &'static str,
     /// URL to the ONNX model file.
     pub model_url: &'static str,
@@ -40,57 +45,95 @@ pub struct ModelSpec {
     pub approx_size_bytes: u64,
 }
 
-/// Default and ONLY model: Jina Code v2 -- specifically trained for code retrieval.
+/// Primary embedding model: `nomic-ai/CodeRankEmbed` (Apache-2.0).
+///
+/// Architecture: bi-encoder, 137M parameters, initialized from Arctic-Embed-M-Long.
+/// Training: CoRNStack dataset with dual-consistency filtering + InfoNCE contrastive loss
+/// with curriculum hard negatives (code-to-code and text-to-code retrieval tasks).
 ///
 /// Why this model:
-/// - Trained on code-to-text and code-to-code retrieval tasks
-/// - Understands variable names, syntax patterns, cross-language concepts
-/// - 768 dimensions provides high-quality embeddings
-/// - 8192 token context window (much larger than alternatives)
-/// - ONNX available directly from HuggingFace
-/// - Part of Jina AI family (consistent with reranker)
+/// - Apache-2.0 license — safe for all commercial distribution (replaces CC-BY-NC jina)
+/// - 768 dimensions matches the previous model; no schema migration required
+/// - Outperforms CodeSage-Large (1.3B) on CodeSearchNet despite being 10× smaller
+/// - ONNX export available directly from HuggingFace: ~521MB
+/// - 2048 token context sufficient for typical code chunks (512–1024 tokens)
+///
+/// Query prefix: "Represent this code snippet for searching relevant code: "
+/// (applied automatically in `embed_query()`)
 ///
 /// NO FALLBACK: This is the only embedding model. If it fails to load,
-/// the system will retry with exponential backoff and self-heal.
+/// the system retries with exponential backoff and self-heals to keyword-only mode.
 pub const DEFAULT_MODEL: ModelSpec = ModelSpec {
-    name: "jina-embeddings-v2-base-code",
-    hf_repo: "jinaai/jina-embeddings-v2-base-code",
-    model_url:
-        "https://huggingface.co/jinaai/jina-embeddings-v2-base-code/resolve/main/onnx/model.onnx",
-    tokenizer_url:
-        "https://huggingface.co/jinaai/jina-embeddings-v2-base-code/resolve/main/tokenizer.json",
+    name: "CodeRankEmbed",
+    hf_repo: "nomic-ai/CodeRankEmbed",
+    model_url: "https://huggingface.co/nomic-ai/CodeRankEmbed/resolve/main/onnx/model.onnx",
+    tokenizer_url: "https://huggingface.co/nomic-ai/CodeRankEmbed/resolve/main/tokenizer.json",
     dimensions: 768,
-    max_seq_length: 8192,
-    approx_size_bytes: 550_000_000, // ~550MB
+    max_seq_length: 2048,
+    approx_size_bytes: 521_000_000, // ~521MB ONNX export
 };
 
-/// Cross-encoder reranker model: jina-reranker-v2-base-multilingual.
+/// Enterprise GPU-tier embedding model: `Qwen/Qwen3-Embedding-8B` (Apache-2.0).
 ///
-/// This is a CROSS-ENCODER (not a bi-encoder). It takes a (query, document)
-/// pair as input and outputs a single relevance score. This is fundamentally
-/// different from the embedding models above which produce vectors.
+/// 75.22 MTEB English score, surpasses proprietary models including Gemini Embedding Medium.
+/// Instruction-aware architecture, 100+ languages, 8B parameters.
+/// Selectable via `OMNI_EMBEDDING_MODEL=qwen3`.
+/// Not used by default — requires GPU and significant VRAM (>16GB).
+pub const QWEN3_EMBEDDING_MODEL: ModelSpec = ModelSpec {
+    name: "Qwen3-Embedding-8B",
+    hf_repo: "Qwen/Qwen3-Embedding-8B",
+    model_url: "https://huggingface.co/Qwen/Qwen3-Embedding-8B/resolve/main/onnx/model.onnx",
+    tokenizer_url: "https://huggingface.co/Qwen/Qwen3-Embedding-8B/resolve/main/tokenizer.json",
+    dimensions: 4096,
+    max_seq_length: 32768,
+    approx_size_bytes: 16_000_000_000, // ~16GB (GPU tier)
+};
+
+/// BGE-M3 multi-function embedding model: `BAAI/bge-m3` (Apache-2.0).
+///
+/// BGE-M3 produces three vector types from a single pass:
+/// - Dense vectors (1024-dim) for semantic similarity
+/// - Sparse SPLADE-style vectors (top-K token_id→weight pairs)
+/// - ColBERT multi-vectors for late interaction retrieval
+///
+/// Only the sparse track is used here (see `Embedder::embed_sparse()`).
+/// Dense retrieval continues to use CodeRankEmbed for code-specific quality.
+///
+/// Downloaded only when `config.embedding.enable_sparse_retrieval = true`.
+/// License: Apache-2.0 — safe for commercial distribution.
+/// IMPORTANT: Verify the specific ONNX export license before production distribution.
+pub const BGE_M3_MODEL: ModelSpec = ModelSpec {
+    name: "bge-m3",
+    hf_repo: "BAAI/bge-m3",
+    model_url: "https://huggingface.co/BAAI/bge-m3/resolve/main/onnx/model.onnx",
+    tokenizer_url: "https://huggingface.co/BAAI/bge-m3/resolve/main/tokenizer.json",
+    dimensions: 1024,
+    max_seq_length: 8192,
+    approx_size_bytes: 560_000_000, // ~560MB ONNX export
+};
+
+/// Cross-encoder reranker: `BAAI/bge-reranker-v2-m3` (Apache-2.0).
+///
+/// Cross-encoder architecture: takes (query, passage) pair as input, outputs a single
+/// relevance score directly — fundamentally different from bi-encoder embedding models.
 ///
 /// Why this model:
-/// - Part of the Jina AI family (consistent with embedding model)
-/// - Trained on multilingual passage ranking with code understanding
-/// - 8-layer architecture -- fast inference (~8ms per pair on CPU)
-/// - Output: single logit per pair, apply sigmoid for [0, 1] probability
-/// - ~280MB download -- optimized for production use
-/// - ONNX compatible with quantization support
-/// - Better code understanding than MS MARCO (trained on code + text)
+/// - Apache-2.0 license — replaces CC-BY-NC jina reranker; safe for commercial distribution
+/// - ONNX export at `mogolloni/bge-reranker-v2-m3-onnx`: ~568MB
+/// - Trained on multilingual passage ranking with strong code understanding
+/// - Cross-encoder architecture consistently outperforms bi-encoder reranking
+/// - Output: single logit per pair; apply sigmoid for [0, 1] relevance probability
 ///
 /// NOTE: `dimensions` is set to 1 because the output is a single score,
-/// not a vector embedding.
+/// not an embedding vector.
 pub const RERANKER_MODEL: ModelSpec = ModelSpec {
-    name: "jina-reranker-v2-base-multilingual",
-    hf_repo: "jinaai/jina-reranker-v2-base-multilingual",
-    model_url:
-        "https://huggingface.co/jinaai/jina-reranker-v2-base-multilingual/resolve/main/onnx/model.onnx",
-    tokenizer_url:
-        "https://huggingface.co/jinaai/jina-reranker-v2-base-multilingual/resolve/main/tokenizer.json",
+    name: "bge-reranker-v2-m3",
+    hf_repo: "mogolloni/bge-reranker-v2-m3-onnx",
+    model_url: "https://huggingface.co/mogolloni/bge-reranker-v2-m3-onnx/resolve/main/model.onnx",
+    tokenizer_url: "https://huggingface.co/BAAI/bge-reranker-v2-m3/resolve/main/tokenizer.json",
     dimensions: 1, // single relevance score output, not an embedding vector
     max_seq_length: 1024,
-    approx_size_bytes: 280_000_000, // ~280MB
+    approx_size_bytes: 568_000_000, // ~568MB ONNX export
 };
 
 /// Get the models directory: `~/.omnicontext/models/`
@@ -342,27 +385,36 @@ fn download_file_inner(
     Ok(())
 }
 
-/// Resolve the embedding model spec.
+/// Resolve the active embedding model spec.
 ///
-/// Always returns the Jina Code v2 model. This is the canonical and ONLY
-/// embedding model for OmniContext. NO fallback models are supported.
+/// Returns `DEFAULT_MODEL` (`CodeRankEmbed`, Apache-2.0) unless overridden by the
+/// `OMNI_EMBEDDING_MODEL` environment variable.
+///
+/// Supported values for `OMNI_EMBEDDING_MODEL`:
+/// - `"default"` / `"coderankeembed"` / `""` → `CodeRankEmbed` (137M, Apache-2.0)
+/// - `"qwen3"` / `"qwen3-embedding"` → `Qwen3-Embedding-8B` (8B, GPU-tier, Apache-2.0)
 ///
 /// Self-Healing Architecture:
-/// - If model download fails: Retry with exponential backoff (max 5 attempts)
-/// - If model is corrupted: Auto-delete and re-download
-/// - If ONNX session fails: Circuit breaker opens, system retries after cooldown
-/// - NO degraded mode: System either works with full quality or self-heals
-///
-/// The `OMNI_EMBEDDING_MODEL` env var is accepted for forward-compatibility
-/// but currently only "default" / "jina-code" are recognized (both map to Jina).
+/// - If model download fails: retry with exponential backoff (max 5 attempts)
+/// - If model is corrupted: auto-delete and re-download
+/// - If ONNX session fails: circuit breaker opens, system retries after cooldown
+/// - Degraded mode: keyword-only search when embedding is unavailable
 pub fn resolve_model_spec() -> &'static ModelSpec {
     if let Ok(model_name) = std::env::var("OMNI_EMBEDDING_MODEL") {
         match model_name.to_lowercase().as_str() {
-            "default" | "jina" | "jina-code" | "" => {}
+            "default" | "coderankeembed" | "nomic" | "nomic-code" | "" => {}
+            "qwen3" | "qwen3-embedding" | "qwen3-8b" => {
+                tracing::info!(
+                    model = "Qwen3-Embedding-8B",
+                    "using enterprise GPU-tier embedding model (OMNI_EMBEDDING_MODEL=qwen3)"
+                );
+                return &QWEN3_EMBEDDING_MODEL;
+            }
             other => {
                 tracing::warn!(
                     requested = other,
-                    "unrecognized OMNI_EMBEDDING_MODEL value, using Jina Code v2 (no fallback)"
+                    fallback = "CodeRankEmbed",
+                    "unrecognized OMNI_EMBEDDING_MODEL value, using CodeRankEmbed (Apache-2.0)"
                 );
             }
         }
@@ -387,7 +439,7 @@ mod tests {
     #[test]
     fn test_model_dir_structure() {
         let dir = model_dir(&DEFAULT_MODEL);
-        assert!(dir.ends_with("jina-embeddings-v2-base-code"));
+        assert!(dir.ends_with("CodeRankEmbed"));
 
         let model = model_path(&DEFAULT_MODEL);
         assert!(model.ends_with("model.onnx"));
@@ -405,18 +457,30 @@ mod tests {
 
     #[test]
     fn test_resolve_model_default() {
-        // Without env var, should return default (Jina)
+        // Without env var, should return default (CodeRankEmbed)
+        std::env::remove_var("OMNI_EMBEDDING_MODEL");
         let spec = resolve_model_spec();
         assert_eq!(spec.dimensions, 768);
-        assert_eq!(spec.name, "jina-embeddings-v2-base-code");
+        assert_eq!(spec.name, "CodeRankEmbed");
     }
 
     #[test]
-    fn test_resolve_model_always_jina() {
-        // Even with "small" env var, should still return Jina -- no fallback
-        std::env::set_var("OMNI_EMBEDDING_MODEL", "small");
+    fn test_resolve_model_qwen3() {
+        std::env::set_var("OMNI_EMBEDDING_MODEL", "qwen3");
         let spec = resolve_model_spec();
-        assert_eq!(spec.dimensions, 768, "must always use Jina, no fallback");
+        assert_eq!(spec.name, "Qwen3-Embedding-8B");
+        assert_eq!(spec.dimensions, 4096);
+        std::env::remove_var("OMNI_EMBEDDING_MODEL");
+    }
+
+    #[test]
+    fn test_resolve_model_unknown_falls_back_to_default() {
+        std::env::set_var("OMNI_EMBEDDING_MODEL", "some-unknown-model");
+        let spec = resolve_model_spec();
+        assert_eq!(
+            spec.name, "CodeRankEmbed",
+            "unknown model must fall back to CodeRankEmbed"
+        );
         std::env::remove_var("OMNI_EMBEDDING_MODEL");
     }
 
@@ -438,14 +502,25 @@ mod tests {
     #[test]
     fn test_default_model_constants() {
         assert_eq!(DEFAULT_MODEL.dimensions, 768);
-        assert_eq!(DEFAULT_MODEL.max_seq_length, 8192);
+        assert_eq!(DEFAULT_MODEL.max_seq_length, 2048);
         assert!(DEFAULT_MODEL.model_url.starts_with("https://"));
         assert!(DEFAULT_MODEL.tokenizer_url.starts_with("https://"));
+        // Confirm Apache-2.0-compatible repo (not jinaai)
+        assert!(DEFAULT_MODEL.hf_repo.starts_with("nomic-ai/"));
     }
 
     #[test]
     fn test_reranker_model_constants() {
         assert_eq!(RERANKER_MODEL.dimensions, 1);
         assert_eq!(RERANKER_MODEL.max_seq_length, 1024);
+        // Confirm Apache-2.0-compatible repo (not jinaai)
+        assert!(!RERANKER_MODEL.hf_repo.starts_with("jinaai/"));
+    }
+
+    #[test]
+    fn test_qwen3_model_constants() {
+        assert_eq!(QWEN3_EMBEDDING_MODEL.dimensions, 4096);
+        assert_eq!(QWEN3_EMBEDDING_MODEL.max_seq_length, 32768);
+        assert!(QWEN3_EMBEDDING_MODEL.hf_repo.starts_with("Qwen/"));
     }
 }

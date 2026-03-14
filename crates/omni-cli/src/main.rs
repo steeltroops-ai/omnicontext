@@ -8,7 +8,28 @@ mod orchestrator;
 use std::time::Instant;
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+
+/// Output format for `omnicontext export`.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+enum ExportFormat {
+    /// SCIP (Source Code Intelligence Protocol) JSON format.
+    Scip,
+}
+
+/// Indexing mode for `omnicontext index`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
+enum IndexMode {
+    /// Incremental mode (default): index files as they are parsed and embedded.
+    /// ANN queries are served throughout the run using the existing index.
+    #[default]
+    Incremental,
+    /// Offline mode: parse and embed all files first, then build the ANN index
+    /// in a single batch pass at the end.  Faster for initial indexing of
+    /// large repositories because HNSW construction is deferred until all
+    /// vectors are accumulated.  No ANN queries are served until build completes.
+    Offline,
+}
 
 /// `OmniContext` - Universal Code Context Engine
 #[derive(Parser, Debug)]
@@ -42,6 +63,24 @@ enum Commands {
         /// Force full reindex, ignoring cached state.
         #[arg(long)]
         force: bool,
+
+        /// Indexing mode.
+        ///
+        /// - `incremental` (default): parse + embed incrementally; queries served
+        ///   throughout the run using the existing ANN index.
+        /// - `offline`: parse + embed all files, then build ANN index once in
+        ///   batch at the end.  Faster for initial index of large repos because
+        ///   HNSW construction is deferred until all vectors are collected.
+        ///   No queries are served until the offline build completes.
+        #[arg(long, value_name = "MODE", default_value = "incremental")]
+        mode: IndexMode,
+
+        /// Route embedding requests to the cloud GPU service instead of local ONNX.
+        ///
+        /// Requires `OMNI_CLOUD_API_KEY` to be set in the environment.
+        /// Produces an error and exits if the key is absent.
+        #[arg(long)]
+        cloud: bool,
     },
 
     /// Search the indexed codebase.
@@ -93,6 +132,30 @@ enum Commands {
         /// Port for SSE transport.
         #[arg(long, default_value_t = 3179)]
         port: u16,
+
+        /// Host to bind to for SSE transport.
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+    },
+
+    /// Launch the MCP server over HTTP SSE for remote/enterprise deployments.
+    ///
+    /// Equivalent to `omnicontext mcp --transport sse`, with a more
+    /// discoverable name. Bind address defaults to 127.0.0.1:8080.
+    ///
+    /// Set `OMNI_SERVER_TOKEN` to require bearer token authentication.
+    Serve {
+        /// Path to the repository root.
+        #[arg(default_value = ".")]
+        path: String,
+
+        /// Port to listen on.
+        #[arg(long, default_value_t = 8080)]
+        port: u16,
+
+        /// Host to bind to.
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
     },
 
     /// Manage configuration.
@@ -138,6 +201,31 @@ enum Commands {
         #[arg(default_value = ".")]
         path: String,
     },
+
+    /// Export the index in a structured interchange format.
+    Export {
+        /// Repository path (defaults to current directory).
+        #[arg(short, long)]
+        path: Option<std::path::PathBuf>,
+
+        /// Output format.
+        #[arg(long, value_enum, default_value = "scip")]
+        format: ExportFormat,
+
+        /// Output file path (defaults to `index.scip.json` in the current directory).
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+    },
+
+    /// Import an external SCIP index into the `OmniContext` metadata store.
+    Import {
+        /// Input SCIP JSON file path.
+        input: std::path::PathBuf,
+
+        /// Repository path (defaults to current directory).
+        #[arg(short, long)]
+        path: Option<std::path::PathBuf>,
+    },
 }
 
 #[derive(Subcommand, Debug, Clone, Copy)]
@@ -150,6 +238,12 @@ enum SetupAction {
     },
     /// Show the status of the embedding model.
     ModelStatus,
+    /// Download and cache the cross-encoder reranker model (bge-reranker-v2-m3).
+    RerankerDownload {
+        /// Force re-download even if already cached.
+        #[arg(long)]
+        force: bool,
+    },
     /// Auto-wire `OmniContext` into every detected AI IDE and agent.
     ///
     /// Injects a single universal `omnicontext` MCP server entry using
@@ -172,8 +266,13 @@ async fn main() -> Result<()> {
         .init();
 
     match cli.command {
-        Commands::Index { path, force } => {
-            cmd_index(&path, force, cli.json).await?;
+        Commands::Index {
+            path,
+            force,
+            mode,
+            cloud,
+        } => {
+            cmd_index(&path, force, mode, cloud, cli.json).await?;
         }
         Commands::Search {
             query,
@@ -199,8 +298,12 @@ async fn main() -> Result<()> {
             repo,
             transport,
             port,
+            host,
         } => {
-            cmd_mcp(&repo, &transport, port).await?;
+            cmd_mcp(&repo, &transport, port, &host).await?;
+        }
+        Commands::Serve { path, port, host } => {
+            cmd_serve(&path, port, &host).await?;
         }
         Commands::Config { show, init } => {
             cmd_config(show, init)?;
@@ -218,26 +321,76 @@ async fn main() -> Result<()> {
         } => {
             cmd_manifest(&path, &format, write, cli.json)?;
         }
+        Commands::Export {
+            path,
+            format,
+            output,
+        } => {
+            cmd_export(path.as_deref(), format, output.as_deref(), cli.json)?;
+        }
+        Commands::Import { input, path } => {
+            cmd_import(&input, path.as_deref(), cli.json)?;
+        }
     }
 
     Ok(())
 }
 
 /// Index a repository.
-async fn cmd_index(path: &str, force: bool, json: bool) -> Result<()> {
+async fn cmd_index(
+    path: &str,
+    force: bool,
+    mode: IndexMode,
+    cloud: bool,
+    json: bool,
+) -> Result<()> {
+    // Validate cloud flag early: fail fast with a clear error rather than
+    // silently falling back to local ONNX after the user explicitly opted in.
+    if cloud && std::env::var("OMNI_CLOUD_API_KEY").map_or(true, |k| k.trim().is_empty()) {
+        anyhow::bail!(
+            "--cloud requires OMNI_CLOUD_API_KEY to be set in the environment.\n\
+             Set it with: export OMNI_CLOUD_API_KEY=<your-api-key>"
+        );
+    }
+
     let repo_path = std::path::PathBuf::from(path)
         .canonicalize()
         .unwrap_or_else(|_| std::path::PathBuf::from(path));
 
     if !json {
         println!("OmniContext - Indexing: {}", repo_path.display());
+        match mode {
+            IndexMode::Offline => println!("Mode: offline (batch ANN build at end)"),
+            IndexMode::Incremental => {}
+        }
+        if cloud {
+            println!("Embedding: cloud GPU service (OMNI_CLOUD_API_KEY)");
+        }
         println!("---");
     }
 
     let start = Instant::now();
 
     let mut engine = omni_core::Engine::new(&repo_path)?;
+
+    // In offline mode, suppress incremental ANN updates so vectors accumulate
+    // in the flat map.  The ANN index is built in one batch pass at the end.
+    // This matches Sourcegraph's offline SCIP build + load pattern.
+    if matches!(mode, IndexMode::Offline) {
+        engine.set_offline_index_mode(true);
+    }
+
     let result = engine.run_index(force).await?;
+
+    // For offline mode: the ANN index was not built incrementally — call it now.
+    if matches!(mode, IndexMode::Offline) {
+        engine.set_offline_index_mode(false);
+        if let Err(e) = engine.build_ann_index() {
+            eprintln!("Warning: ANN index build failed: {e}");
+        } else if !json {
+            println!("  ANN index built from {} vectors.", engine.vector_count());
+        }
+    }
 
     let elapsed = start.elapsed();
 
@@ -443,15 +596,70 @@ fn cmd_status(path: &str, json: bool) -> Result<()> {
 }
 
 /// Start the MCP server by launching the dedicated omnicontext-mcp binary.
-async fn cmd_mcp(repo: &str, _transport: &str, _port: u16) -> Result<()> {
+async fn cmd_mcp(repo: &str, transport: &str, port: u16, host: &str) -> Result<()> {
     let repo_path = std::path::PathBuf::from(repo)
         .canonicalize()
         .unwrap_or_else(|_| std::path::PathBuf::from(repo));
 
     eprintln!("OmniContext MCP Server starting...");
     eprintln!("  Repository: {}", repo_path.display());
+    eprintln!("  Transport:  {transport}");
+    if transport == "sse" {
+        eprintln!("  Address:    {host}:{port}");
+    }
 
     // Try to find the MCP binary next to the current executable
+    let current_exe = std::env::current_exe()?;
+    let mcp_binary = current_exe.parent().map_or_else(
+        || std::path::PathBuf::from("omnicontext-mcp"),
+        |p| p.join("omnicontext-mcp"),
+    );
+
+    let mut cmd = tokio::process::Command::new(&mcp_binary);
+    cmd.arg("--repo").arg(&repo_path);
+    cmd.arg("--transport").arg(transport);
+    if transport == "sse" {
+        cmd.arg("--port").arg(port.to_string());
+        cmd.arg("--host").arg(host);
+    }
+    cmd.stdin(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit());
+
+    let status = cmd.status().await;
+
+    match status {
+        Ok(s) if s.success() => Ok(()),
+        Ok(s) => anyhow::bail!("MCP server exited with code: {s}"),
+        Err(e) => {
+            eprintln!("Failed to launch MCP server binary: {e}");
+            eprintln!();
+            eprintln!("The MCP server is shipped as a separate binary: omnicontext-mcp");
+            eprintln!("Install it with: cargo install --path crates/omni-mcp");
+            anyhow::bail!("MCP binary not found: {}", mcp_binary.display());
+        }
+    }
+}
+
+/// Launch the MCP server over HTTP SSE (`serve` subcommand).
+///
+/// This is a convenience alias for `mcp --transport sse` with a more
+/// discoverable entry point for enterprise/remote deployments.
+async fn cmd_serve(path: &str, port: u16, host: &str) -> Result<()> {
+    let repo_path = std::path::PathBuf::from(path)
+        .canonicalize()
+        .unwrap_or_else(|_| std::path::PathBuf::from(path));
+
+    eprintln!("OmniContext SSE MCP Server");
+    eprintln!("  Repository: {}", repo_path.display());
+    eprintln!("  Listening:  http://{host}:{port}/sse");
+    if std::env::var("OMNI_SERVER_TOKEN").is_ok() {
+        eprintln!("  Auth:       bearer token (OMNI_SERVER_TOKEN)");
+    } else {
+        eprintln!("  Auth:       none (set OMNI_SERVER_TOKEN to enable)");
+    }
+    eprintln!();
+
     let current_exe = std::env::current_exe()?;
     let mcp_binary = current_exe.parent().map_or_else(
         || std::path::PathBuf::from("omnicontext-mcp"),
@@ -461,6 +669,12 @@ async fn cmd_mcp(repo: &str, _transport: &str, _port: u16) -> Result<()> {
     let status = tokio::process::Command::new(&mcp_binary)
         .arg("--repo")
         .arg(&repo_path)
+        .arg("--transport")
+        .arg("sse")
+        .arg("--port")
+        .arg(port.to_string())
+        .arg("--host")
+        .arg(host)
         .stdin(std::process::Stdio::inherit())
         .stdout(std::process::Stdio::inherit())
         .stderr(std::process::Stdio::inherit())
@@ -469,11 +683,9 @@ async fn cmd_mcp(repo: &str, _transport: &str, _port: u16) -> Result<()> {
 
     match status {
         Ok(s) if s.success() => Ok(()),
-        Ok(s) => anyhow::bail!("MCP server exited with code: {s}"),
+        Ok(s) => anyhow::bail!("SSE server exited with code: {s}"),
         Err(e) => {
-            eprintln!("Failed to launch MCP server binary: {e}");
-            eprintln!();
-            eprintln!("The MCP server is shipped as a separate binary: omnicontext-mcp");
+            eprintln!("Failed to launch MCP binary: {e}");
             eprintln!("Install it with: cargo install --path crates/omni-mcp");
             anyhow::bail!("MCP binary not found: {}", mcp_binary.display());
         }
@@ -557,87 +769,113 @@ fn cmd_config(show: bool, init: bool) -> Result<()> {
 /// Handle setup and maintenance tasks.
 fn cmd_setup(action: SetupAction, json: bool) -> Result<()> {
     match action {
-        SetupAction::ModelDownload { force } => {
-            let spec = omni_core::embedder::model_manager::resolve_model_spec();
-            if !force && omni_core::embedder::model_manager::is_model_ready(spec) {
-                if json {
-                    println!(
-                        "{}",
-                        serde_json::json!({
-                            "status": "ok",
-                            "model": spec.name,
-                            "message": "model already cached"
-                        })
-                    );
-                } else {
-                    println!("Embedding model '{}' is already cached.", spec.name);
-                }
-                return Ok(());
-            }
-
-            if !json {
-                println!("Preparing embedding model: {}", spec.name);
-            }
-
-            omni_core::embedder::model_manager::ensure_model(spec)?;
-
-            if json {
-                println!(
-                    "{}",
-                    serde_json::json!({
-                        "status": "ok",
-                        "model": spec.name,
-                        "message": "download complete"
-                    })
-                );
-            } else {
-                println!();
-                println!("Model setup complete.");
-            }
-        }
-        SetupAction::ModelStatus => {
-            let spec = omni_core::embedder::model_manager::resolve_model_spec();
-            let ready = omni_core::embedder::model_manager::is_model_ready(spec);
-            let path = omni_core::embedder::model_manager::model_path(spec);
-            let size = if ready {
-                std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
-            } else {
-                0
-            };
-
-            if json {
-                let output = serde_json::json!({
-                    "model_name": spec.name,
-                    "model_ready": ready,
-                    "model_path": path.display().to_string(),
-                    "model_size_bytes": size,
-                    "dimensions": spec.dimensions,
-                    "max_seq_length": spec.max_seq_length,
-                });
-                println!("{}", serde_json::to_string_pretty(&output)?);
-            } else {
-                println!("Embedding Model Status");
-                println!("---");
-                println!("  Name:             {}", spec.name);
-                println!("  Ready:            {}", if ready { "Yes" } else { "No" });
-                println!("  Path:             {}", path.display());
-                if ready {
-                    println!("  Size:             {} MB", size / 1024 / 1024);
-                } else {
-                    println!(
-                        "  Expected Size:    ~{} MB",
-                        spec.approx_size_bytes / 1024 / 1024
-                    );
-                }
-                println!("  Dimensions:       {}", spec.dimensions);
-                println!("  Max Seq Length:   {}", spec.max_seq_length);
-            }
-        }
-        SetupAction::All { dry_run } => {
-            cmd_setup_all(dry_run, json)?;
-        }
+        SetupAction::ModelDownload { force } => cmd_setup_model(force, json),
+        SetupAction::ModelStatus => cmd_setup_model_status(json),
+        SetupAction::RerankerDownload { force } => cmd_setup_reranker(force, json),
+        SetupAction::All { dry_run } => cmd_setup_all(dry_run, json),
     }
+}
 
+/// Download and cache the configured embedding model.
+fn cmd_setup_model(force: bool, json: bool) -> Result<()> {
+    let spec = omni_core::embedder::model_manager::resolve_model_spec();
+    if !force && omni_core::embedder::model_manager::is_model_ready(spec) {
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({"status":"ok","model":spec.name,"message":"model already cached"})
+            );
+        } else {
+            println!("Embedding model '{}' is already cached.", spec.name);
+        }
+        return Ok(());
+    }
+    if !json {
+        println!("Preparing embedding model: {}", spec.name);
+    }
+    omni_core::embedder::model_manager::ensure_model(spec)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({"status":"ok","model":spec.name,"message":"download complete"})
+        );
+    } else {
+        println!();
+        println!("Model setup complete.");
+    }
+    Ok(())
+}
+
+/// Print status of the configured embedding model.
+fn cmd_setup_model_status(json: bool) -> Result<()> {
+    let spec = omni_core::embedder::model_manager::resolve_model_spec();
+    let ready = omni_core::embedder::model_manager::is_model_ready(spec);
+    let path = omni_core::embedder::model_manager::model_path(spec);
+    let size = if ready {
+        std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0)
+    } else {
+        0
+    };
+    if json {
+        let output = serde_json::json!({
+            "model_name": spec.name,
+            "model_ready": ready,
+            "model_path": path.display().to_string(),
+            "model_size_bytes": size,
+            "dimensions": spec.dimensions,
+            "max_seq_length": spec.max_seq_length,
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        println!("Embedding Model Status");
+        println!("---");
+        println!("  Name:             {}", spec.name);
+        println!("  Ready:            {}", if ready { "Yes" } else { "No" });
+        println!("  Path:             {}", path.display());
+        if ready {
+            println!("  Size:             {} MB", size / 1024 / 1024);
+        } else {
+            println!(
+                "  Expected Size:    ~{} MB",
+                spec.approx_size_bytes / 1024 / 1024
+            );
+        }
+        println!("  Dimensions:       {}", spec.dimensions);
+        println!("  Max Seq Length:   {}", spec.max_seq_length);
+    }
+    Ok(())
+}
+
+/// Download and cache the cross-encoder reranker model (bge-reranker-v2-m3).
+fn cmd_setup_reranker(force: bool, json: bool) -> Result<()> {
+    use omni_core::embedder::model_manager::{ensure_model, is_model_ready, RERANKER_MODEL};
+    if !force && is_model_ready(&RERANKER_MODEL) {
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({"status":"ok","model":RERANKER_MODEL.name,"message":"reranker already cached"})
+            );
+        } else {
+            println!(
+                "Reranker model '{}' is already cached.",
+                RERANKER_MODEL.name
+            );
+        }
+        return Ok(());
+    }
+    if !json {
+        println!("Preparing reranker model: {}", RERANKER_MODEL.name);
+    }
+    ensure_model(&RERANKER_MODEL)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({"status":"ok","model":RERANKER_MODEL.name,"message":"download complete"})
+        );
+    } else {
+        println!();
+        println!("Reranker model setup complete.");
+    }
     Ok(())
 }
 
@@ -677,7 +915,7 @@ fn cmd_setup_all(dry_run: bool, json: bool) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// Phase D: Autopilot IDE Config
+// IDE autopilot config
 // ---------------------------------------------------------------------------
 
 /// Supported IDE configuration target.
@@ -954,7 +1192,7 @@ fn merge_mcp_config(
 }
 
 // ---------------------------------------------------------------------------
-// Phase E: Proactive Manifests
+// Manifest generation commands
 // ---------------------------------------------------------------------------
 
 fn cmd_manifest(path: &str, format: &str, write_files: bool, json: bool) -> Result<()> {
@@ -1005,6 +1243,103 @@ fn cmd_manifest(path: &str, format: &str, write_files: bool, json: bool) -> Resu
                 }
             }
             Err(e) => eprintln!("Failed to generate .context_map.json: {e}"),
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Export / Import commands
+// ---------------------------------------------------------------------------
+
+/// Export the index to a structured interchange format.
+fn cmd_export(
+    path: Option<&std::path::Path>,
+    format: ExportFormat,
+    output: Option<&std::path::Path>,
+    json: bool,
+) -> Result<()> {
+    let repo_path = match path {
+        Some(p) => p.canonicalize().unwrap_or_else(|_| p.to_path_buf()),
+        None => std::env::current_dir()?,
+    };
+
+    let default_output;
+    let output_path: &std::path::Path = if let Some(p) = output {
+        p
+    } else {
+        default_output = std::path::PathBuf::from("index.scip.json");
+        &default_output
+    };
+
+    let engine = omni_core::Engine::new(&repo_path)?;
+
+    match format {
+        ExportFormat::Scip => {
+            let start = std::time::Instant::now();
+            let exporter = omni_core::scip::ScipExporter::new(&engine);
+            exporter.write_to_file(output_path)?;
+            let elapsed = start.elapsed();
+
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "status": "ok",
+                        "format": "scip",
+                        "output": output_path.display().to_string(),
+                        "elapsed_ms": elapsed.as_millis(),
+                    })
+                );
+            } else {
+                println!(
+                    "SCIP index exported to {} in {:.2}s",
+                    output_path.display(),
+                    elapsed.as_secs_f64()
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Import an external SCIP index into the `OmniContext` metadata store.
+fn cmd_import(input: &std::path::Path, path: Option<&std::path::Path>, json: bool) -> Result<()> {
+    let repo_path = match path {
+        Some(p) => p.canonicalize().unwrap_or_else(|_| p.to_path_buf()),
+        None => std::env::current_dir()?,
+    };
+
+    let mut engine = omni_core::Engine::new(&repo_path)?;
+
+    let start = std::time::Instant::now();
+    let mut importer = omni_core::scip::ScipImporter::new(&mut engine);
+    let stats = importer.import_from_file(input)?;
+    let elapsed = start.elapsed();
+
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "status": "ok",
+                "input": input.display().to_string(),
+                "elapsed_ms": elapsed.as_millis(),
+                "documents_imported": stats.documents_imported,
+                "symbols_imported": stats.symbols_imported,
+                "relationships_imported": stats.relationships_imported,
+                "errors": stats.errors,
+            })
+        );
+    } else {
+        println!("SCIP import complete in {:.2}s", elapsed.as_secs_f64());
+        println!("  Input:         {}", input.display());
+        println!("  Documents:     {}", stats.documents_imported);
+        println!("  Symbols:       {}", stats.symbols_imported);
+        println!("  Relationships: {}", stats.relationships_imported);
+        if stats.errors > 0 {
+            println!("  Errors:        {}", stats.errors);
         }
     }
 
