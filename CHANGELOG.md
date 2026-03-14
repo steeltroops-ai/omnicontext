@@ -4,6 +4,11 @@ All notable changes to OmniContext are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.3] - 2026-03-14
+
+### Fixed
+- Scope node audit to high/critical vulnerabilities only ([22e3354](https://github.com/steeltroops-ai/omnicontext/commit/22e33540620356b5b6096dd96107cca6f4bf37d8))
+
 ## [1.3.2] - 2026-03-14
 
 ### Fixed
