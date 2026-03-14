@@ -524,14 +524,14 @@ mod tests {
         let mut cache = FileHashCache::new(temp.path());
         let path = create_test_file(temp.path(), "mod.txt", "original");
 
-        // Seed with original hash + mtime
+        // Seed with original hash. Use UNIX_EPOCH as the cached mtime so that
+        // the Tier-1 mtime check never short-circuits on any platform — the
+        // actual file's mtime will always be later than epoch, guaranteeing
+        // we fall through to the Tier-2 hash comparison every time.
         let (changed, content) = cache.check_and_read(&path).expect("first");
         assert!(changed);
         let hash = xxh3_64(content.expect("content").as_bytes());
-        let mtime = fs::metadata(&path)
-            .and_then(|m| m.modified())
-            .expect("mtime");
-        cache.update_from_read(path.clone(), hash, mtime);
+        cache.update_from_read(path.clone(), hash, std::time::UNIX_EPOCH);
 
         // Overwrite file content
         {
@@ -540,13 +540,7 @@ mod tests {
             f.sync_all().expect("sync");
         }
 
-        // On Windows the NTFS mtime resolution is 100 ns, but the kernel may
-        // batch updates within the same tick. Sleep 20 ms to guarantee the mtime
-        // of the rewritten file is strictly later than the cached entry, even
-        // under heavy CI load where the scheduler may delay the sleep.
-        std::thread::sleep(std::time::Duration::from_millis(20));
-
-        // check_and_read must detect the change
+        // check_and_read must detect the change via hash (Tier 2 / 3)
         let (changed2, content2) = cache.check_and_read(&path).expect("second");
         assert!(changed2, "modified file must be reported as changed");
         assert_eq!(content2.as_deref(), Some("modified content"));

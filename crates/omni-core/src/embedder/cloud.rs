@@ -191,10 +191,15 @@ impl CloudEmbedder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    // Serialize all tests that mutate OMNI_CLOUD_API_KEY to prevent
+    // races when cargo test runs them in parallel threads.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_cloud_embedder_from_env_none_when_unset() {
-        // Safety: test binary is single-threaded at this point; env mutation is safe.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var("OMNI_CLOUD_API_KEY");
         let result = CloudEmbedder::from_env().unwrap();
         assert!(result.is_none());
@@ -202,6 +207,7 @@ mod tests {
 
     #[test]
     fn test_cloud_embedder_from_env_some_when_set() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("OMNI_CLOUD_API_KEY", "test-key-123");
         let result = CloudEmbedder::from_env().unwrap();
         assert!(result.is_some());
@@ -210,6 +216,7 @@ mod tests {
 
     #[test]
     fn test_cloud_embedder_from_env_none_when_empty() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("OMNI_CLOUD_API_KEY", "  ");
         let result = CloudEmbedder::from_env().unwrap();
         assert!(result.is_none());
