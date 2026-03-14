@@ -32,7 +32,7 @@ use crate::types::{
 };
 
 /// Current database schema version. Increment when schema changes.
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 6;
 
 /// SQLite-backed metadata and full-text search index.
 pub struct MetadataIndex {
@@ -97,8 +97,78 @@ impl MetadataIndex {
                 )?;
             }
             Some(v) if v < SCHEMA_VERSION => {
-                // Future: run migrations here
                 tracing::info!(from = v, to = SCHEMA_VERSION, "schema migration required");
+                // v1 → v2: add content_hash column to chunks table.
+                // ALTER TABLE … ADD COLUMN is safe on SQLite (no data loss).
+                if v < 2 {
+                    self.conn.execute_batch(
+                        "ALTER TABLE chunks ADD COLUMN content_hash INTEGER NOT NULL DEFAULT 0;",
+                    )?;
+                    tracing::info!("migrated schema: added content_hash column to chunks");
+                }
+                // v2 → v3: add commits_fts virtual table + external_docs table.
+                // CREATE VIRTUAL TABLE IF NOT EXISTS is safe to run on existing dbs.
+                if v < 3 {
+                    self.conn.execute_batch(
+                        "CREATE VIRTUAL TABLE IF NOT EXISTS commits_fts USING fts5(
+                            message,
+                            summary,
+                            author,
+                            content='commits',
+                            content_rowid='rowid',
+                            tokenize='porter unicode61 remove_diacritics 2'
+                        );
+                        CREATE TABLE IF NOT EXISTS external_docs (
+                            id           INTEGER PRIMARY KEY,
+                            source_url   TEXT    NOT NULL UNIQUE,
+                            title        TEXT    NOT NULL,
+                            content      TEXT    NOT NULL,
+                            chunk_ids    TEXT    NOT NULL DEFAULT '[]',
+                            ingested_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_external_docs_url ON external_docs(source_url);",
+                    )?;
+                    tracing::info!("migrated schema v3: commits_fts + external_docs");
+                }
+                // v3 → v4: add commit_files junction table for O(1) path lookup.
+                if v < 4 {
+                    self.conn.execute_batch(
+                        "CREATE TABLE IF NOT EXISTS commit_files (
+                            commit_hash  TEXT NOT NULL REFERENCES commits(hash) ON DELETE CASCADE,
+                            file_path    TEXT NOT NULL,
+                            PRIMARY KEY  (commit_hash, file_path)
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_commit_files_path ON commit_files(file_path);
+                        CREATE INDEX IF NOT EXISTS idx_commit_files_hash ON commit_files(commit_hash);",
+                    )?;
+                    tracing::info!("migrated schema v4: commit_files junction table");
+                }
+                // v4 → v5: add file_graph_edges table for persistent FileDependencyGraph.
+                if v < 5 {
+                    self.conn.execute_batch(
+                        "CREATE TABLE IF NOT EXISTS file_graph_edges (
+                            source_path  TEXT NOT NULL,
+                            target_path  TEXT NOT NULL,
+                            edge_type    TEXT NOT NULL,
+                            weight       REAL NOT NULL DEFAULT 1.0,
+                            PRIMARY KEY  (source_path, target_path, edge_type)
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_file_graph_source ON file_graph_edges(source_path);
+                        CREATE INDEX IF NOT EXISTS idx_file_graph_target ON file_graph_edges(target_path);",
+                    )?;
+                    tracing::info!("migrated schema v5: file_graph_edges table");
+                }
+                // v5 → v6: add sparse_vectors table for BGE-M3 SPLADE output.
+                if v < 6 {
+                    self.conn.execute_batch(
+                        "CREATE TABLE IF NOT EXISTS sparse_vectors (
+                            chunk_id   INTEGER NOT NULL PRIMARY KEY REFERENCES chunks(id) ON DELETE CASCADE,
+                            tokens     TEXT    NOT NULL
+                        );
+                        CREATE INDEX IF NOT EXISTS idx_sparse_vectors_chunk ON sparse_vectors(chunk_id);",
+                    )?;
+                    tracing::info!("migrated schema v6: sparse_vectors table");
+                }
                 self.conn.execute(
                     "INSERT INTO schema_version (version) VALUES (?1)",
                     params![SCHEMA_VERSION],
@@ -132,6 +202,8 @@ impl MetadataIndex {
 
         // Ensure FTS content is emptied as well.
         tx.execute("DELETE FROM chunks_fts", [])?;
+        // Tolerate missing commits_fts (may not exist on older dbs before v3 migration)
+        let _ = tx.execute("DELETE FROM commits_fts", []);
 
         tx.commit()?;
         Ok(())
@@ -297,8 +369,8 @@ impl MetadataIndex {
     pub fn insert_chunk(&self, chunk: &Chunk) -> OmniResult<i64> {
         self.conn.execute(
             "INSERT INTO chunks (file_id, symbol_path, kind, visibility, line_start,
-             line_end, content, doc_comment, token_count, weight, vector_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+             line_end, content, doc_comment, token_count, weight, vector_id, content_hash)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 chunk.file_id,
                 chunk.symbol_path,
@@ -311,6 +383,7 @@ impl MetadataIndex {
                 chunk.token_count,
                 chunk.weight,
                 chunk.vector_id.map(|v| v as i64),
+                chunk.content_hash as i64,
             ],
         )?;
 
@@ -330,8 +403,8 @@ impl MetadataIndex {
         for chunk in chunks {
             tx.execute(
                 "INSERT INTO chunks (file_id, symbol_path, kind, visibility, line_start,
-                 line_end, content, doc_comment, token_count, weight, vector_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                 line_end, content, doc_comment, token_count, weight, vector_id, content_hash)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![
                     chunk.file_id,
                     chunk.symbol_path,
@@ -344,6 +417,7 @@ impl MetadataIndex {
                     chunk.token_count,
                     chunk.weight,
                     chunk.vector_id.map(|v| v as i64),
+                    chunk.content_hash as i64,
                 ],
             )?;
             chunk_ids.push(tx.last_insert_rowid());
@@ -365,7 +439,7 @@ impl MetadataIndex {
     pub fn get_chunks_for_file(&self, file_id: i64) -> OmniResult<Vec<Chunk>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, file_id, symbol_path, kind, visibility, line_start,
-             line_end, content, doc_comment, token_count, weight, vector_id
+             line_end, content, doc_comment, token_count, weight, vector_id, content_hash
              FROM chunks WHERE file_id = ?1 ORDER BY line_start",
         )?;
 
@@ -384,6 +458,7 @@ impl MetadataIndex {
                 weight: row.get(10)?,
                 vector_id: row.get::<_, Option<i64>>(11)?.map(|v| v as u64),
                 is_summary: false,
+                content_hash: row.get::<_, i64>(12)? as u64,
             })
         })?;
 
@@ -400,6 +475,59 @@ impl MetadataIndex {
             "UPDATE chunks SET vector_id = ?1 WHERE id = ?2",
             params![vector_id as i64, chunk_id],
         )?;
+        Ok(())
+    }
+
+    /// Get (symbol_path → content_hash) pairs for all chunks of a file.
+    ///
+    /// Used for chunk-level delta detection: if the stored hash matches the
+    /// freshly-computed xxHash3 of the chunk content, the chunk is unchanged
+    /// and can skip re-embedding. A stored value of 0 means "not computed"
+    /// and always triggers re-embedding.
+    pub fn get_chunk_content_hashes_for_file(
+        &self,
+        file_id: i64,
+    ) -> OmniResult<std::collections::HashMap<String, u64>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT symbol_path, content_hash FROM chunks WHERE file_id = ?1")?;
+
+        let rows = stmt.query_map(params![file_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+
+        let mut map = std::collections::HashMap::new();
+        for row in rows {
+            let (symbol_path, hash_i64) = row?;
+            map.insert(symbol_path, hash_i64 as u64);
+        }
+        Ok(map)
+    }
+
+    /// Begin a batch transaction that spans multiple `reindex_file` calls.
+    ///
+    /// When a batch transaction is active, individual `reindex_file` calls
+    /// should not open their own transactions. The caller is responsible for
+    /// committing via `commit_batch_transaction`.
+    ///
+    /// # Note
+    /// SQLite only supports one writer at a time. This batch transaction is
+    /// useful for bulk index runs where sequential per-file transactions would
+    /// each incur fsync overhead.
+    pub fn begin_batch_transaction(&self) -> OmniResult<()> {
+        self.conn.execute_batch("BEGIN DEFERRED TRANSACTION")?;
+        Ok(())
+    }
+
+    /// Commit the active batch transaction.
+    pub fn commit_batch_transaction(&self) -> OmniResult<()> {
+        self.conn.execute_batch("COMMIT")?;
+        Ok(())
+    }
+
+    /// Roll back the active batch transaction.
+    pub fn rollback_batch_transaction(&self) -> OmniResult<()> {
+        self.conn.execute_batch("ROLLBACK")?;
         Ok(())
     }
 
@@ -437,7 +565,7 @@ impl MetadataIndex {
     pub fn get_chunks_without_vectors(&self) -> OmniResult<Vec<Chunk>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, file_id, symbol_path, kind, visibility, line_start,
-             line_end, content, doc_comment, token_count, weight, vector_id
+             line_end, content, doc_comment, token_count, weight, vector_id, content_hash
              FROM chunks WHERE vector_id IS NULL ORDER BY file_id, line_start",
         )?;
 
@@ -456,6 +584,7 @@ impl MetadataIndex {
                 weight: row.get(10)?,
                 vector_id: row.get::<_, Option<i64>>(11)?.map(|v| v as u64),
                 is_summary: false,
+                content_hash: row.get::<_, i64>(12)? as u64,
             })
         })?;
 
@@ -737,29 +866,67 @@ impl MetadataIndex {
     /// Search chunks using FTS5 full-text search.
     ///
     /// Returns (chunk_id, bm25_score) pairs, ordered by relevance.
+    ///
+    /// ## Query Building
+    ///
+    /// FTS5 phrase quoting (`"foo bar"`) requires exact consecutive token matching,
+    /// which produces zero results for multi-word queries when tokens appear in different
+    /// parts of a file (the common case). Instead we:
+    ///
+    /// 1. Split the query into individual tokens.
+    /// 2. Quote each token individually to prevent FTS5 syntax errors on
+    ///    special chars (hyphens, colons, `::`, `->`, etc.).
+    /// 3. Join with AND — all tokens must appear somewhere in the document.
+    /// 4. If the AND query returns zero results, fall back to OR so partial
+    ///    matches are still surfaced (R16: graceful degradation).
     pub fn keyword_search(&self, query: &str, limit: usize) -> OmniResult<Vec<(i64, f64)>> {
-        // FTS5 uses BM25 for relevance ranking.
-        // We search across content, doc_comment, and symbol_path.
-        // Quote the query so FTS5 treats it as a phrase literal
-        // preventing syntax errors on characters like hyphens or colons.
-        let safe_query = format!("\"{}\"", query.replace('"', ""));
+        // Design: per-token quoting with AND → OR fallback.
+        // This eliminates zero-result multi-word queries while retaining
+        // FTS5 special-character safety from individual token quoting.
+        let tokens: Vec<String> = query
+            .split_whitespace()
+            .filter(|t| !t.is_empty())
+            .map(|t| format!("\"{}\"", t.replace('"', "")))
+            .collect();
 
-        let mut stmt = self.conn.prepare(
-            "SELECT rowid, bm25(chunks_fts, 1.0, 0.5, 2.0) as score
-             FROM chunks_fts
-             WHERE chunks_fts MATCH ?1
-             ORDER BY score
-             LIMIT ?2",
-        )?;
+        if tokens.is_empty() {
+            return Ok(Vec::new());
+        }
 
-        let results = stmt.query_map(params![safe_query, limit as i64], |row| {
+        // AND query: all tokens must appear (high precision)
+        let and_query = tokens.join(" AND ");
+
+        let sql = "SELECT rowid, bm25(chunks_fts, 1.0, 0.5, 2.0) as score
+                   FROM chunks_fts
+                   WHERE chunks_fts MATCH ?1
+                   ORDER BY score
+                   LIMIT ?2";
+
+        let mut stmt = self.conn.prepare(sql)?;
+
+        let and_results = stmt.query_map(params![and_query, limit as i64], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?))
         })?;
 
         let mut out = Vec::new();
-        for r in results {
+        for r in and_results {
             out.push(r?);
         }
+
+        // R16 — Graceful degradation: if AND produced nothing, retry with OR
+        // so at least one token match is returned. Useful when embedding
+        // coverage is 0% and keyword is the sole retrieval signal.
+        if out.is_empty() && tokens.len() > 1 {
+            let or_query = tokens.join(" OR ");
+            let mut stmt2 = self.conn.prepare(sql)?;
+            let or_results = stmt2.query_map(params![or_query, limit as i64], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?))
+            })?;
+            for r in or_results {
+                out.push(r?);
+            }
+        }
+
         Ok(out)
     }
 
@@ -778,11 +945,22 @@ impl MetadataIndex {
         chunks: &[Chunk],
         symbols: &[Symbol],
     ) -> OmniResult<(i64, Vec<i64>)> {
-        let tx = self.conn.unchecked_transaction()?;
+        // Use a named SAVEPOINT rather than BEGIN TRANSACTION so this call is
+        // safe both standalone and when nested inside a batch transaction
+        // opened by `begin_batch_transaction()`.  SQLite SAVEPOINTs are
+        // reentrant — they work correctly at any nesting depth.
+        let savepoint_name = "reindex_file_sp";
+        self.conn
+            .execute_batch(&format!("SAVEPOINT {savepoint_name}"))?;
 
-        // Upsert the file
-        tx.execute(
-            "INSERT INTO files (path, language, hash, size_bytes, last_modified)
+        // All writes go through a macro-local closure so we can ROLLBACK TO
+        // the savepoint on any error without propagating a half-written state.
+        let result: rusqlite::Result<(i64, Vec<i64>)> = (|| {
+            let conn = &self.conn;
+
+            // Upsert the file
+            conn.execute(
+                "INSERT INTO files (path, language, hash, size_bytes, last_modified)
              VALUES (?1, ?2, ?3, ?4, datetime('now'))
              ON CONFLICT(path) DO UPDATE SET
                 language = excluded.language,
@@ -790,80 +968,100 @@ impl MetadataIndex {
                 size_bytes = excluded.size_bytes,
                 indexed_at = datetime('now'),
                 last_modified = excluded.last_modified",
-            params![
-                file.path.to_string_lossy().as_ref(),
-                file.language.as_str(),
-                file.content_hash,
-                file.size_bytes,
-            ],
-        )?;
+                params![
+                    file.path.to_string_lossy().as_ref(),
+                    file.language.as_str(),
+                    file.content_hash,
+                    file.size_bytes,
+                ],
+            )?;
 
-        let file_id: i64 = tx.query_row(
-            "SELECT id FROM files WHERE path = ?1",
-            params![file.path.to_string_lossy().as_ref()],
-            |row| row.get(0),
-        )?;
+            let file_id: i64 = conn.query_row(
+                "SELECT id FROM files WHERE path = ?1",
+                params![file.path.to_string_lossy().as_ref()],
+                |row| row.get(0),
+            )?;
 
-        // Delete stale dependency edges for symbols in this file BEFORE
-        // deleting the symbols themselves. This prevents ghost edges.
-        tx.execute(
+            // Delete stale dependency edges for symbols in this file BEFORE
+            // deleting the symbols themselves. This prevents ghost edges.
+            conn.execute(
             "DELETE FROM dependencies WHERE source_id IN (SELECT id FROM symbols WHERE file_id = ?1)
              OR target_id IN (SELECT id FROM symbols WHERE file_id = ?1)",
             params![file_id],
         )?;
 
-        // Delete old chunks and symbols for this file
-        tx.execute("DELETE FROM symbols WHERE file_id = ?1", params![file_id])?;
-        tx.execute("DELETE FROM chunks WHERE file_id = ?1", params![file_id])?;
+            // Delete old chunks and symbols for this file
+            conn.execute("DELETE FROM symbols WHERE file_id = ?1", params![file_id])?;
+            conn.execute("DELETE FROM chunks WHERE file_id = ?1", params![file_id])?;
 
-        // Insert new chunks using a prepared, cached statement for SOTA speed
-        let mut chunk_ids = Vec::with_capacity(chunks.len());
-        {
-            let mut chunk_stmt = tx.prepare_cached(
-                "INSERT INTO chunks (file_id, symbol_path, kind, visibility, line_start,
-             line_end, content, doc_comment, token_count, weight, vector_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-            )?;
+            // Insert new chunks using a prepared, cached statement for SOTA speed
+            let mut chunk_ids = Vec::with_capacity(chunks.len());
+            {
+                let mut chunk_stmt = conn.prepare_cached(
+                    "INSERT INTO chunks (file_id, symbol_path, kind, visibility, line_start,
+             line_end, content, doc_comment, token_count, weight, vector_id, content_hash)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                )?;
 
-            for chunk in chunks {
-                chunk_stmt.execute(params![
-                    file_id,
-                    chunk.symbol_path,
-                    chunk.kind.as_str(),
-                    chunk.visibility.as_str(),
-                    chunk.line_start,
-                    chunk.line_end,
-                    chunk.content,
-                    chunk.doc_comment,
-                    chunk.token_count,
-                    chunk.weight,
-                    chunk.vector_id.map(|v| v as i64),
-                ])?;
-                chunk_ids.push(tx.last_insert_rowid());
+                for chunk in chunks {
+                    chunk_stmt.execute(params![
+                        file_id,
+                        chunk.symbol_path,
+                        chunk.kind.as_str(),
+                        chunk.visibility.as_str(),
+                        chunk.line_start,
+                        chunk.line_end,
+                        chunk.content,
+                        chunk.doc_comment,
+                        chunk.token_count,
+                        chunk.weight,
+                        chunk.vector_id.map(|v| v as i64),
+                        chunk.content_hash as i64,
+                    ])?;
+                    chunk_ids.push(conn.last_insert_rowid());
+                }
             }
-        }
 
-        // Insert new symbols using a prepared, cached statement
-        {
-            let mut symbol_stmt = tx.prepare_cached(
-                "INSERT OR REPLACE INTO symbols (name, fqn, kind, file_id, line, chunk_id)
+            // Insert new symbols using a prepared, cached statement
+            {
+                let mut symbol_stmt = conn.prepare_cached(
+                    "INSERT OR REPLACE INTO symbols (name, fqn, kind, file_id, line, chunk_id)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            )?;
+                )?;
 
-            for symbol in symbols {
-                symbol_stmt.execute(params![
-                    symbol.name,
-                    symbol.fqn,
-                    symbol.kind.as_str(),
-                    file_id,
-                    symbol.line,
-                    symbol.chunk_id,
-                ])?;
+                for symbol in symbols {
+                    symbol_stmt.execute(params![
+                        symbol.name,
+                        symbol.fqn,
+                        symbol.kind.as_str(),
+                        file_id,
+                        symbol.line,
+                        symbol.chunk_id,
+                    ])?;
+                }
+            }
+
+            Ok((file_id, chunk_ids))
+        })();
+
+        match result {
+            Ok(val) => {
+                self.conn
+                    .execute_batch(&format!("RELEASE {savepoint_name}"))?;
+                Ok(val)
+            }
+            Err(e) => {
+                // Roll back to the savepoint to leave the DB in a clean state,
+                // then release it (required to free the savepoint even after rollback).
+                let _ = self
+                    .conn
+                    .execute_batch(&format!("ROLLBACK TO {savepoint_name}"));
+                let _ = self
+                    .conn
+                    .execute_batch(&format!("RELEASE {savepoint_name}"));
+                Err(crate::error::OmniError::Database(e))
             }
         }
-
-        tx.commit()?;
-        Ok((file_id, chunk_ids))
     }
 
     // -----------------------------------------------------------------------
@@ -1031,6 +1229,497 @@ pub struct IndexStats {
 }
 
 // ---------------------------------------------------------------------------
+// Commit search
+// ---------------------------------------------------------------------------
+
+impl MetadataIndex {
+    // Design: per-token AND search with OR fallback, same strategy as keyword_search.
+    // Searches message + summary + author fields via commits_fts virtual table.
+
+    /// Search commits using FTS5 full-text search over message and summary.
+    ///
+    /// Returns rowids sorted by BM25 relevance. The caller resolves each
+    /// rowid to a `CommitInfo` via the `commits` table.
+    pub fn search_commits(&self, query: &str, limit: usize) -> OmniResult<Vec<i64>> {
+        let tokens: Vec<String> = query
+            .split_whitespace()
+            .filter(|t| !t.is_empty())
+            .map(|t| format!("\"{}\"", t.replace('"', "")))
+            .collect();
+
+        if tokens.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let sql = "SELECT rowid FROM commits_fts
+                   WHERE commits_fts MATCH ?1
+                   ORDER BY bm25(commits_fts)
+                   LIMIT ?2";
+
+        let and_query = tokens.join(" AND ");
+        let mut stmt = self.conn.prepare(sql)?;
+        let and_ids: Vec<i64> = stmt
+            .query_map(params![and_query, limit as i64], |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        if !and_ids.is_empty() || tokens.len() == 1 {
+            return Ok(and_ids);
+        }
+
+        // OR fallback
+        let or_query = tokens.join(" OR ");
+        let mut stmt2 = self.conn.prepare(sql)?;
+        let or_ids: Vec<i64> = stmt2
+            .query_map(params![or_query, limit as i64], |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(or_ids)
+    }
+
+    /// Fetch commit records by their database rowids.
+    pub fn get_commits_by_rowids(
+        &self,
+        rowids: &[i64],
+    ) -> OmniResult<Vec<crate::commits::CommitInfo>> {
+        if rowids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders: String = rowids
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("?{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT hash, message, author, timestamp, summary, files_changed
+             FROM commits WHERE rowid IN ({placeholders})"
+        );
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params_vec: Vec<&dyn rusqlite::ToSql> =
+            rowids.iter().map(|r| r as &dyn rusqlite::ToSql).collect();
+        let commits = stmt
+            .query_map(params_vec.as_slice(), |row| {
+                let files_json: String = row.get(5)?;
+                let files: Vec<String> = serde_json::from_str(&files_json).unwrap_or_default();
+                Ok(crate::commits::CommitInfo {
+                    hash: row.get(0)?,
+                    message: row.get(1)?,
+                    author: row.get(2)?,
+                    timestamp: row.get(3)?,
+                    summary: row.get(4)?,
+                    files_changed: files,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(commits)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// External doc ingestion
+// ---------------------------------------------------------------------------
+
+/// A record for an externally ingested document.
+#[derive(Debug, Clone)]
+pub struct ExternalDoc {
+    /// Canonical source URL or file path used as the unique key.
+    pub source_url: String,
+    /// Title of the document (page title, filename, or inferred).
+    pub title: String,
+    /// Full text content (Markdown or plain text after extraction).
+    pub content: String,
+    /// IDs of chunks created from this document.
+    pub chunk_ids: Vec<i64>,
+}
+
+impl MetadataIndex {
+    /// Upsert an external document record.
+    ///
+    /// If `source_url` already exists, updates the title and content
+    /// but preserves `ingested_at` for the original ingestion time.
+    pub fn upsert_external_doc(
+        &self,
+        source_url: &str,
+        title: &str,
+        content: &str,
+        chunk_ids: &[i64],
+    ) -> OmniResult<i64> {
+        let ids_json = serde_json::to_string(chunk_ids).unwrap_or_else(|_| "[]".into());
+        self.conn.execute(
+            "INSERT INTO external_docs (source_url, title, content, chunk_ids)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(source_url) DO UPDATE SET
+                title = excluded.title,
+                content = excluded.content,
+                chunk_ids = excluded.chunk_ids",
+            params![source_url, title, content, ids_json],
+        )?;
+        let id: i64 = self.conn.query_row(
+            "SELECT id FROM external_docs WHERE source_url = ?1",
+            params![source_url],
+            |row| row.get(0),
+        )?;
+        Ok(id)
+    }
+
+    /// List all ingested external documents.
+    pub fn list_external_docs(&self) -> OmniResult<Vec<ExternalDoc>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT source_url, title, content, chunk_ids FROM external_docs
+             ORDER BY ingested_at DESC",
+        )?;
+        let docs = stmt
+            .query_map([], |row| {
+                let ids_json: String = row.get(3)?;
+                let chunk_ids: Vec<i64> = serde_json::from_str(&ids_json).unwrap_or_default();
+                Ok(ExternalDoc {
+                    source_url: row.get(0)?,
+                    title: row.get(1)?,
+                    content: row.get(2)?,
+                    chunk_ids,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(docs)
+    }
+
+    /// Check if a URL has already been ingested.
+    pub fn external_doc_exists(&self, source_url: &str) -> bool {
+        self.conn
+            .query_row(
+                "SELECT 1 FROM external_docs WHERE source_url = ?1",
+                params![source_url],
+                |_| Ok(true),
+            )
+            .unwrap_or(false)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Commit–file junction table (schema v4)
+// ---------------------------------------------------------------------------
+
+impl MetadataIndex {
+    /// Populate `commit_files` for one commit.
+    ///
+    /// Uses `INSERT OR IGNORE` so repeated calls are safe.
+    /// Call this immediately after `INSERT OR REPLACE INTO commits`.
+    pub fn insert_commit_files(&self, commit_hash: &str, files: &[String]) -> OmniResult<()> {
+        if files.is_empty() {
+            return Ok(());
+        }
+        let mut stmt = self.conn.prepare_cached(
+            "INSERT OR IGNORE INTO commit_files (commit_hash, file_path) VALUES (?1, ?2)",
+        )?;
+        for file_path in files {
+            stmt.execute(params![commit_hash, file_path])?;
+        }
+        Ok(())
+    }
+
+    /// Fetch commits that touched `file_path` using the indexed junction table.
+    ///
+    /// Falls back to the JSON `LIKE` scan when the `commit_files` table does
+    /// not exist (databases created before schema v4).
+    pub fn commits_for_file_fast(
+        &self,
+        file_path: &str,
+        limit: usize,
+    ) -> OmniResult<Vec<crate::commits::CommitInfo>> {
+        // Capability check: use junction table only when it exists.
+        let table_exists: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='commit_files'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap_or(0)
+            > 0;
+
+        if !table_exists {
+            // Graceful fallback: legacy LIKE scan.
+            return self.commits_for_file_like(file_path, limit);
+        }
+
+        let mut stmt = self.conn.prepare(
+            "SELECT c.hash, c.message, c.author, c.timestamp, c.summary, c.files_changed
+             FROM commits c
+             JOIN commit_files cf ON c.hash = cf.commit_hash
+             WHERE cf.file_path = ?1
+             ORDER BY c.timestamp DESC
+             LIMIT ?2",
+        )?;
+
+        let commits = stmt
+            .query_map(params![file_path, limit as i64], |row| {
+                let files_json: String = row.get(5)?;
+                let files: Vec<String> = serde_json::from_str(&files_json).unwrap_or_default();
+                Ok(crate::commits::CommitInfo {
+                    hash: row.get(0)?,
+                    message: row.get(1)?,
+                    author: row.get(2)?,
+                    timestamp: row.get(3)?,
+                    summary: row.get(4)?,
+                    files_changed: files,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(commits)
+    }
+
+    /// Legacy LIKE-based scan (pre-v4 fallback).
+    fn commits_for_file_like(
+        &self,
+        file_path: &str,
+        limit: usize,
+    ) -> OmniResult<Vec<crate::commits::CommitInfo>> {
+        let pattern = format!("%\"{file_path}\"%");
+        let mut stmt = self.conn.prepare(
+            "SELECT hash, message, author, timestamp, summary, files_changed
+             FROM commits
+             WHERE files_changed LIKE ?1
+             ORDER BY timestamp DESC
+             LIMIT ?2",
+        )?;
+        let commits = stmt
+            .query_map(params![pattern, limit as i64], |row| {
+                let files_json: String = row.get(5)?;
+                let files: Vec<String> = serde_json::from_str(&files_json).unwrap_or_default();
+                Ok(crate::commits::CommitInfo {
+                    hash: row.get(0)?,
+                    message: row.get(1)?,
+                    author: row.get(2)?,
+                    timestamp: row.get(3)?,
+                    summary: row.get(4)?,
+                    files_changed: files,
+                })
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(commits)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// File graph edge persistence (schema v5)
+// ---------------------------------------------------------------------------
+
+impl MetadataIndex {
+    /// Persist a batch of file-level dependency edges.
+    ///
+    /// Uses `INSERT OR REPLACE` inside a transaction.
+    pub fn save_file_graph_edges(
+        &self,
+        edges: &[crate::graph::dependencies::DependencyEdge],
+    ) -> OmniResult<()> {
+        if edges.is_empty() {
+            return Ok(());
+        }
+
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            let mut stmt = tx.prepare_cached(
+                "INSERT OR REPLACE INTO file_graph_edges
+                 (source_path, target_path, edge_type, weight)
+                 VALUES (?1, ?2, ?3, ?4)",
+            )?;
+            for edge in edges {
+                stmt.execute(params![
+                    edge.source.to_string_lossy().as_ref(),
+                    edge.target.to_string_lossy().as_ref(),
+                    edge.edge_type.as_str(),
+                    edge.weight,
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Load all persisted file-level dependency edges.
+    ///
+    /// Called once on engine startup to restore the in-memory graph.
+    pub fn load_file_graph_edges(
+        &self,
+    ) -> OmniResult<Vec<crate::graph::dependencies::DependencyEdge>> {
+        use crate::graph::dependencies::{DependencyEdge, EdgeType};
+        use std::path::PathBuf;
+
+        // Table may not exist on databases created before schema v5.
+        let table_exists: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='file_graph_edges'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap_or(0)
+            > 0;
+
+        if !table_exists {
+            return Ok(Vec::new());
+        }
+
+        let mut stmt = self
+            .conn
+            .prepare("SELECT source_path, target_path, edge_type, weight FROM file_graph_edges")?;
+
+        let edges = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, f64>(3)?,
+                ))
+            })?
+            .filter_map(|r| r.ok())
+            .filter_map(|(src, tgt, et, w)| {
+                EdgeType::parse(&et).map(|edge_type| DependencyEdge {
+                    source: PathBuf::from(src),
+                    target: PathBuf::from(tgt),
+                    edge_type,
+                    weight: w as f32,
+                })
+            })
+            .collect();
+
+        Ok(edges)
+    }
+
+    /// Delete all persisted edges where `source_path` matches.
+    ///
+    /// Called before re-persisting edges for a re-indexed file.
+    pub fn delete_file_graph_edges_for_file(&self, path: &std::path::Path) -> OmniResult<()> {
+        let path_str = path.to_string_lossy();
+        self.conn.execute(
+            "DELETE FROM file_graph_edges WHERE source_path = ?1",
+            params![path_str.as_ref()],
+        )?;
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sparse vector store (schema v6)
+// ---------------------------------------------------------------------------
+
+impl MetadataIndex {
+    /// Persist sparse token weights for one chunk.
+    ///
+    /// Stores as a JSON array `[[token_id, weight], ...]`.
+    pub fn save_sparse_vector(&self, chunk_id: i64, tokens: &[(u32, f32)]) -> OmniResult<()> {
+        let json = serde_json::to_string(tokens).map_err(|e| {
+            crate::error::OmniError::Internal(format!("sparse vector serialize: {e}"))
+        })?;
+        self.conn.execute(
+            "INSERT OR REPLACE INTO sparse_vectors (chunk_id, tokens) VALUES (?1, ?2)",
+            params![chunk_id, json],
+        )?;
+        Ok(())
+    }
+
+    /// Retrieve sparse token weights for one chunk.
+    pub fn get_sparse_vector(&self, chunk_id: i64) -> OmniResult<Option<Vec<(u32, f32)>>> {
+        let result: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT tokens FROM sparse_vectors WHERE chunk_id = ?1",
+                params![chunk_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        match result {
+            None => Ok(None),
+            Some(json) => {
+                let tokens: Vec<(u32, f32)> = serde_json::from_str(&json).map_err(|e| {
+                    crate::error::OmniError::Internal(format!("sparse vector deserialize: {e}"))
+                })?;
+                Ok(Some(tokens))
+            }
+        }
+    }
+
+    /// Compute dot-product similarity of `query_tokens` against all stored
+    /// sparse vectors and return the top-`limit` results as `(chunk_id, score)`.
+    ///
+    /// For indexes ≤100k chunks this loads all rows into Rust memory for
+    /// dot-product computation. Callers with >100k chunks should use the
+    /// in-memory `SparseInvertedIndex` instead.
+    pub fn search_sparse(
+        &self,
+        query_tokens: &[(u32, f32)],
+        limit: usize,
+    ) -> OmniResult<Vec<(i64, f32)>> {
+        if query_tokens.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+
+        // Build a lookup map for the query tokens: token_id → weight.
+        let query_map: std::collections::HashMap<u32, f32> = query_tokens.iter().copied().collect();
+
+        let mut stmt = self
+            .conn
+            .prepare("SELECT chunk_id, tokens FROM sparse_vectors")?;
+
+        let mut scores: Vec<(i64, f32)> = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?
+            .filter_map(|r| r.ok())
+            .filter_map(|(chunk_id, json)| {
+                let tokens: Vec<(u32, f32)> = serde_json::from_str(&json).ok()?;
+                let score: f32 = tokens
+                    .iter()
+                    .filter_map(|(tid, w)| query_map.get(tid).map(|qw| qw * w))
+                    .sum();
+                if score > 0.0 {
+                    Some((chunk_id, score))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scores.truncate(limit);
+        Ok(scores)
+    }
+
+    /// Load all (chunk_id, tokens) rows from `sparse_vectors` for in-memory index construction.
+    ///
+    /// Used by `Engine` to rebuild the `SparseInvertedIndex` after each `run_index()` run.
+    /// Returns an empty Vec (not an error) when the table is empty.
+    #[allow(clippy::type_complexity)]
+    pub fn get_all_sparse_vectors(&self) -> OmniResult<Vec<(i64, Vec<(u32, f32)>)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT chunk_id, tokens FROM sparse_vectors")?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?
+            .filter_map(|r| r.ok())
+            .filter_map(|(chunk_id, json)| {
+                let tokens: Vec<(u32, f32)> = serde_json::from_str(&json).ok()?;
+                Some((chunk_id, tokens))
+            })
+            .collect();
+
+        Ok(rows)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Parse helpers (delegates to centralized methods on types)
 // ---------------------------------------------------------------------------
 
@@ -1081,6 +1770,7 @@ mod tests {
             weight: 0.85,
             vector_id: None,
             is_summary: false,
+            content_hash: 0,
         }
     }
 
@@ -1305,6 +1995,25 @@ mod tests {
             !results.is_empty(),
             "should find results for 'authenticate'"
         );
+
+        // Multi-word AND query — both tokens appear in chunk1; must return results.
+        let multi_results = index
+            .keyword_search("authenticate_user username", 10)
+            .expect("multi-word search");
+        assert!(
+            !multi_results.is_empty(),
+            "multi-word AND query should return results when all tokens present"
+        );
+
+        // OR fallback — "authenticate_user" is present, "xyznonexistent" is not.
+        // Should still return a result via OR fallback.
+        let fallback_results = index
+            .keyword_search("authenticate_user xyznonexistent", 10)
+            .expect("or fallback search");
+        assert!(
+            !fallback_results.is_empty(),
+            "OR fallback should surface partial matches when AND returns nothing"
+        );
     }
 
     #[test]
@@ -1406,5 +2115,217 @@ mod tests {
         assert_eq!(stats.file_count, 1);
         assert_eq!(stats.chunk_count, 1);
         assert_eq!(stats.symbol_count, 1);
+    }
+
+    #[test]
+    fn test_insert_chunk_stores_content_hash() {
+        let index = open_test_db();
+        let file = test_file_info();
+        let file_id = index.upsert_file(&file).expect("upsert");
+
+        let mut chunk = test_chunk(file_id);
+        chunk.content_hash = 0xDEAD_BEEF_1234_5678_u64;
+        let _id = index.insert_chunk(&chunk).expect("insert chunk");
+
+        let chunks = index.get_chunks_for_file(file_id).expect("get chunks");
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].content_hash, 0xDEAD_BEEF_1234_5678_u64);
+    }
+
+    #[test]
+    fn test_get_chunk_content_hashes_returns_map() {
+        let index = open_test_db();
+        let file = test_file_info();
+        let file_id = index.upsert_file(&file).expect("upsert");
+
+        let mut chunk_a = test_chunk(file_id);
+        chunk_a.symbol_path = "main.func_a".to_string();
+        chunk_a.content_hash = 111_u64;
+
+        let mut chunk_b = test_chunk(file_id);
+        chunk_b.symbol_path = "main.func_b".to_string();
+        chunk_b.line_start = 10;
+        chunk_b.line_end = 20;
+        chunk_b.content_hash = 222_u64;
+
+        index.insert_chunk(&chunk_a).expect("insert a");
+        index.insert_chunk(&chunk_b).expect("insert b");
+
+        let hashes = index
+            .get_chunk_content_hashes_for_file(file_id)
+            .expect("get hashes");
+
+        assert_eq!(hashes.len(), 2);
+        assert_eq!(hashes.get("main.func_a").copied(), Some(111_u64));
+        assert_eq!(hashes.get("main.func_b").copied(), Some(222_u64));
+    }
+
+    #[test]
+    fn test_schema_migration_content_hash_default_zero() {
+        // Verify that chunks inserted without explicit content_hash default to 0.
+        let index = open_test_db();
+        let file = test_file_info();
+        let file_id = index.upsert_file(&file).expect("upsert");
+
+        // Insert a chunk with content_hash = 0 (the default)
+        let chunk = test_chunk(file_id); // test_chunk sets content_hash = 0
+        index.insert_chunk(&chunk).expect("insert");
+
+        let chunks = index.get_chunks_for_file(file_id).expect("get");
+        assert_eq!(chunks[0].content_hash, 0, "default content_hash must be 0");
+    }
+
+    // -----------------------------------------------------------------------
+    // Sparse vector round-trip tests (Item 8 — BGE-M3 sparse track)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_save_and_get_sparse_vector_round_trip() {
+        let index = open_test_db();
+
+        // Insert a parent file + chunk so the FK constraint on sparse_vectors is satisfied.
+        let file = test_file_info();
+        let file_id = index.upsert_file(&file).expect("upsert file");
+        let mut chunk = test_chunk(file_id);
+        chunk.symbol_path = "main.sparse_fn".to_string();
+        let chunk_id = index.insert_chunk(&chunk).expect("insert chunk");
+
+        // Store a sparse vector for that chunk.
+        let tokens: Vec<(u32, f32)> = vec![(42, 0.9), (7, 0.5), (100, 0.1)];
+        index
+            .save_sparse_vector(chunk_id, &tokens)
+            .expect("save sparse vector");
+
+        // Round-trip: retrieve and compare.
+        let retrieved = index
+            .get_sparse_vector(chunk_id)
+            .expect("get sparse vector")
+            .expect("sparse vector should be present");
+
+        assert_eq!(retrieved.len(), tokens.len(), "token count must match");
+        for ((tid, weight), (rtid, rweight)) in tokens.iter().zip(retrieved.iter()) {
+            assert_eq!(tid, rtid, "token_id must match");
+            assert!(
+                (weight - rweight).abs() < 1e-6,
+                "weight must survive JSON round-trip: {weight} vs {rweight}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_save_sparse_vector_overwrite() {
+        // INSERT OR REPLACE semantics: a second save for the same chunk_id replaces the first.
+        let index = open_test_db();
+        let file = test_file_info();
+        let file_id = index.upsert_file(&file).expect("upsert file");
+        let mut chunk = test_chunk(file_id);
+        chunk.symbol_path = "main.overwrite_fn".to_string();
+        let chunk_id = index.insert_chunk(&chunk).expect("insert chunk");
+
+        index
+            .save_sparse_vector(chunk_id, &[(1, 0.8)])
+            .expect("first save");
+        index
+            .save_sparse_vector(chunk_id, &[(2, 0.3), (3, 0.7)])
+            .expect("second save overwrites");
+
+        let retrieved = index
+            .get_sparse_vector(chunk_id)
+            .expect("get")
+            .expect("present");
+        assert_eq!(retrieved.len(), 2, "second write must replace first");
+        assert_eq!(retrieved[0].0, 2);
+        assert_eq!(retrieved[1].0, 3);
+    }
+
+    #[test]
+    fn test_get_sparse_vector_missing_returns_none() {
+        let index = open_test_db();
+        // chunk_id 999 never inserted — must return None, not an error.
+        let result = index
+            .get_sparse_vector(999)
+            .expect("query must not error for missing row");
+        assert!(result.is_none(), "missing sparse vector must be None");
+    }
+
+    #[test]
+    fn test_search_sparse_dot_product_scoring() {
+        let index = open_test_db();
+        let file = test_file_info();
+        let file_id = index.upsert_file(&file).expect("upsert file");
+
+        // chunk A: tokens (1→1.0, 2→1.0)
+        let mut chunk_a = test_chunk(file_id);
+        chunk_a.symbol_path = "main.fn_a".to_string();
+        let id_a = index.insert_chunk(&chunk_a).expect("insert a");
+        index
+            .save_sparse_vector(id_a, &[(1, 1.0_f32), (2, 1.0_f32)])
+            .expect("save a");
+
+        // chunk B: token (1→0.5) only — lower overlap with query
+        let mut chunk_b = test_chunk(file_id);
+        chunk_b.symbol_path = "main.fn_b".to_string();
+        let id_b = index.insert_chunk(&chunk_b).expect("insert b");
+        index
+            .save_sparse_vector(id_b, &[(1, 0.5_f32)])
+            .expect("save b");
+
+        // chunk C: no overlapping tokens — should not appear in results
+        let mut chunk_c = test_chunk(file_id);
+        chunk_c.symbol_path = "main.fn_c".to_string();
+        let id_c = index.insert_chunk(&chunk_c).expect("insert c");
+        index
+            .save_sparse_vector(id_c, &[(99, 1.0_f32)])
+            .expect("save c");
+
+        // Query: token (1→1.0, 2→0.5) — chunk A scores 1.5, chunk B scores 0.5
+        let results = index
+            .search_sparse(&[(1, 1.0_f32), (2, 0.5_f32)], 10)
+            .expect("search_sparse");
+
+        // chunk C has no overlap and must be absent.
+        let ids: Vec<i64> = results.iter().map(|(id, _)| *id).collect();
+        assert!(!ids.contains(&id_c), "zero-overlap chunk must not appear");
+
+        // chunk A must outrank chunk B.
+        assert_eq!(
+            ids[0], id_a,
+            "chunk A has higher dot-product, must rank first"
+        );
+        assert_eq!(ids[1], id_b, "chunk B must rank second");
+
+        // Score for A = 1*1.0 + 0.5*1.0 = 1.5
+        let score_a = results.iter().find(|(id, _)| *id == id_a).unwrap().1;
+        assert!(
+            (score_a - 1.5_f32).abs() < 1e-5,
+            "dot-product score must be 1.5, got {score_a}"
+        );
+    }
+
+    #[test]
+    fn test_get_all_sparse_vectors_returns_all_rows() {
+        let index = open_test_db();
+        let file = test_file_info();
+        let file_id = index.upsert_file(&file).expect("upsert file");
+
+        for i in 0..5_i64 {
+            let mut chunk = test_chunk(file_id);
+            chunk.symbol_path = format!("main.fn_{i}");
+            let chunk_id = index.insert_chunk(&chunk).expect("insert chunk");
+            index
+                .save_sparse_vector(chunk_id, &[(i as u32, 1.0)])
+                .expect("save");
+        }
+
+        let all = index.get_all_sparse_vectors().expect("get all");
+        assert_eq!(
+            all.len(),
+            5,
+            "get_all_sparse_vectors must return all 5 rows"
+        );
+        // Every row must have exactly one token entry.
+        for (_, tokens) in &all {
+            assert_eq!(tokens.len(), 1);
+        }
     }
 }

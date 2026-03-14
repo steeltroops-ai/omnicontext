@@ -554,7 +554,7 @@ impl CacheStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Chunk, ChunkKind};
+    use crate::types::{Chunk, ChunkKind, ScoreBreakdown};
     use std::path::PathBuf;
 
     fn create_test_result(score: f64) -> SearchResult {
@@ -573,10 +573,11 @@ mod tests {
                 weight: 1.0,
                 vector_id: None,
                 is_summary: false,
+                content_hash: 0,
             },
             file_path: PathBuf::from("test.rs"),
             score,
-            score_breakdown: Default::default(),
+            score_breakdown: ScoreBreakdown::default(),
         }
     }
 

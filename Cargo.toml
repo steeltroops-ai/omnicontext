@@ -60,6 +60,11 @@ tree-sitter-kotlin-ng = "1.1"
 # Embedding / ML
 ort = { version = "2.0.0-rc.12", features = ["download-binaries", "load-dynamic", "copy-dylibs"] }
 # Note: Using 2.0.0-rc.12 to match the downloaded ONNX runtime cleanly.
+# GPU acceleration is opt-in via omni-core feature flags:
+#   --features omni-core/cuda      → NVIDIA CUDA
+#   --features omni-core/coreml    → Apple CoreML (macOS)
+#   --features omni-core/directml  → Windows DirectML (AMD/Intel/NVIDIA)
+# These are NOT enabled by default to keep default builds dependency-minimal.
 
 # Vector index
 # usearch = "2"  # TODO: evaluate version compatibility during future development
@@ -100,16 +105,32 @@ schemars = "1"
 # Hashing
 sha2 = "0.10"
 hex = "0.4"
+# xxHash3: ~40x faster than SHA-256 for change-detection hashing (non-cryptographic).
+# Used for mtime-gated file content comparison in FileHashCache.
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+
+# CPU-bound parallelism (P3.2 — parallel file parsing)
+rayon = "1.10"
 
 # Async utilities
 tokio-util = "0.7"
+tokio-stream = "0.1"
+
+# UUID generation
+uuid = { version = "1", features = ["v4"] }
+
+# Async stream combinators
+futures-util = "0.3"
 
 # Tokenization
 tokenizers = "0.22"
 
 # HTTP downloads (model auto-download)
-reqwest = { version = "0.12", features = ["blocking", "rustls-tls"], default-features = false }
+reqwest = { version = "0.12", features = ["blocking", "rustls-tls", "json"], default-features = false }
 indicatif = "0.17"
+
+# Glob pattern matching (for search_with_filter path_glob)
+globset = "0.4"
 
 # Cross-crate testing
 tempfile = "3"

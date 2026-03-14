@@ -91,6 +91,11 @@ impl CommitEngine {
 
     /// Parse `git log` output into CommitInfo records.
     fn parse_git_log(output: &str) -> Vec<CommitInfo> {
+        Self::parse_git_log_pub(output)
+    }
+
+    /// Public re-export of `parse_git_log` for Engine methods that call git directly.
+    pub fn parse_git_log_pub(output: &str) -> Vec<CommitInfo> {
         let mut commits = Vec::new();
         let mut lines = output.lines().peekable();
 
@@ -150,7 +155,14 @@ impl CommitEngine {
                 serde_json::to_string(&commit.files_changed).unwrap_or_default(),
             ],
         )?;
+        // Populate the commit_files junction table (schema v4).
+        index.insert_commit_files(&commit.hash, &commit.files_changed)?;
         Ok(())
+    }
+
+    /// Public wrapper around `store_commit` for use in tests and external callers.
+    pub fn store_commit_pub(index: &MetadataIndex, commit: &CommitInfo) -> OmniResult<()> {
+        Self::store_commit(index, commit)
     }
 
     #[allow(clippy::missing_errors_doc)]
@@ -185,38 +197,15 @@ impl CommitEngine {
 
     #[allow(clippy::missing_errors_doc)]
     /// Get recent commits that touched a specific file.
+    ///
+    /// Uses the `commit_files` junction table (schema v4) for O(1) indexed lookup.
+    /// Falls back to the legacy JSON LIKE scan on pre-v4 databases.
     pub fn commits_for_file(
         index: &MetadataIndex,
         file_path: &str,
         limit: usize,
     ) -> OmniResult<Vec<CommitInfo>> {
-        let conn = index.connection();
-        let mut stmt = conn.prepare(
-            "SELECT hash, message, author, timestamp, summary, files_changed
-             FROM commits
-             WHERE files_changed LIKE ?1
-             ORDER BY timestamp DESC
-             LIMIT ?2",
-        )?;
-
-        let pattern = format!("%\"{file_path}\"%");
-        let commits = stmt
-            .query_map(rusqlite::params![pattern, limit], |row| {
-                let files_json: String = row.get(5)?;
-                let files: Vec<String> = serde_json::from_str(&files_json).unwrap_or_default();
-                Ok(CommitInfo {
-                    hash: row.get(0)?,
-                    message: row.get(1)?,
-                    author: row.get(2)?,
-                    timestamp: row.get(3)?,
-                    summary: row.get(4)?,
-                    files_changed: files,
-                })
-            })?
-            .filter_map(std::result::Result::ok)
-            .collect();
-
-        Ok(commits)
+        index.commits_for_file_fast(file_path, limit)
     }
 
     /// Find files that frequently change together with the given file.
@@ -314,5 +303,65 @@ mod tests {
     fn test_parse_empty_log() {
         let commits = CommitEngine::parse_git_log("");
         assert!(commits.is_empty());
+    }
+
+    #[test]
+    fn test_commits_for_file_uses_junction_table() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let index =
+            crate::index::MetadataIndex::open(&dir.path().join("test.db")).expect("open db");
+        let engine = CommitEngine::new(1000);
+
+        // Store 5 commits; two of them touch "src/auth.rs".
+        let base_commits = vec![
+            CommitInfo {
+                hash: "aaa111".into(),
+                message: "feat: auth".into(),
+                author: "Alice".into(),
+                timestamp: "2024-01-15T10:00:00+00:00".into(),
+                summary: None,
+                files_changed: vec!["src/auth.rs".into(), "src/lib.rs".into()],
+            },
+            CommitInfo {
+                hash: "bbb222".into(),
+                message: "fix: auth bug".into(),
+                author: "Bob".into(),
+                timestamp: "2024-01-14T09:00:00+00:00".into(),
+                summary: None,
+                files_changed: vec!["src/auth.rs".into()],
+            },
+            CommitInfo {
+                hash: "ccc333".into(),
+                message: "chore: update deps".into(),
+                author: "Carol".into(),
+                timestamp: "2024-01-13T08:00:00+00:00".into(),
+                summary: None,
+                files_changed: vec!["Cargo.toml".into()],
+            },
+        ];
+
+        for c in &base_commits {
+            CommitEngine::store_commit_pub(&index, c).expect("store commit");
+        }
+
+        let results =
+            CommitEngine::commits_for_file(&index, "src/auth.rs", 10).expect("commits_for_file");
+
+        assert_eq!(
+            results.len(),
+            2,
+            "should find exactly 2 commits touching auth.rs"
+        );
+
+        // Verify ordering: most recent first.
+        assert_eq!(results[0].hash, "aaa111");
+        assert_eq!(results[1].hash, "bbb222");
+
+        // Unrelated file must return 0.
+        let none = CommitEngine::commits_for_file(&index, "src/missing.rs", 10)
+            .expect("commits_for_file missing");
+        assert!(none.is_empty(), "non-existent file should return empty");
+
+        let _ = engine; // keep engine alive for type inference
     }
 }

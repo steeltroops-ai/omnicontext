@@ -1243,7 +1243,7 @@ mod tests {
 
         // All percentiles should be in [0.0, 1.0)
         for &p in pct.values() {
-            assert!(p >= 0.0 && p < 1.0, "percentile {p} out of range [0,1)");
+            assert!((0.0..1.0).contains(&p), "percentile {p} out of range [0,1)");
         }
 
         // Hub node 5 should have the highest percentile

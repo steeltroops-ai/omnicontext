@@ -330,6 +330,12 @@ pub struct Chunk {
     /// Whether this is a RAPTOR-style summary chunk (aggregated from leaf chunks).
     #[serde(default)]
     pub is_summary: bool,
+    /// xxHash3 of the chunk's content for chunk-level delta detection.
+    ///
+    /// A value of 0 means the hash was not computed (legacy chunks or summary
+    /// chunks). Code treats hash == 0 as "not computed" and always re-embeds.
+    #[serde(default)]
+    pub content_hash: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -378,7 +384,7 @@ pub enum DependencyKind {
     /// Function A accesses a field of struct B.
     FieldAccess,
 
-    // --- Semantic Reasoning Edges (Phase 1 Intelligence) ---
+    // --- Semantic reasoning edges ---
     /// Data flows from function A's return to function B's parameter.
     ///
     /// Tracks value propagation across function boundaries:
@@ -518,6 +524,9 @@ pub struct ScoreBreakdown {
     /// PageRank-based symbol importance boost (0.0–1.0 percentile).
     /// Higher means the symbol is structurally more central in the codebase.
     pub pagerank_boost: f64,
+    /// Rank from BGE-M3 sparse (SPLADE-style) retrieval signal.
+    /// `None` when `enable_sparse_retrieval = false` (default).
+    pub sparse_rank: Option<u32>,
 }
 
 // ---------------------------------------------------------------------------

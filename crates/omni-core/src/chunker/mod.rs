@@ -376,6 +376,7 @@ fn element_to_chunk(
         weight: compute_weight(elem),
         vector_id: None,
         is_summary: false,
+        content_hash: 0, // computed by pipeline after chunking
     }
 }
 
@@ -626,6 +627,7 @@ fn create_chunks_from_splits(
             weight: compute_weight(elem),
             vector_id: None,
             is_summary: false,
+            content_hash: 0, // computed by pipeline after chunking
         });
         return chunks;
     }
@@ -695,6 +697,7 @@ fn create_chunks_from_splits(
             weight: compute_weight(elem),
             vector_id: None,
             is_summary: false,
+            content_hash: 0, // computed by pipeline after chunking
         });
     }
 
@@ -906,6 +909,7 @@ pub fn generate_summary_chunks(
         weight: ChunkKind::Summary.default_weight(),
         vector_id: None,
         is_summary: true,
+        content_hash: 0, // summary chunks always re-embed; no delta detection
     });
 
     summaries

@@ -222,18 +222,38 @@ pub(crate) fn extract_class_decl(
     let symbol_path = build_symbol_path(module_name, scope_path, &name);
     let doc_comment = extract_jsdoc(node, source);
 
-    // Extract superclass references
+    // Extract superclass/interface references from `class_heritage` node.
+    // Grammar: `extends Foo implements Bar, Baz`
+    // We populate both `references` (legacy compat) and the structural
+    // `extends` / `implements` fields consumed by the EdgeExtractor.
     let mut references = Vec::new();
+    let mut extends = Vec::new();
+    let mut implements = Vec::new();
+
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.kind() == "class_heritage" {
             let heritage_text = node_text(child, source);
-            // Parse "extends Foo implements Bar, Baz"
+            // Walk the heritage clause word-by-word, tracking mode
+            let mut mode = "none";
             for part in heritage_text.split_whitespace() {
-                if part != "extends" && part != "implements" {
-                    let clean = part.trim_end_matches(',');
-                    if !clean.is_empty() {
-                        references.push(clean.to_string());
+                match part {
+                    "extends" => {
+                        mode = "extends";
+                    }
+                    "implements" => {
+                        mode = "implements";
+                    }
+                    _ => {
+                        let clean = part.trim_end_matches(',');
+                        if !clean.is_empty() {
+                            references.push(clean.to_string());
+                            match mode {
+                                "extends" => extends.push(clean.to_string()),
+                                "implements" => implements.push(clean.to_string()),
+                                _ => {}
+                            }
+                        }
                     }
                 }
             }
@@ -250,8 +270,8 @@ pub(crate) fn extract_class_decl(
         content: node_text(node, source).to_string(),
         doc_comment,
         references,
-        extends: Vec::new(),
-        implements: Vec::new(),
+        extends,
+        implements,
     })
 }
 

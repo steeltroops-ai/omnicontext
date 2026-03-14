@@ -390,6 +390,7 @@ impl ContextAssembler {
             weight: chunk.weight,
             vector_id: chunk.vector_id,
             is_summary: chunk.is_summary,
+            content_hash: chunk.content_hash,
         }
     }
 }
@@ -414,6 +415,7 @@ mod tests {
             weight: 0.85,
             vector_id: Some(1),
             is_summary: false,
+            content_hash: 0,
         }
     }
 

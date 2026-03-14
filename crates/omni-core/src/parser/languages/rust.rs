@@ -246,11 +246,15 @@ impl RustAnalyzer {
         let type_name = node_text(type_node, source).to_string();
 
         // Check if this is a trait impl: `impl Trait for Type`
-        let name = if let Some(trait_node) = node.child_by_field_name("trait") {
-            let trait_name = node_text(trait_node, source);
-            format!("impl {trait_name} for {type_name}")
+        // Populate `implements` so EdgeExtractor can emit INHERITS edges.
+        let (name, implements) = if let Some(trait_node) = node.child_by_field_name("trait") {
+            let trait_name = node_text(trait_node, source).to_string();
+            (
+                format!("impl {trait_name} for {type_name}"),
+                vec![trait_name],
+            )
         } else {
-            format!("impl {type_name}")
+            (format!("impl {type_name}"), Vec::new())
         };
 
         let symbol_path = build_symbol_path(module_name, scope_path, &name);
@@ -266,7 +270,7 @@ impl RustAnalyzer {
             doc_comment: None,
             references: Vec::new(),
             extends: Vec::new(),
-            implements: Vec::new(),
+            implements,
         })
     }
 

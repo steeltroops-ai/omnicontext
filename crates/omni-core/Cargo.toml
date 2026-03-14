@@ -76,10 +76,37 @@ dirs = { workspace = true }
 # Hashing
 sha2 = { workspace = true }
 hex = { workspace = true }
+# Fast non-cryptographic hashing for change detection (~40x faster than SHA-256)
+xxhash-rust = { workspace = true }
+
+# CPU-bound parallel file parsing (P3.2)
+rayon = { workspace = true }
 
 # HTTP downloads (model auto-download)
 reqwest = { workspace = true }
 indicatif = { workspace = true }
+
+# Glob pattern matching (search_with_filter path_glob)
+globset = { workspace = true }
+
+# Compression
+lz4 = { workspace = true }
+
+[features]
+## NVIDIA CUDA GPU acceleration for ONNX inference.
+## Requires CUDA toolkit ≥11.8 and cuDNN ≥8.6 on the target machine.
+## Activate with: cargo build --features cuda
+cuda = ["ort/cuda"]
+
+## Apple CoreML execution provider (macOS/iOS).
+## Delegates to Apple Neural Engine or GPU on Apple Silicon.
+## Activate with: cargo build --features coreml
+coreml = ["ort/coreml"]
+
+## Windows DirectML execution provider (any GPU with D3D12 support).
+## Works with AMD, Intel, and NVIDIA GPUs on Windows.
+## Activate with: cargo build --features directml
+directml = ["ort/directml"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

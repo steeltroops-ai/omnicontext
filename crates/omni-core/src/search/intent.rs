@@ -6,8 +6,281 @@
 //! - Debug: Error paths, recent changes, stack traces
 //! - Refactor: All usages, downstream dependents, type hierarchy
 //! - Generate: Similar patterns, architectural conventions
+//!
+//! ## Prototype-Vector Blending
+//!
+//! [`IntentClassifier`] extends the keyword heuristics in [`QueryIntent::classify`]
+//! with a prototype-vector second signal.  Representative prototype sentences
+//! for each intent class are embedded once at startup into class centroids.
+//! At query time the query embedding is compared to each centroid via cosine
+//! similarity.  The keyword confidence (`kw_conf`) and prototype similarity
+//! (`vec_score`) are blended as follows:
+//!
+//! ```text
+//! if kw_conf >= 0.8  →  return kw_intent          (high-confidence keyword wins)
+//! elif vec_score > 0.6  →  return vec_intent       (prototype wins)
+//! else  →  return kw_intent                        (fallback)
+//! ```
+//!
+//! When the embedder is unavailable (no ONNX session) the classifier degrades
+//! gracefully to keyword-only mode.
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+use lru::LruCache;
 use serde::{Deserialize, Serialize};
+
+/// Intent prototype sentences — one or two per class.
+///
+/// These short representative sentences are embedded once during
+/// `IntentClassifier::build()` and averaged into per-class centroids.
+/// They were chosen to have clear, unambiguous intent signals.
+const INTENT_PROTOTYPES: &[(&str, QueryIntent)] = &[
+    ("explain how this function works", QueryIntent::Explain),
+    ("what does this module do", QueryIntent::Explain),
+    ("fix the bug in this implementation", QueryIntent::Debug),
+    ("why is this crashing", QueryIntent::Debug),
+    (
+        "refactor this to use a different pattern",
+        QueryIntent::Refactor,
+    ),
+    ("find all callers of this function", QueryIntent::Refactor),
+    (
+        "implement a new endpoint that handles requests",
+        QueryIntent::Generate,
+    ),
+    ("update the configuration field", QueryIntent::Edit),
+    ("modify the search algorithm", QueryIntent::Edit),
+    (
+        "how does data flow from parser to index",
+        QueryIntent::DataFlow,
+    ),
+    ("what does the chunker depend on", QueryIntent::Dependency),
+    (
+        "show upstream imports of this module",
+        QueryIntent::Dependency,
+    ),
+    (
+        "which tests cover the authentication path",
+        QueryIntent::TestCoverage,
+    ),
+];
+
+/// LRU cache capacity for per-query intent embeddings.
+const INTENT_EMBED_CACHE_SIZE: usize = 200;
+
+/// Create the LRU cache for intent embeddings.
+///
+/// Centralises the `NonZeroUsize` construction so the calling
+/// functions do not need per-site lint suppressions.
+#[inline]
+fn intent_embed_lru() -> lru::LruCache<String, Vec<f32>> {
+    // 200 is non-zero; the Option is always Some.
+    let cap =
+        std::num::NonZeroUsize::new(INTENT_EMBED_CACHE_SIZE).unwrap_or(std::num::NonZeroUsize::MIN);
+    lru::LruCache::new(cap)
+}
+
+/// Dot-product of two equal-length slices (cosine similarity on L2-normalised vecs).
+fn dot(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b).map(|(x, y)| x * y).sum()
+}
+
+/// L2-normalise a vector in-place; returns the norm.
+fn l2_norm(v: &mut [f32]) -> f32 {
+    let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if norm > f32::EPSILON {
+        for x in v.iter_mut() {
+            *x /= norm;
+        }
+    }
+    norm
+}
+
+/// Query intent classifier with optional prototype-vector second signal.
+///
+/// Use [`IntentClassifier::build`] to create an instance with prototype
+/// embeddings wired to a live embedder.  Use [`IntentClassifier::keyword_only`]
+/// for a no-embedder fallback (tests, degraded mode).
+pub struct IntentClassifier {
+    /// Per-intent class centroid (L2-normalised).  `None` when no embedder was
+    /// available at construction time — falls back to keyword-only mode.
+    prototypes: Option<HashMap<QueryIntent, Vec<f32>>>,
+    /// Per-query embedding cache to avoid re-embedding the same query string
+    /// during a single search request or across rapid consecutive calls.
+    embed_cache: Mutex<LruCache<String, Vec<f32>>>,
+}
+
+impl std::fmt::Debug for IntentClassifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let has_prototypes = self.prototypes.is_some();
+        f.debug_struct("IntentClassifier")
+            .field("has_prototypes", &has_prototypes)
+            .finish_non_exhaustive()
+    }
+}
+
+impl IntentClassifier {
+    /// Build an `IntentClassifier` with prototype embeddings from `embedder`.
+    ///
+    /// Embeds every prototype sentence in [`INTENT_PROTOTYPES`], averages them
+    /// per class into L2-normalised centroids, and returns the classifier.
+    ///
+    /// If embedding fails for any prototype sentence, that sentence is skipped.
+    /// If *all* sentences for a class fail, that class has no centroid and falls
+    /// back to keyword classification for that intent.
+    ///
+    /// This is O(|INTENT_PROTOTYPES|) embedding calls — called once at startup.
+    pub fn build(embedder: &crate::embedder::Embedder) -> Self {
+        if !embedder.is_available() {
+            return Self::keyword_only();
+        }
+
+        let texts: Vec<&str> = INTENT_PROTOTYPES.iter().map(|(t, _)| *t).collect();
+        let embeddings = embedder.embed_batch(&texts);
+
+        // Accumulate sum vectors per class.
+        let mut sums: HashMap<QueryIntent, (Vec<f32>, usize)> = HashMap::new();
+        for ((_, intent), maybe_emb) in INTENT_PROTOTYPES.iter().zip(embeddings.iter()) {
+            if let Some(emb) = maybe_emb {
+                let entry = sums
+                    .entry(*intent)
+                    .or_insert_with(|| (vec![0.0f32; emb.len()], 0));
+                for (a, b) in entry.0.iter_mut().zip(emb.iter()) {
+                    *a += b;
+                }
+                entry.1 += 1;
+            }
+        }
+
+        // Average and L2-normalise each centroid.
+        let prototypes: HashMap<QueryIntent, Vec<f32>> = sums
+            .into_iter()
+            .filter_map(|(intent, (mut sum, count))| {
+                if count == 0 {
+                    return None;
+                }
+                let n = count as f32;
+                for x in &mut sum {
+                    *x /= n;
+                }
+                l2_norm(&mut sum);
+                Some((intent, sum))
+            })
+            .collect();
+
+        if prototypes.is_empty() {
+            return Self::keyword_only();
+        }
+
+        tracing::debug!(
+            classes = prototypes.len(),
+            "intent classifier prototype centroids built"
+        );
+
+        Self {
+            prototypes: Some(prototypes),
+            embed_cache: Mutex::new(intent_embed_lru()),
+        }
+    }
+
+    /// Create a keyword-only classifier with no prototype embeddings.
+    ///
+    /// Used in degraded mode (embedder unavailable) and in unit tests that
+    /// do not have access to a real ONNX session.
+    pub fn keyword_only() -> Self {
+        Self {
+            prototypes: None,
+            embed_cache: Mutex::new(intent_embed_lru()),
+        }
+    }
+
+    /// Classify a query using keyword heuristics blended with prototype similarity.
+    ///
+    /// ## Blending logic
+    ///
+    /// 1. Run keyword heuristics → `(kw_intent, kw_conf)`.
+    ///    - `kw_conf = 1.0` when `kw_intent != Unknown` (exact keyword match).
+    ///    - `kw_conf = 0.5` when `kw_intent == Unknown` (ambiguous).
+    /// 2. If prototypes and embedder available: embed query (using cache), compute
+    ///    cosine similarity to each class centroid → `(vec_intent, vec_score)`.
+    /// 3. Blend:
+    ///    - `kw_conf >= 0.8` → return `kw_intent` immediately (keyword wins).
+    ///    - `vec_score > 0.6` → return `vec_intent` (prototype overrides ambiguous keyword).
+    ///    - else → return `kw_intent` (safe fallback).
+    pub fn classify(
+        &self,
+        query: &str,
+        embedder: Option<&crate::embedder::Embedder>,
+    ) -> QueryIntent {
+        let kw_intent = QueryIntent::classify(query);
+        let kw_conf: f32 = if kw_intent != QueryIntent::Unknown {
+            1.0
+        } else {
+            0.5
+        };
+
+        // High-confidence keyword match — skip prototype lookup entirely.
+        if kw_conf >= 0.8 {
+            return kw_intent;
+        }
+
+        // Prototype vector path (only when both prototypes and embedder are present).
+        let prototypes = match &self.prototypes {
+            Some(p) => p,
+            None => return kw_intent,
+        };
+        let embedder = match embedder {
+            Some(e) if e.is_available() => e,
+            _ => return kw_intent,
+        };
+
+        // Retrieve from cache or embed the query.
+        let query_emb: Vec<f32> = {
+            let cached = self
+                .embed_cache
+                .lock()
+                .ok()
+                .and_then(|mut cache| cache.get(query).cloned());
+
+            if let Some(emb) = cached {
+                emb
+            } else {
+                match embedder.embed_query(query) {
+                    Ok(mut emb) => {
+                        l2_norm(&mut emb);
+                        if let Ok(mut cache) = self.embed_cache.lock() {
+                            cache.put(query.to_string(), emb.clone());
+                        }
+                        emb
+                    }
+                    Err(_) => return kw_intent,
+                }
+            }
+        };
+
+        // Find the class with highest cosine similarity.
+        let mut best_intent = QueryIntent::Unknown;
+        let mut best_score: f32 = f32::NEG_INFINITY;
+        for (intent, centroid) in prototypes {
+            if centroid.len() != query_emb.len() {
+                continue;
+            }
+            let score = dot(&query_emb, centroid);
+            if score > best_score {
+                best_score = score;
+                best_intent = *intent;
+            }
+        }
+
+        if best_score > 0.6 {
+            best_intent
+        } else {
+            kw_intent
+        }
+    }
+}
 
 /// Query intent classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -466,5 +739,46 @@ mod tests {
         assert!(!strategy.include_architecture);
         assert!(!strategy.include_implementation);
         assert_eq!(strategy.graph_depth, 1);
+    }
+
+    // -----------------------------------------------------------------------
+    // IntentClassifier tests (keyword-only mode — no ONNX session in tests)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_keyword_only_classifier_falls_back_to_keyword() {
+        let clf = IntentClassifier::keyword_only();
+        assert_eq!(clf.classify("fix the bug", None), QueryIntent::Debug);
+        assert_eq!(clf.classify("update the config", None), QueryIntent::Edit);
+        assert_eq!(
+            clf.classify("how does this work", None),
+            QueryIntent::Explain
+        );
+    }
+
+    #[test]
+    fn test_keyword_wins_on_exact_match_even_without_embedder() {
+        let clf = IntentClassifier::keyword_only();
+        assert_eq!(
+            clf.classify("fix the bug", None),
+            QueryIntent::Debug,
+            "high-confidence keyword match must not be overridden"
+        );
+    }
+
+    #[test]
+    fn test_ambiguous_query_returns_unknown_without_embedder() {
+        let clf = IntentClassifier::keyword_only();
+        assert_eq!(clf.classify("authentication", None), QueryIntent::Unknown);
+    }
+
+    #[test]
+    fn test_classifier_keyword_only_has_no_prototypes() {
+        let clf = IntentClassifier::keyword_only();
+        assert!(clf.prototypes.is_none());
+        assert_eq!(
+            clf.classify("refactor the auth module", None),
+            QueryIntent::Refactor
+        );
     }
 }

@@ -107,7 +107,7 @@ pub fn deduplicate(chunks: &[ChunkRef], config: &DeduplicationConfig) -> Dedupli
     let mut subsumed_count: usize = 0;
     let mut near_dupes: usize = 0;
 
-    // Phase 1: Content-hash deduplication (exact matches)
+    // Content-hash deduplication (exact matches)
     if config.cross_file_dedup {
         let mut content_hashes: HashMap<u64, usize> = HashMap::new();
         for (i, chunk) in chunks.iter().enumerate() {
@@ -125,7 +125,7 @@ pub fn deduplicate(chunks: &[ChunkRef], config: &DeduplicationConfig) -> Dedupli
         }
     }
 
-    // Phase 2: Subsumption detection (same file, one range contains the other)
+    // Subsumption detection (same file, one range contains the other)
     if config.merge_subsumed {
         for i in 0..n {
             if removed.contains(&i) {
@@ -160,7 +160,7 @@ pub fn deduplicate(chunks: &[ChunkRef], config: &DeduplicationConfig) -> Dedupli
         }
     }
 
-    // Phase 3: Near-duplicate detection via n-gram Jaccard similarity
+    // Near-duplicate detection via n-gram Jaccard similarity
     if config.similarity_threshold > 0.0 && config.similarity_threshold < 1.0 {
         // Precompute n-gram sets
         let ngram_sets: Vec<HashSet<u64>> = chunks

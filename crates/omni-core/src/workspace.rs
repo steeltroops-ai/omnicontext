@@ -17,6 +17,8 @@ pub struct Workspace {
     name: String,
     /// Engines for each linked repository, keyed by repo path.
     engines: HashMap<PathBuf, Engine>,
+    /// Priority weights per repo path, persisted alongside the config.
+    priorities: HashMap<PathBuf, f32>,
     /// Config file path for this workspace.
     config_path: PathBuf,
 }
@@ -30,6 +32,14 @@ pub struct LinkedRepo {
     pub alias: Option<String>,
     /// Whether to auto-index on workspace open.
     pub auto_index: bool,
+    /// Search result priority weight [0.0, 1.0]. Higher values boost this
+    /// repo's results in merged multi-repo search. Defaults to 0.5.
+    #[serde(default = "default_priority")]
+    pub priority: f32,
+}
+
+fn default_priority() -> f32 {
+    0.5
 }
 
 /// Workspace configuration persisted to disk.
@@ -57,7 +67,9 @@ impl Workspace {
         };
 
         let mut engines = HashMap::new();
+        let mut priorities = HashMap::new();
         for repo in &ws_config.repos {
+            priorities.insert(repo.path.clone(), repo.priority);
             if repo.path.exists() {
                 match Engine::new(&repo.path) {
                     Ok(engine) => {
@@ -77,12 +89,21 @@ impl Workspace {
         Ok(Self {
             name: ws_config.name,
             engines,
+            priorities,
             config_path: config_path.to_path_buf(),
         })
     }
 
-    /// Link a new repository to this workspace.
-    pub fn link_repo(&mut self, path: &Path, alias: Option<String>) -> OmniResult<()> {
+    /// Link a new repository to this workspace with an optional priority weight.
+    ///
+    /// Returns `Err` if the path cannot be canonicalized, the engine fails to
+    /// open, or the repo is already linked.
+    pub fn link_repo(
+        &mut self,
+        path: &Path,
+        alias: Option<String>,
+        priority: f32,
+    ) -> OmniResult<()> {
         let canonical = path.canonicalize().map_err(|e| {
             OmniError::Internal(format!("cannot resolve path {}: {e}", path.display()))
         })?;
@@ -95,38 +116,90 @@ impl Workspace {
 
         let engine = Engine::new(&canonical)?;
         self.engines.insert(canonical.clone(), engine);
+        self.priorities
+            .insert(canonical.clone(), priority.clamp(0.0, 1.0));
 
-        // Persist
+        // Persist immediately so the config is durable on crash.
         self.save_config()?;
 
         tracing::info!(
             path = %canonical.display(),
             alias = ?alias,
+            priority,
             "linked repository to workspace"
         );
 
         Ok(())
     }
 
+    /// Update the search priority weight for a linked repository.
+    ///
+    /// Returns `false` if the path is not currently linked.
+    pub fn set_priority(&mut self, path: &Path, priority: f32) -> OmniResult<bool> {
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        if !self.engines.contains_key(&canonical) {
+            return Ok(false);
+        }
+        self.priorities.insert(canonical, priority.clamp(0.0, 1.0));
+        self.save_config()?;
+        Ok(true)
+    }
+
     /// Unlink a repository from this workspace.
     pub fn unlink_repo(&mut self, path: &Path) -> OmniResult<bool> {
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let removed = self.engines.remove(&canonical).is_some();
+        self.priorities.remove(&canonical);
         if removed {
             self.save_config()?;
         }
         Ok(removed)
     }
 
-    /// Search across all linked repositories.
+    /// Return metadata for all linked repos sorted by priority descending.
+    #[must_use]
+    pub fn list_linked_repos(&self) -> Vec<LinkedRepo> {
+        let mut repos: Vec<LinkedRepo> = self
+            .engines
+            .keys()
+            .map(|p| LinkedRepo {
+                path: p.clone(),
+                alias: None,
+                auto_index: true,
+                priority: self
+                    .priorities
+                    .get(p)
+                    .copied()
+                    .unwrap_or(default_priority()),
+            })
+            .collect();
+        // Highest priority first for deterministic ordering.
+        repos.sort_by(|a, b| {
+            b.priority
+                .partial_cmp(&a.priority)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.path.cmp(&b.path))
+        });
+        repos
+    }
+
+    /// Search across all linked repositories, boosting results from higher-priority repos.
     pub fn search(&self, query: &str, limit: usize) -> OmniResult<Vec<(PathBuf, SearchResult)>> {
-        let per_repo_limit = limit * 2; // fetch more per repo, then merge
+        let per_repo_limit = limit * 2; // fetch more per repo, then merge + truncate
         let mut all_results: Vec<(PathBuf, SearchResult)> = Vec::new();
 
         for (repo_path, engine) in &self.engines {
+            let boost = self
+                .priorities
+                .get(repo_path)
+                .copied()
+                .unwrap_or(default_priority());
             match engine.search(query, per_repo_limit) {
                 Ok(results) => {
-                    for r in results {
+                    for mut r in results {
+                        // Scale score by priority weight so higher-priority repos
+                        // surface above lower-priority ones for equal relevance.
+                        r.score *= f64::from(boost);
                         all_results.push((repo_path.clone(), r));
                     }
                 }
@@ -140,7 +213,7 @@ impl Workspace {
             }
         }
 
-        // Sort by score descending and truncate
+        // Sort by boosted score descending and truncate.
         all_results.sort_by(|a, b| {
             b.1.score
                 .partial_cmp(&a.1.score)
@@ -180,6 +253,11 @@ impl Workspace {
                     path: p.clone(),
                     alias: None,
                     auto_index: true,
+                    priority: self
+                        .priorities
+                        .get(p)
+                        .copied()
+                        .unwrap_or(default_priority()),
                 })
                 .collect(),
         };
@@ -210,11 +288,13 @@ mod tests {
                     path: PathBuf::from("/repo/a"),
                     alias: Some("frontend".into()),
                     auto_index: true,
+                    priority: 0.8,
                 },
                 LinkedRepo {
                     path: PathBuf::from("/repo/b"),
                     alias: None,
                     auto_index: false,
+                    priority: 0.5,
                 },
             ],
         };
@@ -227,6 +307,7 @@ mod tests {
         assert_eq!(deserialized.repos[0].alias, Some("frontend".into()));
         assert!(deserialized.repos[0].auto_index);
         assert!(!deserialized.repos[1].auto_index);
+        assert!((deserialized.repos[0].priority - 0.8).abs() < f32::EPSILON);
     }
 
     #[test]

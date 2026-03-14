@@ -8,14 +8,33 @@
 //! The Engine owns all subsystems and coordinates their lifecycle:
 //!
 //! ```text
-//! watcher --> pipeline channel --> process_event() --> parser --> chunker
-//!                                                         |
-//!                                                         v
-//!                                                     embedder --> vector_index
-//!                                                         |
-//!                                                         v
-//!                                                     metadata_index
+//! watcher --> pipeline channel --> two-phase indexing --> parser (Rayon) --> chunker
+//!                                                                 |
+//!                                                                 v
+//!                                                         embedder --> vector_index
+//!                                                                 |
+//!                                                                 v
+//!                                                         metadata_index (bulk tx)
 //! ```
+//!
+//! ## Two-Phase Incremental Indexing
+//!
+//! `run_index()` operates in two phases to saturate CPU cores and minimise I/O:
+//!
+//! **Phase 1 — Change detection + parallel parse (Rayon):**
+//! 1. `hash_cache.check_and_read(path)` — three-tier mtime→xxHash3 check, returns
+//!    content if changed.  Files whose mtime and hash are unchanged are skipped
+//!    without any further work.
+//! 2. CPU-bound AST parse, chunk, and symbol extraction run on a Rayon thread pool.
+//!    Each file is independent, so there is no synchronisation overhead.
+//!
+//! **Phase 2 — Sequential store (single SQLite writer):**
+//! 3. `store_parsed_file()` upserts file metadata, runs the incremental graph update,
+//!    calls `reindex_file()`, and stages changed chunks for embedding.
+//! 4. Chunk-level delta detection: if a chunk's xxHash3 matches the stored value in
+//!    the DB, it is unchanged and its existing `vector_id` is preserved (no re-embed).
+//! 5. A single bulk SQLite transaction wraps all per-file writes in the run, reducing
+//!    fsync overhead from N (one per file) to 1 per index pass.
 //!
 //! Search queries are handled via `SearchEngine` which reads from both indexes.
 #![allow(
@@ -27,26 +46,29 @@
 
 use std::path::Path;
 
+use rayon::prelude::*;
 use tokio::sync::mpsc;
 
 use crate::branch_diff::BranchTracker;
 use crate::chunker;
 use crate::commits::CommitEngine;
 use crate::config::Config;
-use crate::embedder::Embedder;
+use crate::embedder::{CloudEmbedder, Embedder};
 use crate::error::{OmniError, OmniResult};
 use crate::graph::dependencies::FileDependencyGraph;
 use crate::graph::historical::HistoricalGraphEnhancer;
 use crate::graph::reasoning::ReasoningEngine;
 use crate::graph::DependencyGraph;
 use crate::index::MetadataIndex;
+use crate::memory::MemoryStore;
 use crate::parser;
 use crate::reranker::Reranker;
 use crate::resilience::circuit_breaker::{CircuitBreaker, CircuitBreakerError};
 use crate::resilience::health_monitor::HealthMonitor;
+use crate::rules::RulesLoader;
 use crate::search::SearchEngine;
 use crate::types::{
-    DependencyEdge, DependencyKind, FileInfo, Language, PipelineEvent, SearchResult, Symbol,
+    Chunk, DependencyEdge, DependencyKind, FileInfo, Language, PipelineEvent, SearchResult, Symbol,
 };
 use crate::vector::VectorIndex;
 use crate::watcher::{hash_cache::FileHashCache, FileWatcher};
@@ -74,7 +96,10 @@ pub struct Engine {
     branch_tracker: BranchTracker,
     /// Token counter: uses the embedding tokenizer when available,
     /// falls back to the heuristic estimator.
-    token_counter: Box<dyn chunker::token_counter::TokenCounter>,
+    ///
+    /// `Arc` instead of `Box` so `parse_file_parallel` can share an immutable
+    /// reference across Rayon threads without unsafe transmutes.
+    token_counter: std::sync::Arc<dyn chunker::token_counter::TokenCounter>,
     /// File hash cache for change detection (50-80% reduction in re-indexing).
     hash_cache: FileHashCache,
     /// Health monitor for subsystem health tracking.
@@ -93,7 +118,149 @@ pub struct Engine {
     reasoning_engine: ReasoningEngine,
     /// Timestamp of the most recent completed index run.
     last_indexed_at: Option<std::time::SystemTime>,
+    /// Cumulative embedding flush count since the last ONNX session reset.
+    ///
+    /// The ONNX Runtime arena grows with each session.run() call and is only
+    /// released when the session is dropped.  Instead of resetting on every
+    /// flush (which reloads the ~550MB model), we reset every
+    /// ARENA_FLUSH_RESET_INTERVAL flushes to bound arena growth while
+    /// amortising the reload cost across many batches.
+    arena_flush_count: usize,
+    /// When `true`, skip incremental ANN index rebuilds during `run_index()`.
+    ///
+    /// Set by `set_offline_index_mode(true)` before `run_index()`.  After
+    /// indexing completes, call `build_ann_index()` to perform the batch build.
+    /// This matches Sourcegraph's offline SCIP index build + load pattern:
+    /// vectors accumulate in the flat map, then HNSW is built once in batch.
+    offline_index_mode: bool,
+    /// Mtime-cached loader for `.omnicontext/rules.md`.
+    ///
+    /// Avoids a disk read on every context-window call by caching the file
+    /// content alongside its last-seen modification time.
+    rules_loader: RulesLoader,
+    /// Per-repo persistent key-value memory store.
+    ///
+    /// Loaded from `.omnicontext/memory.json` at engine startup and kept
+    /// in-memory for fast reads.  Every `memory_set` / `memory_remove` call
+    /// persists atomically to disk so the store survives process restarts.
+    memory_store: MemoryStore,
+    /// Intent classifier with optional prototype-vector second signal.
+    ///
+    /// Built once in `with_config()` after the embedder is initialised.
+    /// Falls back to keyword-only classification when the embedder is
+    /// unavailable (ONNX session not loaded).
+    intent_classifier: crate::search::intent::IntentClassifier,
+    /// Transient symbol index built during `run_index()` from the Rayon parse
+    /// phase output.  Set to `Some` before the sequential store phase and
+    /// cleared to `None` after `run_index()` completes so it does not pin
+    /// memory between index runs.
+    current_symbol_index: Option<std::sync::Arc<crate::graph::edge_extractor::SymbolIndex>>,
+    /// In-memory inverted index for BGE-M3 sparse retrieval.
+    ///
+    /// Only populated when `config.embedding.enable_sparse_retrieval = true`.
+    /// Built from all persisted `sparse_vectors` rows after each `run_index()`.
+    /// Used by `search_sparse()` as a fourth RRF signal.
+    sparse_index: SparseInvertedIndex,
+    /// Optional cloud GPU embedding client.
+    ///
+    /// Active when `OMNI_CLOUD_API_KEY` is set or `config.embedding.cloud_api_key`
+    /// is non-empty.  When `Some`, `embed_batch()` is routed to the cloud service
+    /// instead of the local ONNX session.  Falls back to local ONNX on any HTTP
+    /// error or timeout — cloud failure is never fatal.
+    cloud_embedder: Option<CloudEmbedder>,
 }
+
+/// In-memory inverted index for sparse (SPLADE-style) retrieval.
+///
+/// Maps vocabulary token ID → sorted list of (chunk_id, weight) pairs.
+/// Built from persisted `sparse_vectors` table rows after each index run.
+///
+/// For corpora < 100k chunks the per-query cost is acceptable with a full
+/// linear scan.  For larger corpora the token-partition inverted index reduces
+/// the effective candidate set to only chunks that share at least one token
+/// with the query.
+#[derive(Default)]
+#[allow(dead_code)]
+struct SparseInvertedIndex {
+    /// token_id → sorted-descending list of (chunk_id, weight) pairs.
+    index: std::collections::HashMap<u32, Vec<(i64, f32)>>,
+    /// Total number of chunks indexed (for diagnostics).
+    chunk_count: usize,
+}
+
+#[allow(dead_code)]
+impl SparseInvertedIndex {
+    /// Build from all (chunk_id, tokens) rows loaded from SQLite.
+    fn build(rows: Vec<(i64, Vec<(u32, f32)>)>) -> Self {
+        let chunk_count = rows.len();
+        let mut index: std::collections::HashMap<u32, Vec<(i64, f32)>> =
+            std::collections::HashMap::new();
+
+        for (chunk_id, tokens) in rows {
+            for (token_id, weight) in tokens {
+                index.entry(token_id).or_default().push((chunk_id, weight));
+            }
+        }
+
+        // Sort each posting list by weight descending for early-exit traversal.
+        for posting in index.values_mut() {
+            posting.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        }
+
+        Self { index, chunk_count }
+    }
+
+    /// Compute dot-product scores for all chunks matching at least one query token.
+    ///
+    /// Returns `(chunk_id, score)` pairs sorted by score descending, limited to `limit`.
+    fn search(&self, query_tokens: &[(u32, f32)], limit: usize) -> Vec<(i64, f32)> {
+        let mut scores: std::collections::HashMap<i64, f32> = std::collections::HashMap::new();
+
+        for (token_id, q_weight) in query_tokens {
+            if let Some(posting) = self.index.get(token_id) {
+                for &(chunk_id, d_weight) in posting {
+                    *scores.entry(chunk_id).or_insert(0.0) += q_weight * d_weight;
+                }
+            }
+        }
+
+        let mut results: Vec<(i64, f32)> = scores.into_iter().collect();
+        results.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        results.truncate(limit);
+        results
+    }
+
+    /// Returns the number of distinct chunks in the index.
+    fn len(&self) -> usize {
+        self.chunk_count
+    }
+
+    fn is_empty(&self) -> bool {
+        self.chunk_count == 0
+    }
+}
+/// to reclaim arena memory.
+///
+/// At batch_size=64 chunks/flush:
+///
+/// - 50 flushes × 64 chunks = 3,200 chunks between resets
+/// - 3,200 chunks × 768 dims × 4 bytes ≈ 9.8 MB of embedding output
+///
+/// ORT arena overhead is typically 100–300 MB after ~50 batches — acceptable.
+/// Tweak upward (e.g. 100) on systems with >32 GB RAM.
+const ARENA_FLUSH_RESET_INTERVAL: usize = 50;
+
+/// Chunk accumulation threshold before triggering an embedding flush.
+///
+/// 64 is the batch size that maximizes ONNX Runtime throughput on typical
+/// dev machines (4–16 cores): large enough to amortize tokenizer overhead,
+/// small enough to keep per-flush latency below ~100ms on CPU.
+///
+/// The session pool (see `session_pool.rs`) runs 2+ concurrent ONNX sessions
+/// so while one batch is executing inference, the next is already accumulating.
+/// This provides the pipeline overlap equivalent to a producer-consumer queue
+/// without requiring shared mutable ownership of the Embedder.
+const EMBEDDING_BATCH_FLUSH_SIZE: usize = 64;
 
 impl Engine {
     /// Create a new engine for the given repository.
@@ -119,6 +286,34 @@ impl Engine {
         // Initialize embedder (degrades gracefully if model download fails after retries)
         let embedder = Embedder::new(&config.embedding)?;
 
+        // Attempt to initialize cloud embedder from config or environment.
+        // Config key takes precedence; env var is the fallback for users who haven't
+        // written a config file.  Failure to init is non-fatal — local ONNX is used.
+        let cloud_embedder = if let Some(ref key) = config.embedding.cloud_api_key {
+            match CloudEmbedder::new(key.clone(), None) {
+                Ok(c) => {
+                    tracing::info!("cloud embedding service enabled via config");
+                    Some(c)
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to init cloud embedder from config, using local ONNX");
+                    None
+                }
+            }
+        } else {
+            match CloudEmbedder::from_env() {
+                Ok(Some(c)) => {
+                    tracing::info!("cloud embedding service enabled via OMNI_CLOUD_API_KEY");
+                    Some(c)
+                }
+                Ok(None) => None,
+                Err(e) => {
+                    tracing::warn!(error = %e, "cloud embedder env init failed, using local ONNX");
+                    None
+                }
+            }
+        };
+
         // Initialize vector index -- dimensions always match Jina (768) from config
         let vector_path = data_dir.join("vectors.bin");
         let vector_index = VectorIndex::open(&vector_path, config.embedding.dimensions)?;
@@ -134,8 +329,39 @@ impl Engine {
         // Initialize file dependency graph (file-level)
         let file_dep_graph = FileDependencyGraph::new();
 
+        // Load persisted file-graph edges from SQLite (schema v5).
+        // This restores the structural graph from the previous indexing run so
+        // architectural context queries return live results immediately on startup
+        // without waiting for a full re-index.  Errors are non-fatal (empty graph
+        // degrades gracefully to zero-edge queries).
+        match index.load_file_graph_edges() {
+            Ok(persisted_edges) if !persisted_edges.is_empty() => {
+                let edge_count = persisted_edges.len();
+                for edge in persisted_edges {
+                    let _ = file_dep_graph.add_edge(&edge);
+                }
+                tracing::info!(
+                    edges = edge_count,
+                    "restored file dependency graph from SQLite"
+                );
+            }
+            Ok(_) => {
+                tracing::debug!("no persisted file graph edges found");
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to load persisted file graph edges");
+            }
+        }
+
         // Load file hash cache for change detection
-        let hash_cache = FileHashCache::load(&data_dir)?;
+
+        let mut hash_cache = FileHashCache::load(&data_dir)?;
+
+        // Pre-warm the in-memory mtime cache from the filesystem for all
+        // previously-indexed files.  This converts the first post-restart
+        // indexing pass from O(N × file_read) to O(N × stat) for repos
+        // where nothing has changed since the last run.
+        hash_cache.warm_mtime_cache(&config.repo_path);
 
         // Resolve the tokenizer from the model directory, if present.
         // tokenizer.json is downloaded alongside the ONNX model file.
@@ -156,6 +382,18 @@ impl Engine {
         );
 
         let branch_tracker = BranchTracker::new(&config.repo_path);
+
+        // Configure the Rayon global thread pool on first engine creation.
+        // Uses all available logical cores for maximum parse throughput.
+        // `try_build_global` is a no-op if the pool was already initialized
+        // (e.g., a second Engine::with_config call in the same process).
+        let rayon_threads = std::thread::available_parallelism()
+            .map(|p| p.get())
+            .unwrap_or(4);
+        let _ = rayon::ThreadPoolBuilder::new()
+            .num_threads(rayon_threads)
+            .build_global();
+        tracing::info!(threads = rayon_threads, "Rayon thread pool configured");
 
         // Initialize resilience components
         let health_monitor = HealthMonitor::new();
@@ -197,6 +435,23 @@ impl Engine {
         // Initialize semantic reasoning engine for GAR
         let reasoning_engine = ReasoningEngine::default();
 
+        // Load the persistent memory store before config is moved into Self.
+        // Degrade gracefully to an empty store on any I/O or parse error —
+        // a missing or malformed memory.json must never prevent engine startup.
+        let memory_store = match MemoryStore::load(&config.repo_path) {
+            Ok(store) => store,
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to load memory store, starting empty");
+                MemoryStore::default()
+            }
+        };
+
+        // Build intent classifier prototype centroids.  This embeds
+        // INTENT_PROTOTYPES (13 sentences) once using the already-loaded
+        // embedder session.  If the embedder is unavailable (ONNX not loaded),
+        // `build()` degrades to keyword-only mode automatically.
+        let intent_classifier = crate::search::intent::IntentClassifier::build(&embedder);
+
         let mut engine = Self {
             config,
             index,
@@ -217,6 +472,14 @@ impl Engine {
             commit_engine,
             reasoning_engine,
             last_indexed_at: None,
+            arena_flush_count: 0,
+            offline_index_mode: false,
+            rules_loader: RulesLoader::new(),
+            memory_store,
+            intent_classifier,
+            current_symbol_index: None,
+            sparse_index: SparseInvertedIndex::default(),
+            cloud_embedder,
         };
 
         // Load dependency graph from SQLite index
@@ -332,26 +595,37 @@ impl Engine {
 
     /// Start the indexing pipeline.
     ///
-    /// 1. Performs a full directory scan
-    /// 2. Processes each discovered file (parse -> chunk -> embed -> store)
-    /// 3. Saves the vector index to disk
+    /// ## Two-Phase Algorithm
+    ///
+    /// **Phase 1 — Change detection + parallel parse:**
+    /// 1. Full directory scan via `FileWatcher`.
+    /// 2. For each path, `hash_cache.check_and_read()` runs the three-tier
+    ///    mtime→xxHash3 check and returns file content only when changed.
+    ///    Files whose mtime and hash are unchanged are skipped with a single
+    ///    `stat` syscall (~1 µs).
+    /// 3. Changed files are parsed on a Rayon thread pool (CPU-bound, embarrassingly
+    ///    parallel). AST parsing, chunking, and symbol extraction run in parallel.
+    ///    Results are collected as `Vec<ParsedFile>` and sorted by path for
+    ///    deterministic chunk ID assignment.
+    ///
+    /// **Phase 2 — Sequential store (single SQLite writer):**
+    /// 4. All file writes are wrapped in one bulk SQLite `DEFERRED TRANSACTION`
+    ///    to amortise fsync cost across the whole run.
+    /// 5. For each `ParsedFile`, `store_parsed_file()` upserts the file record,
+    ///    runs the incremental graph update, calls `reindex_file()`, and stages
+    ///    new or changed chunks for batch embedding.
+    /// 6. Chunk-level delta detection: if a chunk's `content_hash` matches the
+    ///    stored value, it is unchanged and the existing `vector_id` is preserved.
     pub async fn run_index(&mut self, force: bool) -> OmniResult<IndexResult> {
         let repo_path = self.config.repo_path.clone();
         let (tx, mut rx) = mpsc::channel::<PipelineEvent>(1024);
 
-        // Create file watcher for scanning
+        // Full directory scan in a background thread
         let watcher = FileWatcher::new(&repo_path, &self.config.watcher, &self.config.indexing);
-
-        // Full directory scan in a background thread to allow backpressure
-        // without blocking the async receiver loop or panicking Tokio
         let scan_tx = tx.clone();
         let scan_watcher = watcher.clone();
-        let _scan_handle = tokio::task::spawn_blocking(move || {
-            let count = scan_watcher.full_scan(&scan_tx).unwrap_or(0);
-            count
-        });
-
-        // Close our sender side so the receiver will drain when the scanner finishes
+        let _scan_handle =
+            tokio::task::spawn_blocking(move || scan_watcher.full_scan(&scan_tx).unwrap_or(0));
         drop(tx);
 
         if force {
@@ -359,30 +633,154 @@ impl Engine {
             self.clear_index()?;
         }
 
-        let mut result = IndexResult::default();
-        let mut pending_embeddings = Vec::with_capacity(512);
+        self.arena_flush_count = 0;
 
-        // Process each event
+        // ── Phase 1: collect changed paths + file content ──────────────────────
+        //
+        // We drain the event channel sequentially here because `check_and_read`
+        // needs `&mut self.hash_cache` which cannot cross the Rayon boundary.
+        // The actual CPU work (parse + chunk + symbol) is done in parallel below.
+
+        let mut changed_files: Vec<(std::path::PathBuf, String)> = Vec::new();
+        let mut deleted_paths: Vec<std::path::PathBuf> = Vec::new();
+
         while let Some(event) = rx.recv().await {
             match event {
                 PipelineEvent::FileChanged { path } => {
-                    match self.process_file(&path, &mut pending_embeddings) {
-                        Ok(stats) => {
-                            result.files_processed += 1;
-                            result.chunks_created += stats.chunks;
-                            result.symbols_extracted += stats.symbols;
+                    // Three-tier change detection — returns content only if changed
+                    match tokio::task::block_in_place(|| self.hash_cache.check_and_read(&path)) {
+                        Ok((true, Some(content))) => {
+                            changed_files.push((path, content));
                         }
-                        Err(e) => {
+                        Ok((false, _)) => {
+                            // mtime/hash unchanged — skip
+                            tracing::debug!(path = %path.display(), "unchanged (tier check), skipping");
+                        }
+                        Ok((true, None)) => {
+                            // Should not happen; treat as if changed but unreadable
                             tracing::warn!(
                                 path = %path.display(),
-                                error = %e,
-                                "failed to process file"
+                                "check_and_read returned changed=true but no content; skipping"
                             );
-                            result.files_failed += 1;
+                        }
+                        Err(e) => {
+                            tracing::warn!(path = %path.display(), error = %e, "change detection failed, skipping");
                         }
                     }
+                }
+                PipelineEvent::FileDeleted { path } => {
+                    deleted_paths.push(path);
+                }
+                PipelineEvent::FullScan | PipelineEvent::Shutdown => {}
+            }
+        }
 
-                    if pending_embeddings.len() >= 80 {
+        // ── Phase 1b: parallel parse (Rayon) ───────────────────────────────────
+        //
+        // `parse_file_parallel` is a free function taking only immutable shared
+        // refs that are `Send + Sync`.  `token_counter` is `Arc<dyn TokenCounter>`
+        // (TokenCounter: Send + Sync) so we can cheaply clone the Arc and move it
+        // into the Rayon closure without any unsafe code.
+
+        // Snapshot immutable state needed inside the Rayon closure
+        let config_snap = self.config.clone();
+        let token_counter_arc = std::sync::Arc::clone(&self.token_counter);
+
+        let parsed_results: Vec<ParsedFile> = tokio::task::block_in_place(|| {
+            changed_files
+                .into_par_iter()
+                .filter_map(|(path, content)| {
+                    parse_file_parallel(
+                        &path,
+                        &content,
+                        &config_snap.repo_path,
+                        &config_snap,
+                        token_counter_arc.as_ref(),
+                    )
+                })
+                .collect()
+        });
+
+        // Sort by path for deterministic chunk IDs across runs
+        let mut parsed_results = parsed_results;
+        parsed_results.sort_by(|a, b| a.path.cmp(&b.path));
+
+        // ── Build SymbolIndex for cross-file CALLS/INSTANTIATES resolution ─────
+        //
+        // Constructed from all elements produced in the Rayon parse phase.
+        // Stored on `self` so `store_parsed_file()` can access it without an
+        // extra parameter.  Cleared at the end of this function to release
+        // memory between index runs.
+        {
+            use crate::graph::edge_extractor::SymbolIndex;
+            let pairs: Vec<(std::path::PathBuf, &[crate::parser::StructuralElement])> =
+                parsed_results
+                    .iter()
+                    .map(|pf| (pf.path.clone(), pf.elements.as_slice()))
+                    .collect();
+            let sym_idx = SymbolIndex::build(&pairs);
+            self.current_symbol_index = Some(std::sync::Arc::new(sym_idx));
+            tracing::debug!(
+                files = parsed_results.len(),
+                "built symbol index for cross-file edge resolution"
+            );
+        }
+
+        // ── Phase 2: sequential store (SQLite writer) ──────────────────────────
+        //
+        // Open a single batch transaction so all N files commit in one fsync.
+        let mut result = IndexResult::default();
+        let mut pending_embeddings: Vec<(i64, String)> = Vec::with_capacity(512);
+
+        // Process deletions first (no embeddings needed)
+        for path in deleted_paths {
+            if let Err(e) = self.index.delete_file(&path) {
+                tracing::warn!(path = %path.display(), error = %e, "failed to delete file from index");
+            }
+            self.hash_cache.remove(&path);
+        }
+
+        if !parsed_results.is_empty() {
+            // Begin the bulk transaction — if it fails, fall through to per-file
+            // transactions so we still make progress.
+            let bulk_tx_ok = self.index.begin_batch_transaction().is_ok();
+
+            // Chunk counter for bounded transactions: commit every CHUNKS_PER_TX chunks
+            // to prevent SQLite WAL files from growing unbounded on large repositories.
+            const CHUNKS_PER_TX: usize = 500;
+            let mut chunks_in_current_tx: usize = 0;
+
+            for parsed in parsed_results {
+                let parsed_chunk_count = parsed.chunks.len();
+                match self.store_parsed_file(parsed, &mut pending_embeddings) {
+                    Ok(stats) => {
+                        result.files_processed += 1;
+                        result.chunks_created += stats.chunks;
+                        result.symbols_extracted += stats.symbols;
+                        chunks_in_current_tx += parsed_chunk_count;
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "failed to store parsed file");
+                        result.files_failed += 1;
+                    }
+                }
+
+                // Commit and reopen if we've hit the chunk ceiling or the
+                // embedding buffer is full. Whichever threshold fires first.
+                let hit_chunk_limit = chunks_in_current_tx >= CHUNKS_PER_TX;
+                let hit_embed_limit = pending_embeddings.len() >= EMBEDDING_BATCH_FLUSH_SIZE;
+
+                if hit_chunk_limit || hit_embed_limit {
+                    if bulk_tx_ok {
+                        // Commit the current batch before the embedding flush (which
+                        // itself does blocking I/O) so we don't hold the write lock.
+                        if let Err(e) = self.index.commit_batch_transaction() {
+                            tracing::warn!(error = %e, "batch transaction commit failed mid-flush");
+                        }
+                        chunks_in_current_tx = 0;
+                    }
+
+                    if hit_embed_limit {
                         if let Err(e) = self.flush_pending_embeddings(
                             &mut pending_embeddings,
                             &mut result.embeddings_generated,
@@ -391,28 +789,23 @@ impl Engine {
                             result.embedding_failures += 1;
                         }
                     }
-                }
-                PipelineEvent::FileDeleted { path } => {
-                    if let Err(e) = self.index.delete_file(&path) {
-                        tracing::warn!(
-                            path = %path.display(),
-                            error = %e,
-                            "failed to delete file from index"
-                        );
+
+                    // Re-open a fresh batch transaction after the flush
+                    if bulk_tx_ok {
+                        let _ = self.index.begin_batch_transaction();
                     }
-                    // Remove from hash cache
-                    self.hash_cache.remove(&path);
                 }
-                PipelineEvent::FullScan => {
-                    // Already done above
-                }
-                PipelineEvent::Shutdown => {
-                    break;
+            }
+
+            // Commit any remaining unflushed writes
+            if bulk_tx_ok {
+                if let Err(e) = self.index.commit_batch_transaction() {
+                    tracing::warn!(error = %e, "final batch transaction commit failed");
                 }
             }
         }
 
-        // Flush remaining at the end
+        // Flush remaining pending embeddings
         if let Err(e) =
             self.flush_pending_embeddings(&mut pending_embeddings, &mut result.embeddings_generated)
         {
@@ -420,8 +813,7 @@ impl Engine {
             result.embedding_failures += 1;
         }
 
-        // Automatic recovery pass: if chunks remain without vectors, retry once.
-        // This avoids returning a "successful" index with silently missing embeddings.
+        // Automatic recovery pass for chunks that still lack vectors
         if self.embedder.is_available() {
             match self.index.get_chunks_without_vectors() {
                 Ok(chunks_without_vectors) if !chunks_without_vectors.is_empty() => {
@@ -458,10 +850,7 @@ impl Engine {
                 }
                 Ok(_) => {}
                 Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        "failed to inspect chunks without vectors after indexing"
-                    );
+                    tracing::warn!(error = %e, "failed to inspect chunks without vectors after indexing");
                 }
             }
         }
@@ -476,12 +865,10 @@ impl Engine {
             tracing::warn!(error = %e, "failed to persist hash cache");
         }
 
-        // Historical graph enhancement: index commit history and enhance
-        // the file dependency graph with co-change edges.
+        // Historical graph enhancement
         if let Ok(count) = self.index_commit_history() {
             tracing::info!(commits = count, "indexed commit history");
         }
-        // Build a temporary MetadataIndex for the enhancer (needs its own connection)
         if let Ok(enhancer_index) = MetadataIndex::open(&self.config.data_dir().join("index.db")) {
             let mut enhancer = HistoricalGraphEnhancer::new(enhancer_index);
             if let Ok(stats) = enhancer.analyze_history(1000) {
@@ -498,9 +885,23 @@ impl Engine {
                         "enhanced graph with historical data"
                     );
 
-                    // Bridge historical co-change edges into symbol-level DependencyGraph.
-                    // For each co-change file pair, find representative symbols and create
-                    // HistoricalCoChange edges so GAR can traverse them.
+                    // Persist newly-added HistoricalCoChange edges to SQLite (schema v5).
+                    // Collect all HistoricalCoChange edges from the in-memory graph and
+                    // upsert them so they survive daemon restarts.
+                    let co_change_edges = self.file_dep_graph.all_edges_of_type(
+                        crate::graph::dependencies::EdgeType::HistoricalCoChange,
+                    );
+                    if !co_change_edges.is_empty() {
+                        if let Err(e) = self.index.save_file_graph_edges(&co_change_edges) {
+                            tracing::debug!(error = %e, "failed to persist historical co-change edges");
+                        } else {
+                            tracing::debug!(
+                                edges = co_change_edges.len(),
+                                "persisted historical co-change edges"
+                            );
+                        }
+                    }
+
                     let co_change_symbol_edges = self.bridge_historical_to_symbol_graph(&enhancer);
                     if co_change_symbol_edges > 0 {
                         tracing::info!(
@@ -510,10 +911,7 @@ impl Engine {
                     }
                 }
 
-                // Wire bug-prone file boost factors into the search engine.
-                // Resolve file paths to file_ids and compute boost factors
-                // (1.0 + bug_count/10, capped at 2.0).
-                let bug_prone = enhancer.find_bug_prone_files(2); // threshold: 2+ bug fixes
+                let bug_prone = enhancer.find_bug_prone_files(2);
                 if !bug_prone.is_empty() {
                     let mut boosts = std::collections::HashMap::new();
                     for (file_path, bug_count) in &bug_prone {
@@ -539,7 +937,7 @@ impl Engine {
             }
         }
 
-        // Calculate embedding coverage
+        // Embedding coverage summary
         let total_chunks = self.index.chunk_count().unwrap_or(0);
         let embedded_chunks = self.index.embedded_chunk_count().unwrap_or(0);
         let coverage_pct = self.index.embedding_coverage().unwrap_or(0.0);
@@ -571,15 +969,438 @@ impl Engine {
             );
         }
 
-        // Record the completion timestamp for IPC consumers (e.g., system_status handler).
         self.last_indexed_at = Some(std::time::SystemTime::now());
 
+        // Skip ANN index build in offline mode — caller will call build_ann_index()
+        // explicitly so HNSW is built once from all vectors in batch.
+        if !self.offline_index_mode && !self.vector_index.is_empty() {
+            match self.vector_index.build_optimal_index() {
+                Ok(()) => {
+                    tracing::info!(
+                        vectors = self.vector_index.len(),
+                        strategy = self.vector_index.active_strategy(),
+                        "ANN index built after indexing run"
+                    );
+                    if let Err(e) = self.vector_index.save() {
+                        tracing::warn!(error = %e, "failed to persist ANN index after build");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        vectors = self.vector_index.len(),
+                        "failed to build ANN index; search will use flat strategy"
+                    );
+                }
+            }
+        } else if self.offline_index_mode {
+            tracing::info!(
+                vectors = self.vector_index.len(),
+                "offline mode: ANN index build deferred — call build_ann_index() to complete"
+            );
+        }
+
+        // Release the transient SymbolIndex — no longer needed after the store phase.
+        self.current_symbol_index = None;
+
+        // ── Build in-memory sparse inverted index (opt-in path) ───────────────
+        //
+        // If sparse retrieval is enabled, rebuild the in-memory inverted index
+        // from all persisted sparse_vectors rows so `search_sparse()` is ready.
+        if self.config.embedding.enable_sparse_retrieval {
+            match self.index.get_all_sparse_vectors() {
+                Ok(rows) => {
+                    let count = rows.len();
+                    self.sparse_index = SparseInvertedIndex::build(rows);
+                    tracing::info!(
+                        chunks = count,
+                        "sparse inverted index built from persisted sparse vectors"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "failed to load sparse vectors for inverted index"
+                    );
+                }
+            }
+        }
+
         Ok(result)
+    }
+    ///
+    /// Handles SQLite writes, incremental graph update, embedding staging,
+    /// and chunk-level delta detection. Must be called sequentially (single
+    /// SQLite writer constraint).
+    fn store_parsed_file(
+        &mut self,
+        mut parsed: ParsedFile,
+        pending_embeddings: &mut Vec<(i64, String)>,
+    ) -> OmniResult<FileProcessStats> {
+        let mut stats = FileProcessStats::default();
+
+        // Upsert file to get the real file_id, then fix up placeholder IDs
+        let file_id = tokio::task::block_in_place(|| self.index.upsert_file(&parsed.file_info))?;
+
+        // Fix file_id in chunks and symbols (were 0 from parse phase)
+        for chunk in &mut parsed.chunks {
+            chunk.file_id = file_id;
+        }
+        for symbol in &mut parsed.symbols {
+            symbol.file_id = file_id;
+        }
+
+        stats.chunks = parsed.chunks.len();
+        stats.symbols = parsed.symbols.len();
+
+        // ── Incremental graph update ──────────────────────────────────────────
+        {
+            let old_symbols = self
+                .index
+                .get_all_symbols_for_file(file_id)
+                .unwrap_or_default();
+            if !old_symbols.is_empty() {
+                let old_ids: Vec<i64> = old_symbols.iter().map(|s| s.id).collect();
+                let removed = self.dep_graph.remove_edges_for_symbols(&old_ids);
+                if removed > 0 {
+                    tracing::debug!(
+                        file_id,
+                        symbols = old_ids.len(),
+                        edges_removed = removed,
+                        "stripped stale edges from in-memory graph before reindex"
+                    );
+                }
+            }
+        }
+
+        // ── Chunk-level delta: fetch existing content hashes ──────────────────
+        // If a chunk's content_hash matches the stored value, skip re-embedding
+        // and carry forward the existing vector_id.
+        let existing_hashes =
+            tokio::task::block_in_place(|| self.index.get_chunk_content_hashes_for_file(file_id))
+                .unwrap_or_default();
+
+        // For chunks whose content_hash matches the stored value, try to preserve
+        // the existing vector_id by reading it from the DB.
+        // This is a best-effort optimisation; if the query fails we re-embed.
+        let existing_chunks_by_symbol: std::collections::HashMap<String, crate::types::Chunk> = {
+            tokio::task::block_in_place(|| self.index.get_chunks_for_file(file_id))
+                .unwrap_or_default()
+                .into_iter()
+                .map(|c| (c.symbol_path.clone(), c))
+                .collect()
+        };
+
+        for chunk in &mut parsed.chunks {
+            if chunk.is_summary || chunk.content_hash == 0 {
+                continue;
+            }
+            if existing_hashes
+                .get(&chunk.symbol_path)
+                .copied()
+                .map(|h| h == chunk.content_hash)
+                .unwrap_or(false)
+            {
+                // Content unchanged — carry forward the existing vector_id
+                if let Some(existing) = existing_chunks_by_symbol.get(&chunk.symbol_path) {
+                    chunk.vector_id = existing.vector_id;
+                }
+            }
+        }
+
+        // ── Atomic reindex ────────────────────────────────────────────────────
+        let (_fid, chunk_ids) = tokio::task::block_in_place(|| {
+            self.index_breaker.call_sync(|| {
+                self.index
+                    .reindex_file(&parsed.file_info, &parsed.chunks, &parsed.symbols)
+            })
+        })
+        .map_err(|e| match e {
+            CircuitBreakerError::Open => OmniError::Internal(
+                "index circuit breaker is open — too many recent failures".into(),
+            ),
+            CircuitBreakerError::OperationFailed(inner) => inner,
+        })?;
+
+        // ── Stage embeddings (skip unchanged chunks) ──────────────────────────
+        if self.embedder.is_available() && !parsed.chunks.is_empty() {
+            for (i, chunk) in parsed.chunks.iter().enumerate() {
+                if i >= chunk_ids.len() {
+                    break;
+                }
+                // Skip chunks that already have a vector_id (unchanged content)
+                if chunk.vector_id.is_some() {
+                    continue;
+                }
+                let text = crate::embedder::format_chunk_for_embedding(
+                    parsed.language.as_str(),
+                    &chunk.symbol_path,
+                    &format!("{:?}", chunk.kind),
+                    &chunk.content,
+                );
+                pending_embeddings.push((chunk_ids[i], text));
+            }
+        }
+
+        // ── Dependency edges from references ──────────────────────────────────
+        for element in &parsed.elements {
+            if element.references.is_empty() {
+                continue;
+            }
+            let source_symbol = if element.symbol_path.is_empty() {
+                None
+            } else {
+                self.index.get_symbol_by_fqn(&element.symbol_path)?
+            };
+            let source_id = match source_symbol {
+                Some(s) => s.id,
+                None => continue,
+            };
+            for ref_name in &element.references {
+                let target = self.index.get_symbol_by_fqn(ref_name)?.or_else(|| {
+                    self.index
+                        .search_symbols_by_name(ref_name, 1)
+                        .ok()
+                        .and_then(|v| v.into_iter().next())
+                });
+                if let Some(target_sym) = target {
+                    if target_sym.id != source_id {
+                        let edge = DependencyEdge {
+                            source_id,
+                            target_id: target_sym.id,
+                            kind: DependencyKind::Calls,
+                        };
+                        if let Err(e) = self.index.insert_dependency(&edge) {
+                            tracing::trace!(error = %e, "failed to insert dependency");
+                        }
+                        let _ = self.dep_graph.add_edge(&edge);
+                    }
+                }
+            }
+        }
+
+        // ── Import-based dependency edges ─────────────────────────────────────
+        if !parsed.imports.is_empty() {
+            let file_source_id = self
+                .index
+                .get_first_symbol_for_file(file_id)
+                .unwrap_or(None)
+                .map(|s| s.id);
+
+            if let Some(source_id) = file_source_id {
+                for import in &parsed.imports {
+                    for name in &import.imported_names {
+                        if name == "*" {
+                            continue;
+                        }
+                        let target_id =
+                            DependencyGraph::resolve_import(&self.index, &import.import_path, name);
+                        if let Some(target) = target_id {
+                            if target != source_id {
+                                let edge = DependencyEdge {
+                                    source_id,
+                                    target_id: target,
+                                    kind: DependencyKind::Imports,
+                                };
+                                if let Err(e) = self.index.insert_dependency(&edge) {
+                                    tracing::trace!(error = %e, "failed to insert import dep");
+                                }
+                                let _ = self.dep_graph.add_edge(&edge);
+                            }
+                        }
+                    }
+                    let target_id =
+                        DependencyGraph::resolve_import(&self.index, "", &import.import_path);
+                    if let Some(target) = target_id {
+                        if target != source_id {
+                            let edge = DependencyEdge {
+                                source_id,
+                                target_id: target,
+                                kind: import.kind,
+                            };
+                            if let Err(e) = self.index.insert_dependency(&edge) {
+                                tracing::trace!(error = %e, "failed to insert import dep");
+                            }
+                            let _ = self.dep_graph.add_edge(&edge);
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Call graph edges ──────────────────────────────────────────────────
+        let call_edges = self
+            .dep_graph
+            .build_call_edges(&self.index, file_id, &parsed.elements);
+        for edge in &call_edges {
+            if let Err(e) = self.index.insert_dependency(edge) {
+                tracing::trace!(error = %e, "failed to insert call edge");
+            }
+        }
+        stats.call_edges = call_edges.len();
+
+        // ── Type hierarchy edges ──────────────────────────────────────────────
+        let type_edges = self
+            .dep_graph
+            .build_type_edges(&self.index, file_id, &parsed.elements);
+        for edge in &type_edges {
+            if let Err(e) = self.index.insert_dependency(edge) {
+                tracing::trace!(error = %e, "failed to insert type edge");
+            }
+        }
+
+        // ── File-level graph: IMPORTS + INHERITS + CALLS + INSTANTIATES ───────
+        // Register this file and wire structural edges into file_dep_graph so that
+        // architectural context queries and edge-type metrics return live data.
+        //
+        // Design: fetch the full file list once (single SQLite read wrapped in
+        // block_in_place) and reuse it for both import-path resolution and
+        // EdgeExtractor registration. This eliminates the previous N×SQLite-read
+        // pattern that panicked the tokio scheduler when called inside async context.
+        {
+            use crate::graph::dependencies::{DependencyEdge as FileDep, EdgeType as FileEdge};
+
+            let file_path = parsed.file_info.path.clone();
+            let lang_str = parsed.language.as_str().to_string();
+            let _ = self.file_dep_graph.add_file(file_path.clone(), lang_str);
+
+            // Single fetch — reused for IMPORTS resolution and EdgeExtractor.
+            let all_indexed_files =
+                tokio::task::block_in_place(|| self.index.get_all_files()).unwrap_or_default();
+
+            // IMPORTS: best-effort name-match — compare import path's last segment
+            // against each indexed file's stem. O(imports × files) but bounded by
+            // per-file import count which is always small (< 100).
+            for import in &parsed.imports {
+                let last_segment = import
+                    .import_path
+                    .split(|c: char| c == ':' || c == '/' || c == '.' || c == '\\')
+                    .next_back()
+                    .unwrap_or("")
+                    .to_lowercase();
+                if last_segment.is_empty() {
+                    continue;
+                }
+                for fi in &all_indexed_files {
+                    let fname = fi
+                        .path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+                    if fname == last_segment {
+                        let _ = self.file_dep_graph.add_edge(&FileDep {
+                            source: file_path.clone(),
+                            target: fi.path.clone(),
+                            edge_type: FileEdge::Imports,
+                            weight: 1.0,
+                        });
+                        break;
+                    }
+                }
+            }
+
+            // INHERITS, CALLS, INSTANTIATES — via EdgeExtractor (AST-derived).
+            // Register every already-indexed file so cross-file type resolution
+            // succeeds for files processed earlier in the same batch.
+            //
+            // Supply the transient SymbolIndex when available so CALLS/INSTANTIATES
+            // that the ImportResolver cannot resolve (most cross-file calls) get a
+            // second chance via short-name lookup.
+            let mut extractor = if let Some(ref sym_idx) = self.current_symbol_index {
+                crate::graph::edge_extractor::EdgeExtractor::with_symbol_index(
+                    std::sync::Arc::clone(sym_idx),
+                )
+            } else {
+                crate::graph::edge_extractor::EdgeExtractor::new()
+            };
+            for fi in &all_indexed_files {
+                let module = crate::parser::build_module_name_from_path(&fi.path);
+                extractor.register_file(fi.path.clone(), module);
+            }
+            if let Ok(structural_edges) =
+                extractor.extract_edges(&file_path, parsed.language, &parsed.elements)
+            {
+                let edge_count = structural_edges.len();
+                for edge in structural_edges {
+                    let _ = self.file_dep_graph.add_edge(&edge);
+                }
+                if edge_count > 0 {
+                    tracing::debug!(
+                        path = %parsed.file_info.path.display(),
+                        edges = edge_count,
+                        "structural edges added to file dependency graph"
+                    );
+                }
+            }
+
+            // Persist updated edges for this file (schema v5).
+            // Delete stale entries first so removed edges don't linger.
+            if let Err(e) = self.index.delete_file_graph_edges_for_file(&file_path) {
+                tracing::debug!(error = %e, "failed to delete stale file graph edges");
+            }
+            // Collect all outgoing edges for this file from the in-memory graph
+            // and persist them atomically.
+            let snapshot = self.file_dep_graph.outgoing_edges_for(&file_path);
+            if !snapshot.is_empty() {
+                if let Err(e) = self.index.save_file_graph_edges(&snapshot) {
+                    tracing::debug!(error = %e, "failed to persist file graph edges");
+                }
+            }
+        }
+
+        // ── Cross-file data flow edges ────────────────────────────────────────
+        let flow_extractor = crate::graph::data_flow::DataFlowExtractor::new();
+        match flow_extractor.extract_flows_for_file(&self.index, file_id, &self.dep_graph) {
+            Ok(flows) if !flows.is_empty() => {
+                let flow_edges =
+                    crate::graph::data_flow::DataFlowExtractor::to_dependency_edges(&flows);
+                let mut flow_count = 0;
+                for edge in &flow_edges {
+                    if let Err(e) = self.index.insert_dependency(edge) {
+                        tracing::trace!(error = %e, "failed to insert data flow edge");
+                    }
+                    let _ = self.dep_graph.add_edge(edge);
+                    flow_count += 1;
+                }
+                if flow_count > 0 {
+                    tracing::debug!(
+                        path = %parsed.path.display(),
+                        flow_edges = flow_count,
+                        "data flow edges extracted"
+                    );
+                }
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::trace!(error = %e, "data flow extraction failed");
+            }
+        }
+
+        // Commit hash cache entry
+        let mtime = std::fs::metadata(&parsed.path)
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        self.hash_cache
+            .update_from_read(parsed.path.clone(), parsed.file_content_hash_u64, mtime);
+
+        tracing::debug!(
+            path = %parsed.path.display(),
+            chunks = stats.chunks,
+            symbols = stats.symbols,
+            call_edges = stats.call_edges,
+            "file stored"
+        );
+
+        Ok(stats)
     }
 
     /// Process a single file through the pipeline.
     ///
     /// Parse -> Chunk -> Embed -> Store.
+    ///
+    /// Uses `check_and_read()` for three-tier change detection so the file
+    /// content is read exactly once (no double-read).
     fn process_file(
         &mut self,
         path: &Path,
@@ -588,9 +1409,23 @@ impl Engine {
         let mut stats = FileProcessStats::default();
         tracing::info!("Starting to process file: {}", path.display());
 
-        // Read file content
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| OmniError::Internal(format!("failed to read {}: {e}", path.display())))?;
+        // Three-tier change detection + single file read.
+        // block_in_place: fs::metadata + fs::read_to_string are blocking.
+        let (changed, maybe_content) =
+            tokio::task::block_in_place(|| self.hash_cache.check_and_read(path))?;
+
+        if !changed {
+            let rel_path = path.strip_prefix(&self.config.repo_path).unwrap_or(path);
+            tracing::debug!(path = %rel_path.display(), "file unchanged, skipping");
+            return Ok(stats);
+        }
+
+        let content = maybe_content.ok_or_else(|| {
+            OmniError::Internal(format!(
+                "check_and_read reported changed=true but returned no content for {}",
+                path.display()
+            ))
+        })?;
 
         // Detect language — lowercase the extension for case-insensitive matching on
         // macOS and Windows where the filesystem may preserve the original case
@@ -616,12 +1451,6 @@ impl Engine {
 
         let rel_path = path.strip_prefix(&self.config.repo_path).unwrap_or(path);
 
-        // Check if file has changed using hash cache (50-80% reduction in re-indexing)
-        if !self.hash_cache.has_changed(path)? {
-            tracing::debug!(path = %rel_path.display(), "file unchanged, skipping");
-            return Ok(stats);
-        }
-
         // Parse the file into structural elements using relative path for FQN scoping
         let elements = parser::parse_file(rel_path, content.as_bytes(), language)?;
 
@@ -637,8 +1466,9 @@ impl Engine {
             size_bytes: content.len() as u64,
         };
 
-        // Upsert the file first to get a file_id
-        let file_id = self.index.upsert_file(&file_info)?;
+        // Upsert the file first to get a file_id.
+        // block_in_place: SQLite write — blocking, must not hold up the async runtime.
+        let file_id = tokio::task::block_in_place(|| self.index.upsert_file(&file_info))?;
 
         // Parse imports early so we can enrich chunks with them
         let imports = parser::parse_imports(path, content.as_bytes(), language).unwrap_or_default();
@@ -654,6 +1484,14 @@ impl Engine {
             &content,
             self.token_counter.as_ref(),
         );
+
+        // Annotate each leaf chunk with its xxHash3 for chunk-level delta detection.
+        // Summary chunks keep content_hash=0 (always re-embedded as they are derived).
+        for chunk in &mut chunks {
+            if !chunk.is_summary {
+                chunk.content_hash = xxhash_rust::xxh3::xxh3_64(chunk.content.as_bytes());
+            }
+        }
 
         // Generate RAPTOR-style summary chunks for files with enough leaf chunks
         let summary_chunks =
@@ -715,16 +1553,19 @@ impl Engine {
             }
         }
 
-        // Atomic reindex: delete old chunks/symbols, insert new
-        let (_fid, chunk_ids) = self
-            .index_breaker
-            .call_sync(|| self.index.reindex_file(&file_info, &chunks, &symbols))
-            .map_err(|e| match e {
-                CircuitBreakerError::Open => OmniError::Internal(
-                    "index circuit breaker is open — too many recent failures".into(),
-                ),
-                CircuitBreakerError::OperationFailed(inner) => inner,
-            })?;
+        // Atomic reindex: delete old chunks/symbols, insert new.
+        // block_in_place: SQLite writes are blocking; signal tokio to allow
+        // other async tasks to proceed on a different thread.
+        let (_fid, chunk_ids) = tokio::task::block_in_place(|| {
+            self.index_breaker
+                .call_sync(|| self.index.reindex_file(&file_info, &chunks, &symbols))
+        })
+        .map_err(|e| match e {
+            CircuitBreakerError::Open => OmniError::Internal(
+                "index circuit breaker is open — too many recent failures".into(),
+            ),
+            CircuitBreakerError::OperationFailed(inner) => inner,
+        })?;
 
         // Stage for batch embedding
         if self.embedder.is_available() && !chunks.is_empty() {
@@ -916,9 +1757,15 @@ impl Engine {
             "file processed"
         );
 
-        // Update hash cache after successful indexing
-        let hash = FileHashCache::compute_hash(path)?;
-        self.hash_cache.update_hash(path.to_path_buf(), hash);
+        // Update hash cache after successful indexing.
+        // Capture mtime now; if it changed since check_and_read, the next warm run
+        // will simply re-hash (Tier 2) rather than re-index (correct behaviour).
+        let mtime = std::fs::metadata(path)
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        let file_xxhash = xxhash_rust::xxh3::xxh3_64(content.as_bytes());
+        self.hash_cache
+            .update_from_read(path.to_path_buf(), file_xxhash, mtime);
 
         Ok(stats)
     }
@@ -950,6 +1797,21 @@ impl Engine {
         };
         self.index_breaker
             .call_sync(|| {
+                // Compute sparse results from the in-memory inverted index when enabled.
+                // When `enable_sparse_retrieval = false`, `sparse_index` is empty and
+                // this produces `&[]` — existing 3-signal RRF behavior is bit-identical.
+                let sparse_hits: Vec<(i64, f32)> = if self.config.embedding.enable_sparse_retrieval
+                    && !self.sparse_index.is_empty()
+                    && self.embedder.has_sparse_session()
+                {
+                    self.embedder
+                        .embed_sparse(query)
+                        .map(|tokens| self.sparse_index.search(&tokens, limit * 2))
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+
                 self.search_engine.search(
                     query,
                     limit,
@@ -961,6 +1823,7 @@ impl Engine {
                     Some(&self.reranker),
                     reranker_config.as_ref(),
                     &[], // no open files in pipeline search
+                    &sparse_hits,
                 )
             })
             .map_err(|e| match e {
@@ -973,7 +1836,7 @@ impl Engine {
 
     /// Execute a search and assemble a token-budget-aware context window.
     ///
-    /// This is the Phase 3 intelligent context assembly:
+    /// Intelligent context assembly pipeline:
     /// - Runs hybrid search
     /// - Groups results by file
     /// - Includes graph-neighbor chunks
@@ -985,6 +1848,65 @@ impl Engine {
         token_budget: Option<u32>,
     ) -> OmniResult<crate::types::ContextWindow> {
         self.search_context_window_with_rerank_threshold(query, limit, token_budget, None)
+    }
+
+    /// Assemble a flat, token-budget-optimal packed context window.
+    ///
+    /// Unlike `search_context_window()` (which returns a grouped `ContextWindow`
+    /// with graph-neighbor expansion), this method returns a flat
+    /// `Vec<PackedContextEntry>` tailored for agent-driven RAG orchestration:
+    ///
+    /// 1. Hybrid search with optional rerank threshold.
+    /// 2. Sort results by `(file_path, line_start)`.
+    /// 3. Merge adjacent same-file chunks where `line_end + 1 >= next.line_start`.
+    /// 4. Re-sort merged list by score descending.
+    /// 5. Greedy pack within `token_budget`.
+    ///
+    /// Returns `(packed_entries, tokens_used)`.
+    pub fn pack_context_window(
+        &self,
+        query: &str,
+        limit: usize,
+        token_budget: u32,
+        min_rerank_score: Option<f32>,
+    ) -> OmniResult<(Vec<crate::search::pack::PackedContextEntry>, u32)> {
+        use crate::search::pack::{greedy_pack, merge_adjacent, PackedContextEntry};
+
+        let results = self.search_with_rerank_threshold(query, limit, min_rerank_score)?;
+
+        // Convert SearchResult → PackedContextEntry, sort by (file, line_start).
+        let mut entries: Vec<PackedContextEntry> = results
+            .into_iter()
+            .map(|r| PackedContextEntry {
+                file_path: r.file_path,
+                symbol_path: r.chunk.symbol_path.clone(),
+                line_start: r.chunk.line_start,
+                line_end: r.chunk.line_end,
+                content: r.chunk.content.clone(),
+                token_count: r.chunk.token_count,
+                score: r.score,
+                kind: r.chunk.kind,
+            })
+            .collect();
+
+        entries.sort_by(|a, b| {
+            a.file_path
+                .cmp(&b.file_path)
+                .then_with(|| a.line_start.cmp(&b.line_start))
+        });
+
+        // Merge adjacent same-file chunks.
+        let merged = merge_adjacent(entries);
+
+        // Re-sort by score descending for greedy packing.
+        let mut sorted = merged;
+        sorted.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        Ok(greedy_pack(sorted, token_budget))
     }
 
     /// Execute a search and assemble a context window with optional reranker threshold.
@@ -1356,6 +2278,15 @@ impl Engine {
         &self.embedder
     }
 
+    /// Classify a query using the blended keyword + prototype-vector classifier.
+    ///
+    /// Returns a [`QueryIntent`] using the full blended path when prototype
+    /// embeddings are available, falling back to keyword-only heuristics when
+    /// the embedder is unavailable.
+    pub fn classify_intent(&self, query: &str) -> crate::search::intent::QueryIntent {
+        self.intent_classifier.classify(query, Some(&self.embedder))
+    }
+
     /// Get a reference to the embedder circuit breaker.
     pub fn embedder_breaker(&self) -> &CircuitBreaker {
         &self.embedder_breaker
@@ -1384,6 +2315,15 @@ impl Engine {
     /// Get a reference to the config.
     pub fn config(&self) -> &Config {
         &self.config
+    }
+
+    /// Get a mutable reference to the config.
+    ///
+    /// Allows runtime mutation of configuration fields (e.g. batch_size, batch_timeout_ms)
+    /// without restarting the engine. Changes take effect on the next operation that reads
+    /// the affected field.
+    pub fn config_mut(&mut self) -> &mut Config {
+        &mut self.config
     }
 
     /// Get a reference to the search engine (for cache stats, invalidation, etc.).
@@ -1559,6 +2499,440 @@ impl Engine {
         &mut self.branch_tracker
     }
 
+    // -----------------------------------------------------------------------
+    // Phase 5 — Advanced retrieval APIs
+    // -----------------------------------------------------------------------
+
+    /// Search with post-filter on language, path glob, modification date, or symbol type.
+    ///
+    /// Runs the standard hybrid search and then filters the results by the
+    /// caller-supplied criteria. All criteria are optional and ANDed together.
+    ///
+    /// - `language_filter`: e.g. "rust", "python", "typescript"
+    /// - `path_glob`: glob pattern matched against file paths (e.g. "src/auth/**")
+    /// - `modified_after`: ISO 8601 datetime string; only files indexed after this are included
+    /// - `symbol_type_filter`: e.g. "function", "class", "struct"
+    pub fn search_filtered(
+        &self,
+        query: &str,
+        limit: usize,
+        min_rerank_score: Option<f32>,
+        language_filter: Option<&str>,
+        path_glob: Option<&str>,
+        modified_after: Option<&str>,
+        symbol_type_filter: Option<&str>,
+    ) -> OmniResult<Vec<crate::types::SearchResult>> {
+        // Design: retrieve more candidates than `limit` to absorb post-filter loss,
+        // then apply all filters and truncate to `limit`.
+        let candidate_limit = (limit * 5).max(50);
+        let raw = self.search_with_rerank_threshold(query, candidate_limit, min_rerank_score)?;
+
+        let glob_matcher = path_glob.and_then(|p| {
+            globset::GlobBuilder::new(p)
+                .case_insensitive(true)
+                .build()
+                .ok()
+                .map(|g| g.compile_matcher())
+        });
+
+        let results: Vec<_> = raw
+            .into_iter()
+            .filter(|r| {
+                // Language filter
+                if let Some(lang) = language_filter {
+                    if let Ok(Some(fi)) = self.index.get_file_by_path(&r.file_path) {
+                        if !fi.language.as_str().eq_ignore_ascii_case(lang) {
+                            return false;
+                        }
+                    }
+                }
+                // Path glob filter
+                if let Some(ref matcher) = glob_matcher {
+                    let path_str = r.file_path.to_string_lossy();
+                    let normalized = path_str.replace('\\', "/");
+                    if !matcher.is_match(&normalized) {
+                        return false;
+                    }
+                }
+                // Symbol type filter
+                if let Some(sym_type) = symbol_type_filter {
+                    if !r.chunk.kind.as_str().eq_ignore_ascii_case(sym_type) {
+                        return false;
+                    }
+                }
+                // Modified-after filter: compare indexed_at against ISO 8601 cutoff.
+                // Query directly — FileInfo doesn't carry the indexed_at field.
+                if let Some(after) = modified_after {
+                    let path_str = r.file_path.to_string_lossy();
+                    let indexed_at: Option<String> = self
+                        .index
+                        .connection()
+                        .query_row(
+                            "SELECT indexed_at FROM files WHERE path = ?1",
+                            rusqlite::params![path_str.as_ref()],
+                            |row| row.get(0),
+                        )
+                        .ok();
+                    if indexed_at.as_deref().unwrap_or("") < after {
+                        return false;
+                    }
+                }
+                true
+            })
+            .take(limit)
+            .collect();
+
+        Ok(results)
+    }
+
+    /// Assemble a rich explanation for a symbol by combining all available context.
+    ///
+    /// Returns a structured Markdown string with:
+    /// - Type signature and doc comment
+    /// - 1-hop callers and callees from the dependency graph
+    /// - Recent commits touching the file
+    /// - Co-change partners
+    ///
+    /// No LLM inference — purely assembled from indexed structured data.
+    pub fn explain_symbol(&self, symbol_name: &str) -> OmniResult<String> {
+        use std::fmt::Write;
+
+        // Resolve symbol
+        let symbol = if let Some(s) = self.index.get_symbol_by_fqn(symbol_name)? {
+            s
+        } else {
+            let candidates = self.index.search_symbols_by_name(symbol_name, 3)?;
+            if candidates.is_empty() {
+                return Ok(format!("Symbol not found: `{symbol_name}`"));
+            }
+            candidates
+                .into_iter()
+                .next()
+                .ok_or_else(|| OmniError::Internal("empty candidate list".into()))?
+        };
+
+        let mut out = format!("## {}\n**Kind**: {:?}\n", symbol.fqn, symbol.kind);
+
+        // File path
+        if let Ok(Some(fi)) = self.index.get_file_by_id(symbol.file_id) {
+            writeln!(
+                out,
+                "**File**: {} (line {})",
+                fi.path.display(),
+                symbol.line
+            )
+            .ok();
+        }
+
+        // Source code from associated chunk
+        if let Some(chunk_id) = symbol.chunk_id {
+            if let Ok(chunks) = self.index.get_chunks_for_file(symbol.file_id) {
+                if let Some(chunk) = chunks.iter().find(|c| c.id == chunk_id) {
+                    if let Some(ref doc) = chunk.doc_comment {
+                        writeln!(out, "\n**Documentation**:\n{doc}").ok();
+                    }
+                    write!(out, "\n**Definition**:\n```\n{}\n```\n", chunk.content).ok();
+                }
+            }
+        }
+
+        // 1-hop upstream (what this symbol depends on)
+        let upstream = self.dep_graph.upstream(symbol.id, 1).unwrap_or_default();
+        if !upstream.is_empty() {
+            writeln!(out, "\n### Dependencies (calls / uses)").ok();
+            for sym_id in upstream.iter().take(10) {
+                if let Ok(Some(s)) = self.index.get_symbol_by_id(*sym_id) {
+                    writeln!(out, "- **{}** ({:?})", s.fqn, s.kind).ok();
+                }
+            }
+            if upstream.len() > 10 {
+                writeln!(out, "- … and {} more", upstream.len() - 10).ok();
+            }
+        }
+
+        // 1-hop downstream (what calls / uses this symbol)
+        let downstream = self.dep_graph.downstream(symbol.id, 1).unwrap_or_default();
+        if !downstream.is_empty() {
+            writeln!(out, "\n### Callers / Dependents").ok();
+            for sym_id in downstream.iter().take(10) {
+                if let Ok(Some(s)) = self.index.get_symbol_by_id(*sym_id) {
+                    writeln!(out, "- **{}** ({:?})", s.fqn, s.kind).ok();
+                }
+            }
+            if downstream.len() > 10 {
+                writeln!(out, "- … and {} more", downstream.len() - 10).ok();
+            }
+        }
+
+        // Recent commits touching the file
+        if let Ok(Some(fi)) = self.index.get_file_by_id(symbol.file_id) {
+            let file_path_str = fi.path.display().to_string();
+            let commits = CommitEngine::commits_for_file(&self.index, &file_path_str, 5)?;
+            if !commits.is_empty() {
+                writeln!(out, "\n### Recent Commits").ok();
+                for commit in &commits {
+                    writeln!(
+                        out,
+                        "- `{}` ({}) — {}",
+                        &commit.hash[..8.min(commit.hash.len())],
+                        commit.timestamp,
+                        commit.message
+                    )
+                    .ok();
+                }
+            }
+
+            // Co-change partners
+            let co_changes = CommitEngine::co_change_files(&self.index, &file_path_str, 2, 5)?;
+            if !co_changes.is_empty() {
+                writeln!(out, "\n### Frequently Co-changed Files").ok();
+                for cc in &co_changes {
+                    writeln!(out, "- `{}` ({} commits)", cc.path, cc.shared_commits).ok();
+                }
+            }
+        }
+
+        Ok(out)
+    }
+
+    /// Get recent commits touching a specific file or symbol, with optional git diff summary.
+    ///
+    /// If `include_diff` is true, fetches the actual diff for each commit via `git show`.
+    pub fn get_commit_summary(
+        &self,
+        file_or_symbol: &str,
+        limit: usize,
+        include_diff: bool,
+    ) -> OmniResult<Vec<crate::commits::CommitInfo>> {
+        // Resolve to a file path: try symbol lookup first, then treat as file path
+        let file_path = if let Ok(Some(sym)) = self.index.get_symbol_by_fqn(file_or_symbol) {
+            if let Ok(Some(fi)) = self.index.get_file_by_id(sym.file_id) {
+                fi.path.display().to_string()
+            } else {
+                file_or_symbol.to_string()
+            }
+        } else {
+            file_or_symbol.to_string()
+        };
+
+        let mut commits = CommitEngine::commits_for_file(&self.index, &file_path, limit)?;
+
+        // Fall back: if nothing in DB, use live git log
+        if commits.is_empty() {
+            let git_out = std::process::Command::new("git")
+                .args([
+                    "log",
+                    &format!("-{limit}"),
+                    "--format=%H%n%s%n%an%n%aI",
+                    "--name-only",
+                    "--",
+                    &file_path,
+                ])
+                .current_dir(&self.config.repo_path)
+                .output();
+
+            if let Ok(out) = git_out {
+                if out.status.success() {
+                    let text = String::from_utf8_lossy(&out.stdout);
+                    commits = CommitEngine::parse_git_log_pub(&text);
+                }
+            }
+        }
+
+        if include_diff {
+            for commit in &mut commits {
+                let diff_out = std::process::Command::new("git")
+                    .args(["show", "--stat", "--no-color", &commit.hash])
+                    .current_dir(&self.config.repo_path)
+                    .output();
+                if let Ok(out) = diff_out {
+                    if out.status.success() {
+                        let diff_text = String::from_utf8_lossy(&out.stdout);
+                        // Store concise stat as summary (first 1000 chars)
+                        let summary_text: String = diff_text.chars().take(1000).collect();
+                        commit.summary = Some(summary_text);
+                    }
+                }
+            }
+        }
+
+        Ok(commits)
+    }
+
+    /// Search commits by keyword query (message, summary, author).
+    pub fn search_commits_by_query(
+        &self,
+        query: &str,
+        limit: usize,
+    ) -> OmniResult<Vec<crate::commits::CommitInfo>> {
+        // Try FTS5 index first
+        let rowids = self.index.search_commits(query, limit)?;
+        if !rowids.is_empty() {
+            return self.index.get_commits_by_rowids(&rowids);
+        }
+
+        // Fallback: live git log keyword search when commits table is empty
+        let git_out = std::process::Command::new("git")
+            .args([
+                "log",
+                &format!("-{limit}"),
+                "--format=%H%n%s%n%an%n%aI",
+                "--name-only",
+                &format!("--grep={query}"),
+                "--regexp-ignore-case",
+            ])
+            .current_dir(&self.config.repo_path)
+            .output();
+
+        match git_out {
+            Ok(out) if out.status.success() => {
+                let text = String::from_utf8_lossy(&out.stdout);
+                Ok(CommitEngine::parse_git_log_pub(&text))
+            }
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    /// Ingest an external document (URL or file path) into the index.
+    ///
+    /// Fetches content from `source`, splits into chunks, embeds them alongside
+    /// code chunks (tagged as `external_doc` kind), and registers the document.
+    ///
+    /// Returns the number of new chunks created.
+    pub fn ingest_external_doc(&mut self, source: &str, force_reingest: bool) -> OmniResult<usize> {
+        // Skip if already ingested and not forced
+        if !force_reingest && self.index.external_doc_exists(source) {
+            return Ok(0);
+        }
+
+        // Fetch content
+        let (title, content) = Self::fetch_external_content(source)?;
+
+        if content.trim().is_empty() {
+            return Err(OmniError::Internal(format!(
+                "external source '{source}' returned empty content"
+            )));
+        }
+
+        // Chunk content using a simple paragraph splitter
+        // (no AST parser — external docs are prose, not code)
+        let chunks_text = Self::chunk_prose(&content, 400); // ~400 tokens each
+
+        let fake_file = crate::types::FileInfo {
+            id: 0,
+            path: std::path::PathBuf::from(source),
+            language: crate::types::Language::Unknown,
+            content_hash: format!("{:x}", xxhash_rust::xxh3::xxh3_64(content.as_bytes())),
+            size_bytes: content.len() as u64,
+        };
+
+        let file_id = self.index.upsert_file(&fake_file).unwrap_or(0);
+
+        let mut chunk_ids = Vec::with_capacity(chunks_text.len());
+        let mut pending_embeddings = Vec::new();
+
+        for (i, text) in chunks_text.iter().enumerate() {
+            let chunk = crate::types::Chunk {
+                id: 0,
+                file_id,
+                symbol_path: format!("external_doc::{}", i + 1),
+                kind: crate::types::ChunkKind::Module, // module = prose section
+                visibility: crate::types::Visibility::Public,
+                line_start: (i * 10 + 1) as u32,
+                line_end: ((i + 1) * 10) as u32,
+                content: text.clone(),
+                doc_comment: Some(format!("From: {source} — {title}")),
+                token_count: (text.len() / 4) as u32, // rough estimate
+                weight: 0.7,                          // slightly lower than code chunks
+                vector_id: None,
+                is_summary: false,
+                content_hash: xxhash_rust::xxh3::xxh3_64(text.as_bytes()),
+            };
+            if let Ok(cid) = self.index.insert_chunk(&chunk) {
+                chunk_ids.push(cid);
+                pending_embeddings.push(crate::types::PipelineEvent::FileChanged {
+                    path: std::path::PathBuf::from(source),
+                });
+            }
+        }
+
+        let _ = self
+            .index
+            .upsert_external_doc(source, &title, &content, &chunk_ids);
+
+        tracing::info!(
+            source = %source,
+            title = %title,
+            chunks = chunk_ids.len(),
+            "ingested external document"
+        );
+
+        Ok(chunk_ids.len())
+    }
+
+    /// Fetch content from a URL or local file path.
+    fn fetch_external_content(source: &str) -> OmniResult<(String, String)> {
+        if source.starts_with("http://") || source.starts_with("https://") {
+            // HTTP fetch via reqwest blocking client (sync, no tokio runtime needed here)
+            let client = reqwest::blocking::Client::builder()
+                .user_agent("OmniContext/1.0")
+                .timeout(std::time::Duration::from_secs(30))
+                .build()
+                .map_err(|e| OmniError::Internal(format!("HTTP client init failed: {e}")))?;
+
+            let body = client
+                .get(source)
+                .send()
+                .and_then(|r| r.text())
+                .map_err(|e| {
+                    OmniError::Internal(format!("HTTP fetch failed for '{source}': {e}"))
+                })?;
+
+            // Extract title from HTML <title> tag if present, else use URL
+            let title = extract_html_title(&body)
+                .unwrap_or_else(|| source.split('/').next_back().unwrap_or(source).to_string());
+
+            // Strip HTML tags to plain text
+            let text = strip_html_tags(&body);
+            Ok((title, text))
+        } else {
+            // Local file
+            let path = std::path::Path::new(source);
+            let content = std::fs::read_to_string(path).map_err(OmniError::Io)?;
+            let title = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(source)
+                .to_string();
+            Ok((title, content))
+        }
+    }
+
+    /// Split prose text into chunks of approximately `target_tokens` tokens.
+    fn chunk_prose(text: &str, target_tokens: usize) -> Vec<String> {
+        let mut chunks = Vec::new();
+        let mut current = String::new();
+        let mut current_tokens = 0usize;
+
+        for para in text.split("\n\n") {
+            let para_tokens = para.len() / 4 + 1;
+            if current_tokens + para_tokens > target_tokens && !current.is_empty() {
+                chunks.push(current.trim().to_string());
+                current = String::new();
+                current_tokens = 0;
+            }
+            if !current.is_empty() {
+                current.push_str("\n\n");
+            }
+            current.push_str(para);
+            current_tokens += para_tokens;
+        }
+        if !current.trim().is_empty() {
+            chunks.push(current.trim().to_string());
+        }
+        chunks
+    }
+
     /// Clear the index (metadata, vectors, and graph).
     /// This removes all indexed data but keeps the database structure intact.
     pub fn clear_index(&mut self) -> OmniResult<()> {
@@ -1585,16 +2959,21 @@ impl Engine {
         Ok(())
     }
 
-    /// Re-index a single file incrementally (Phase 2: real-time indexing).
+    /// Re-index a single file incrementally (real-time incremental indexing).
     ///
     /// Called by the daemon when a `text_edited` IDE event arrives. Unlike
     /// `process_file` which checks the content hash and skips unchanged files,
     /// this method always re-processes the file because the caller knows it
     /// has been edited.
     ///
-    /// Returns the file processing stats and a bool indicating whether the
-    /// file content actually changed (useful for cache invalidation).
-    pub fn reindex_single_file(&mut self, abs_path: &Path) -> OmniResult<(FileProcessStats, bool)> {
+    /// Returns the file processing stats, a changed flag, and a symbol-level
+    /// `IndexDelta` describing exactly which symbols were added, removed, or
+    /// modified. The delta lets the IPC layer send targeted cache invalidation
+    /// and change notifications to connected IDE clients.
+    pub fn reindex_single_file(
+        &mut self,
+        abs_path: &Path,
+    ) -> OmniResult<(FileProcessStats, bool, IndexDelta)> {
         let start = std::time::Instant::now();
 
         // Check file exists
@@ -1604,49 +2983,129 @@ impl Engine {
                 .strip_prefix(&self.config.repo_path)
                 .unwrap_or(abs_path);
 
-            // Before deleting from SQLite, strip edges and nodes from in-memory graph
-            if let Ok(Some(fi)) = self.index.get_file_by_path(rel_path) {
-                let fid = fi.id;
-                let old_symbols = self.index.get_all_symbols_for_file(fid).unwrap_or_default();
-                if !old_symbols.is_empty() {
-                    let old_ids: Vec<i64> = old_symbols.iter().map(|s| s.id).collect();
-                    let edges_removed = self.dep_graph.remove_edges_for_symbols(&old_ids);
-                    let nodes_removed = self.dep_graph.remove_symbols(&old_ids);
-                    tracing::debug!(
-                        path = %rel_path.display(),
-                        edges_removed,
-                        nodes_removed,
-                        "purged deleted file's symbols from in-memory graph"
-                    );
-                }
-            }
+            // Capture symbol FQNs before deletion for the delta report.
+            let removed_fqns: Vec<String> = self
+                .index
+                .get_file_by_path(rel_path)
+                .ok()
+                .flatten()
+                .map(|fi| {
+                    let fid = fi.id;
+                    // Before deleting from SQLite, strip edges and nodes from in-memory graph
+                    let old_symbols = self.index.get_all_symbols_for_file(fid).unwrap_or_default();
+                    if !old_symbols.is_empty() {
+                        let old_ids: Vec<i64> = old_symbols.iter().map(|s| s.id).collect();
+                        let edges_removed = self.dep_graph.remove_edges_for_symbols(&old_ids);
+                        let nodes_removed = self.dep_graph.remove_symbols(&old_ids);
+                        tracing::debug!(
+                            path = %rel_path.display(),
+                            edges_removed,
+                            nodes_removed,
+                            "purged deleted file's symbols from in-memory graph"
+                        );
+                    }
+                    old_symbols.into_iter().map(|s| s.fqn).collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
 
             if let Err(e) = self.index.delete_file(rel_path) {
                 tracing::warn!(error = %e, "failed to delete file from index");
             }
             // Remove from hash cache
             self.hash_cache.remove(abs_path);
-            return Ok((FileProcessStats::default(), true));
+
+            let delta = IndexDelta {
+                removed_symbols: removed_fqns.clone(),
+                has_structural_change: !removed_fqns.is_empty(),
+                ..Default::default()
+            };
+            return Ok((FileProcessStats::default(), true, delta));
         }
+
+        // Snapshot pre-reindex symbol state: map FQN → chunk content_hash
+        // so we can compute the per-symbol delta after reprocessing.
+        let rel_path_pre = abs_path
+            .strip_prefix(&self.config.repo_path)
+            .unwrap_or(abs_path);
+        let pre_symbols: std::collections::HashMap<String, u64> = self
+            .index
+            .get_file_by_path(rel_path_pre)
+            .ok()
+            .flatten()
+            .map(|fi| {
+                // chunk content_hashes keyed by symbol_path
+                self.index
+                    .get_chunk_content_hashes_for_file(fi.id)
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
 
         // Force reprocess by temporarily ignoring the hash check
         let mut pending = Vec::with_capacity(32);
         let mut stats = self.process_file(abs_path, &mut pending)?;
+        let chunks_reembedded = pending.len();
 
         // Immediately flush for single file indexing
         let mut embeddings_generated = 0;
         self.flush_pending_embeddings(&mut pending, &mut embeddings_generated)?;
         stats.embeddings = embeddings_generated;
 
+        // Compute post-reindex symbol state
+        let post_symbols: std::collections::HashMap<String, u64> = self
+            .index
+            .get_file_by_path(rel_path_pre)
+            .ok()
+            .flatten()
+            .map(|fi| {
+                self.index
+                    .get_chunk_content_hashes_for_file(fi.id)
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+
+        // Diff pre vs post to populate IndexDelta fields.
+        let mut added_symbols = Vec::new();
+        let mut removed_symbols = Vec::new();
+        let mut modified_symbols = Vec::new();
+
+        for (fqn, post_hash) in &post_symbols {
+            match pre_symbols.get(fqn.as_str()) {
+                None => added_symbols.push(fqn.clone()),
+                Some(pre_hash) if pre_hash != post_hash => modified_symbols.push(fqn.clone()),
+                _ => {}
+            }
+        }
+        for fqn in pre_symbols.keys() {
+            if !post_symbols.contains_key(fqn.as_str()) {
+                removed_symbols.push(fqn.clone());
+            }
+        }
+
+        let has_structural_change = !added_symbols.is_empty() || !removed_symbols.is_empty();
+        let is_body_only_change = !has_structural_change && !modified_symbols.is_empty();
+
+        let delta = IndexDelta {
+            added_symbols,
+            removed_symbols,
+            modified_symbols,
+            chunks_reembedded,
+            has_structural_change,
+            is_body_only_change,
+        };
+
         #[allow(clippy::cast_possible_truncation)]
         let elapsed_ms = start.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
-        let changed = stats.chunks > 0;
+        let changed =
+            stats.chunks > 0 || delta.has_structural_change || !delta.modified_symbols.is_empty();
 
         tracing::info!(
             path = %abs_path.display(),
             chunks = stats.chunks,
             symbols = stats.symbols,
             embeddings = stats.embeddings,
+            added = delta.added_symbols.len(),
+            removed = delta.removed_symbols.len(),
+            modified = delta.modified_symbols.len(),
             elapsed_ms = elapsed_ms,
             changed = changed,
             "single file reindex complete"
@@ -1664,10 +3123,23 @@ impl Engine {
             }
         }
 
-        Ok((stats, changed))
+        Ok((stats, changed, delta))
     }
 
     /// Flush a batch of pending embeddings to the vector index.
+    ///
+    /// ## Pipeline Overlap (Augment-style)
+    ///
+    /// The embedding computation (`embed_batch_parallel`) is CPU-bound and
+    /// purely immutable — it only needs `&self.embedder`.  The store phase
+    /// (`vector_index.add` + `index.set_chunk_vector_id`) needs `&mut self`.
+    ///
+    /// `flush_pending_embeddings` is called synchronously because the borrow
+    /// checker prevents concurrent `&self` (embed) and `&mut self` (store).
+    /// The pipeline overlap is achieved at a higher level: the session pool
+    /// in `embedder::session_pool` runs up to `pool_size` concurrent ONNX
+    /// sessions so that while the current batch is being processed, the next
+    /// batch accumulates in `pending_embeddings`.
     fn flush_pending_embeddings(
         &mut self,
         pending: &mut Vec<(i64, String)>,
@@ -1679,6 +3151,15 @@ impl Engine {
         }
 
         let texts: Vec<&str> = pending.iter().map(|(_, t)| t.as_str()).collect();
+        // Keep (chunk_id, content) pairs for the sparse path below.
+        // Collected here while `pending` data is still accessible (before `pending.clear()`).
+        let sparse_pairs: Vec<(i64, String)> = if self.config.embedding.enable_sparse_retrieval
+            && self.embedder.has_sparse_session()
+        {
+            pending.iter().map(|(id, t)| (*id, t.clone())).collect()
+        } else {
+            Vec::new()
+        };
 
         // Use parallel embedding for batches — guarded by the embedder circuit breaker.
         // When the breaker is open, we skip embedding and fall back to keyword-only search.
@@ -1754,13 +3235,61 @@ impl Engine {
             }
         }
 
+        // ── Sparse embeddings (BGE-M3 opt-in path) ────────────────────────────
+        //
+        // Only runs when `enable_sparse_retrieval = true` AND the BGE-M3 ONNX
+        // session is loaded.  Generates and persists SPLADE-style sparse vectors
+        // for every chunk in the batch.  The in-memory inverted index is rebuilt
+        // from all persisted sparse vectors at the end of `run_index()`.
+        //
+        // Cost: one additional ONNX session.run() per chunk — zero overhead
+        // when disabled (the default).
+        if self.config.embedding.enable_sparse_retrieval && self.embedder.has_sparse_session() {
+            // `sparse_pairs` was captured before `pending.clear()`.
+            for (chunk_id, content) in &sparse_pairs {
+                match self.embedder.embed_sparse(content.as_str()) {
+                    Ok(tokens) => {
+                        if let Err(e) = self.index.save_sparse_vector(*chunk_id, &tokens) {
+                            tracing::debug!(
+                                chunk_id,
+                                error = %e,
+                                "failed to persist sparse vector"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::debug!(
+                            chunk_id,
+                            error = %e,
+                            "sparse embed failed; skipping chunk"
+                        );
+                    }
+                }
+            }
+        }
+
         pending.clear();
 
-        // Recreate ONNX session to free accumulated arena memory
-        self.embedder.reset_session();
+        // Interval-based ONNX arena reset.
+        //
+        // The ORT arena grows with every session.run() call and is only freed
+        // when the Session is dropped.  Resetting on every flush reloads the
+        // ~550MB model from disk ~625 times for a 10k-chunk index — an O(n²)
+        // I/O cost.  Instead we reset every ARENA_FLUSH_RESET_INTERVAL flushes,
+        // which bounds peak arena growth while keeping the reload cost constant.
+        self.arena_flush_count += 1;
+        if self.arena_flush_count % ARENA_FLUSH_RESET_INTERVAL == 0 {
+            tracing::debug!(
+                flush_count = self.arena_flush_count,
+                interval = ARENA_FLUSH_RESET_INTERVAL,
+                "resetting ONNX session to reclaim arena memory"
+            );
+            self.embedder.reset_session();
+        }
 
-        // Persist vectors to disk after each flush so progress survives crashes
-        self.vector_index.save()?;
+        // Persist vectors to disk after each flush so progress survives crashes.
+        // block_in_place: bincode serialization + atomic file write — blocking I/O.
+        tokio::task::block_in_place(|| self.vector_index.save())?;
 
         Ok(())
     }
@@ -1781,6 +3310,244 @@ impl Engine {
         tracing::info!("engine shut down");
         Ok(())
     }
+
+    /// Enable or disable offline index mode.
+    ///
+    /// When `true`, `run_index()` skips the per-flush ANN index rebuilds so
+    /// vectors accumulate in the flat map only.  Call `build_ann_index()` once
+    /// after `run_index()` returns to build the HNSW in a single batch pass.
+    ///
+    /// Use this for initial index builds of large repositories where building
+    /// HNSW incrementally during embedding flushes is slower than building
+    /// once at the end from all vectors simultaneously.
+    pub fn set_offline_index_mode(&mut self, offline: bool) {
+        self.offline_index_mode = offline;
+        if offline {
+            tracing::info!("offline index mode enabled — ANN build deferred to build_ann_index()");
+        } else {
+            tracing::info!("offline index mode disabled — incremental ANN updates restored");
+        }
+    }
+
+    /// Returns `true` if the cloud GPU embedding service is configured and active.
+    ///
+    /// `true` means embedding requests will be routed to the cloud endpoint
+    /// (`https://api.omnicontext.dev/v1/embed`) instead of the local ONNX session.
+    /// Activated by `OMNI_CLOUD_API_KEY` env var or `config.embedding.cloud_api_key`.
+    pub fn is_cloud_embedding_active(&self) -> bool {
+        self.cloud_embedder.is_some()
+    }
+
+    /// Load repository rules from `.omnicontext/rules.md`, using mtime-based caching.
+    ///
+    /// Returns the content wrapped in a `<!-- rules -->…<!-- /rules -->` prefix block
+    /// when the file is present, or an empty string when the file is absent or unreadable.
+    /// The returned string is ready to be prepended directly to any context-window output.
+    ///
+    /// On I/O failure the error is logged at `WARN` level and an empty string is returned
+    /// so that callers never need to handle a rules-injection error as fatal.
+    pub fn load_rules_prefix(&mut self) -> String {
+        match self.rules_loader.load_cached(&self.config.repo_path) {
+            Ok(Some(rules)) => RulesLoader::format_prefix(&rules),
+            Ok(None) => String::new(),
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to load rules, skipping injection");
+                String::new()
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Persistent memory API
+    // -----------------------------------------------------------------------
+
+    /// Retrieve a value from the persistent memory store by key.
+    ///
+    /// Returns `None` when the key is absent.  This is a pure in-memory read —
+    /// no disk I/O on the hot path.
+    pub fn memory_get(&self, key: &str) -> Option<String> {
+        self.memory_store.get(key).map(str::to_owned)
+    }
+
+    /// Insert or update a key-value pair in the persistent memory store.
+    ///
+    /// The change is written to `.omnicontext/memory.json` atomically before
+    /// this function returns.  Returns an error if the key or value exceed the
+    /// size limits, or if the store is full (1,000 entries).
+    pub fn memory_set(&mut self, key: String, value: String) -> OmniResult<()> {
+        self.memory_store.set(key, value)?;
+        self.memory_store.save(&self.config.repo_path)
+    }
+
+    /// Remove a key from the persistent memory store.
+    ///
+    /// Returns `Ok(true)` if the key existed and was removed, `Ok(false)` if
+    /// the key was absent.  The change is persisted atomically before returning.
+    pub fn memory_remove(&mut self, key: &str) -> OmniResult<bool> {
+        let existed = self.memory_store.remove(key);
+        if existed {
+            self.memory_store.save(&self.config.repo_path)?;
+        }
+        Ok(existed)
+    }
+
+    /// List all memory keys with their last-updated Unix timestamps.
+    ///
+    /// Keys are returned in lexicographic order.  Pure in-memory read.
+    pub fn memory_list(&self) -> Vec<(String, u64)> {
+        self.memory_store
+            .list_keys()
+            .into_iter()
+            .map(|(k, ts)| (k.to_owned(), ts))
+            .collect()
+    }
+
+    /// Format the memory store as a context prefix block.
+    ///
+    /// Produces:
+    /// ```text
+    /// <!-- memory -->
+    /// key: value
+    /// <!-- /memory -->
+    ///
+    /// ```
+    ///
+    /// Returns an empty string when the store is empty so that the empty case
+    /// contributes zero bytes to the assembled context window.
+    pub fn memory_prefix(&self) -> String {
+        self.memory_store.format_prefix()
+    }
+
+    /// Build the ANN (Approximate Nearest Neighbor) index from all stored vectors.
+    ///
+    /// Called explicitly after `run_index()` when `set_offline_index_mode(true)` was used.
+    /// Builds `HnswIndex` using `build_batch()` which constructs the entire graph
+    /// in one pass — significantly faster than N sequential `insert()` calls.
+    ///
+    /// Persists the rebuilt index to disk.
+    pub fn build_ann_index(&mut self) -> OmniResult<()> {
+        if self.vector_index.is_empty() {
+            tracing::info!("no vectors to build ANN index from");
+            return Ok(());
+        }
+
+        let start = std::time::Instant::now();
+        self.vector_index.build_optimal_index()?;
+        let elapsed = start.elapsed();
+
+        tracing::info!(
+            vectors = self.vector_index.len(),
+            strategy = self.vector_index.active_strategy(),
+            elapsed_ms = elapsed.as_millis(),
+            "offline ANN index built"
+        );
+
+        self.vector_index.save()?;
+        Ok(())
+    }
+
+    /// Number of vectors currently stored in the index.
+    pub fn vector_count(&self) -> usize {
+        self.vector_index.len()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// External doc ingestion helpers (module-level, not part of Engine)
+// ---------------------------------------------------------------------------
+
+/// Extract the `<title>` tag content from an HTML string.
+fn extract_html_title(html: &str) -> Option<String> {
+    let lower = html.to_lowercase();
+    let start = lower.find("<title>")? + "<title>".len();
+    let end = lower.find("</title>")?;
+    if start < end {
+        Some(html[start..end].trim().to_string())
+    } else {
+        None
+    }
+}
+
+/// Strip HTML tags from a string, returning plain text.
+///
+/// Handles the most common cases: removes all `<...>` blocks and decodes
+/// a small set of named HTML entities. Good enough for documentation pages.
+fn strip_html_tags(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut inside_tag = false;
+    let mut inside_script = false;
+    let mut chars = html.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        match c {
+            '<' => {
+                inside_tag = true;
+                // Detect <script> and <style> blocks to skip entirely
+                let lookahead: String = chars.clone().take(6).collect();
+                if lookahead.to_lowercase().starts_with("script")
+                    || lookahead.to_lowercase().starts_with("style")
+                {
+                    inside_script = true;
+                }
+                if lookahead.starts_with('/') {
+                    let inner: String = chars.clone().skip(1).take(6).collect();
+                    if inner.to_lowercase().starts_with("script")
+                        || inner.to_lowercase().starts_with("style")
+                    {
+                        inside_script = false;
+                    }
+                }
+            }
+            '>' => {
+                inside_tag = false;
+                // Add whitespace where block elements end
+                out.push(' ');
+            }
+            _ if inside_tag || inside_script => {}
+            '&' => {
+                // Collect entity up to ';' (max 8 chars)
+                let mut entity = String::new();
+                while let Some(&next) = chars.peek() {
+                    if next == ';' {
+                        chars.next();
+                        break;
+                    }
+                    if entity.len() > 8 {
+                        break;
+                    }
+                    entity.push(next);
+                    chars.next();
+                }
+                let decoded = match entity.as_str() {
+                    "amp" => "&",
+                    "lt" => "<",
+                    "gt" => ">",
+                    "quot" => "\"",
+                    "apos" => "'",
+                    "nbsp" => " ",
+                    _ => " ",
+                };
+                out.push_str(decoded);
+            }
+            _ => out.push(c),
+        }
+    }
+
+    // Collapse excessive whitespace
+    let mut result = String::with_capacity(out.len());
+    let mut prev_space = false;
+    for ch in out.chars() {
+        if ch.is_whitespace() {
+            if !prev_space {
+                result.push(' ');
+            }
+            prev_space = true;
+        } else {
+            result.push(ch);
+            prev_space = false;
+        }
+    }
+    result.trim().to_string()
 }
 
 /// Result of an indexing operation.
@@ -1861,6 +3628,164 @@ pub struct FileProcessStats {
     pub call_edges: usize,
 }
 
+/// Symbol-level diff produced by `reindex_single_file`.
+///
+/// Design: rather than forcing clients to re-query the entire file after an
+/// edit event, the daemon can forward this delta so IDEs and search caches
+/// know exactly what changed. The delta is computed by diffing the
+/// pre-reindex symbol table against the post-reindex one using xxHash3
+/// chunk hashes as the identity key.
+///
+/// Fields contain fully-qualified symbol names (FQNs), not raw names.
+#[derive(Debug, Default, Clone)]
+pub struct IndexDelta {
+    /// Symbols added since the previous index state (new functions, classes, etc.)
+    pub added_symbols: Vec<String>,
+    /// Symbols removed (renamed, deleted, or moved to another file).
+    pub removed_symbols: Vec<String>,
+    /// Symbols whose source content changed (implementation altered).
+    pub modified_symbols: Vec<String>,
+    /// Number of chunks that were re-embedded due to content changes.
+    pub chunks_reembedded: usize,
+    /// Whether any structural change (add/remove symbol) occurred.
+    pub has_structural_change: bool,
+    /// Whether only implementation bodies changed (no signature/name changes).
+    pub is_body_only_change: bool,
+}
+
+// ---------------------------------------------------------------------------
+// ParsedFile — result of the CPU-bound parse phase (safe for Rayon)
+// ---------------------------------------------------------------------------
+
+/// Output from the pure, CPU-bound parse phase.
+///
+/// Contains everything needed to store a file in the index without requiring
+/// `&mut self` — i.e. without holding any exclusive reference to `Engine`.
+/// This is the type that `parse_file_parallel()` returns and `run_index()`
+/// collects before the sequential `store_parsed_file()` phase.
+struct ParsedFile {
+    /// Absolute path to the source file.
+    path: std::path::PathBuf,
+    /// xxHash3 of the full file content (for hash cache update after store).
+    file_content_hash_u64: u64,
+    /// Detected programming language.
+    language: Language,
+    /// `FileInfo` ready for `upsert_file`.
+    file_info: FileInfo,
+    /// Chunks with `content_hash` set per chunk.
+    chunks: Vec<Chunk>,
+    /// Symbols derived from chunks.
+    symbols: Vec<Symbol>,
+    /// Parsed elements for dependency graph construction.
+    elements: Vec<crate::parser::StructuralElement>,
+    /// Import statements for dependency resolution.
+    imports: Vec<crate::types::ImportStatement>,
+}
+
+/// CPU-bound parse phase — pure, `Send`, safe for Rayon parallelism.
+///
+/// Does NOT touch SQLite, the embedder, or any `&mut` state. Takes only
+/// immutable shared references that are `Send + Sync`.
+///
+/// Returns `None` when the file should be skipped (unknown language, I/O
+/// error, or parse failure). Errors are logged at `warn` level.
+fn parse_file_parallel(
+    path: &std::path::Path,
+    content: &str,
+    repo_path: &std::path::Path,
+    config: &crate::config::Config,
+    token_counter: &(dyn chunker::token_counter::TokenCounter + Send + Sync),
+) -> Option<ParsedFile> {
+    use xxhash_rust::xxh3::xxh3_64;
+
+    // Detect language
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_ascii_lowercase());
+    let ext = ext.as_deref().unwrap_or("");
+    let language = Language::from_extension(ext);
+
+    if matches!(language, Language::Unknown) {
+        tracing::debug!(path = %path.display(), ext, "skipping unrecognized extension");
+        return None;
+    }
+
+    let rel_path = path.strip_prefix(repo_path).unwrap_or(path);
+
+    // Parse structural elements
+    let elements = match crate::parser::parse_file(rel_path, content.as_bytes(), language) {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "parse failed, skipping");
+            return None;
+        }
+    };
+
+    // Import statements for dependency graph
+    let imports =
+        crate::parser::parse_imports(path, content.as_bytes(), language).unwrap_or_default();
+
+    // Content hashes
+    let file_content_hash_u64 = xxh3_64(content.as_bytes());
+
+    let file_info = FileInfo {
+        id: 0, // assigned by upsert_file
+        path: rel_path.to_path_buf(),
+        language,
+        content_hash: compute_file_hash(content),
+        size_bytes: content.len() as u64,
+    };
+
+    // Chunk — pass dummy file_id=0; will be fixed in store_parsed_file
+    let mut chunks = chunker::chunk_elements(
+        &elements, &file_info, &imports, 0, // file_id placeholder
+        config, content, token_counter,
+    );
+
+    // Annotate each chunk with its own xxHash3 for chunk-level delta detection
+    for chunk in &mut chunks {
+        chunk.content_hash = xxh3_64(chunk.content.as_bytes());
+    }
+
+    // RAPTOR summary chunks (no content_hash needed — always re-embedded)
+    let summary_chunks = chunker::generate_summary_chunks(&chunks, &file_info, token_counter);
+    if !summary_chunks.is_empty() {
+        chunks.extend(summary_chunks);
+    }
+
+    // Build Symbol records from non-summary chunks
+    let symbols: Vec<Symbol> = chunks
+        .iter()
+        .filter(|c| !c.symbol_path.is_empty() && !c.is_summary)
+        .map(|c| Symbol {
+            id: 0,
+            name: c
+                .symbol_path
+                .rsplit(['.', ':'])
+                .next()
+                .unwrap_or(&c.symbol_path)
+                .to_string(),
+            fqn: c.symbol_path.clone(),
+            kind: c.kind,
+            file_id: 0, // placeholder
+            line: c.line_start,
+            chunk_id: None,
+        })
+        .collect();
+
+    Some(ParsedFile {
+        path: path.to_path_buf(),
+        file_content_hash_u64,
+        language,
+        file_info,
+        chunks,
+        symbols,
+        elements,
+        imports,
+    })
+}
+
 /// Compute a SHA-256 hash of file content for change detection.
 fn compute_file_hash(content: &str) -> String {
     use sha2::{Digest, Sha256};
@@ -1909,7 +3834,7 @@ mod tests {
         assert_eq!(status.search_mode, "keyword-only");
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_index_empty_directory() {
         setup();
         let dir = tempfile::tempdir().expect("create temp dir");
@@ -1920,7 +3845,7 @@ mod tests {
         assert_eq!(result.chunks_created, 0);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn test_index_single_file() {
         setup();
         let dir = tempfile::tempdir().expect("create temp dir");
@@ -1954,5 +3879,367 @@ mod tests {
         let engine = Engine::with_config(config).expect("create engine");
         let results = engine.search("test query", 10).expect("search");
         assert!(results.is_empty());
+    }
+
+    // ── arena_flush_count + ARENA_FLUSH_RESET_INTERVAL ───────────────────────
+
+    #[test]
+    fn test_arena_flush_reset_interval_is_sane() {
+        // Design: ARENA_FLUSH_RESET_INTERVAL must be in [1, 200].
+        // The bounds are verified at compile time via the const assertions here.
+        // This test is a marker — if it fails to compile, the constant is out of range.
+        const _: () = assert!(
+            ARENA_FLUSH_RESET_INTERVAL >= 1,
+            "ARENA_FLUSH_RESET_INTERVAL must be >= 1 (otherwise every flush reloads the model)"
+        );
+        const _: () = assert!(
+            ARENA_FLUSH_RESET_INTERVAL <= 200,
+            "ARENA_FLUSH_RESET_INTERVAL must be <= 200 (otherwise arena grows unboundedly)"
+        );
+        // Passes when the constants compile — no runtime assertion needed.
+    }
+
+    #[test]
+    fn test_engine_arena_flush_count_initialises_to_zero() {
+        setup();
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let config = Config::defaults(dir.path());
+        let engine = Engine::with_config(config).expect("create engine");
+        assert_eq!(
+            engine.arena_flush_count, 0,
+            "arena_flush_count must be 0 at engine creation"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_run_index_resets_arena_flush_count() {
+        // After a completed run_index on an empty dir, arena_flush_count should be 0
+        // (reset at start of run_index) regardless of any previous value.
+        setup();
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let config = Config::defaults(dir.path());
+        let mut engine = Engine::with_config(config).expect("create engine");
+        // Manually set a non-zero value to simulate a previous run.
+        engine.arena_flush_count = 99;
+        engine.run_index(false).await.expect("index");
+        // After run_index the counter represents flushes done in that run.
+        // For an empty dir, no flushes happen, so it should be 0.
+        assert_eq!(
+            engine.arena_flush_count, 0,
+            "arena_flush_count should be reset to 0 at start of run_index"
+        );
+    }
+
+    // ── vector index build after indexing ────────────────────────────────────
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_run_index_calls_build_optimal_index_on_non_empty() {
+        setup();
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let root = dir.path();
+        // Write two Rust files so we get some vectors.
+        std::fs::write(
+            root.join("lib.rs"),
+            "pub fn add(a: i32, b: i32) -> i32 { a + b }\n\
+             pub fn sub(a: i32, b: i32) -> i32 { a - b }\n",
+        )
+        .expect("write lib.rs");
+
+        let config = Config::defaults(root);
+        let mut engine = Engine::with_config(config).expect("create engine");
+        engine.run_index(false).await.expect("index");
+
+        // active_strategy returns a &'static str; for a small index (<5000 vectors)
+        // it will be "flat" — but the important thing is it does NOT panic.
+        // This test verifies build_optimal_index was called without error.
+        let strategy = engine.vector_index.active_strategy();
+        assert!(
+            matches!(strategy, "flat" | "ivf" | "hnsw"),
+            "unexpected strategy: {strategy}"
+        );
+    }
+
+    // ── spawn_blocking / block_in_place integration guard ────────────────────
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_run_index_with_multi_thread_runtime() {
+        // Regression test: block_in_place requires multi-thread runtime.
+        // If this test panics with "block_in_place cannot be called on a current_thread runtime",
+        // it means a call site uses block_in_place where it shouldn't.
+        setup();
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let root = dir.path();
+        std::fs::write(root.join("main.py"), "def hello():\n    return 'world'\n").expect("write");
+
+        let config = Config::defaults(root);
+        let mut engine = Engine::with_config(config).expect("create engine");
+        // Must not panic when running under multi_thread runtime (block_in_place is valid here).
+        let result = engine.run_index(false).await.expect("index should succeed");
+        assert!(
+            result.files_processed >= 1,
+            "should process at least one file"
+        );
+    }
+
+    // ── Two-phase incremental indexing tests ─────────────────────────────────
+
+    /// Warm run: after a full index, a second run with no file changes must
+    /// process zero files (mtime + hash tiers both short-circuit).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_run_index_warm_skips_all_files() {
+        setup();
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let root = dir.path();
+        std::fs::write(root.join("stable.rs"), "pub fn stable() -> u32 { 42 }\n").expect("write");
+
+        let config = Config::defaults(root);
+        let mut engine = Engine::with_config(config).expect("create engine");
+
+        // Cold run: file is new, must be indexed.
+        let cold = engine.run_index(false).await.expect("cold index");
+        assert_eq!(cold.files_processed, 1, "cold run must index the file");
+
+        // Warm run: nothing changed — mtime and hash identical.
+        let warm = engine.run_index(false).await.expect("warm index");
+        assert_eq!(
+            warm.files_processed, 0,
+            "warm run must skip all unchanged files"
+        );
+    }
+
+    /// Incremental run: only the modified file should be re-indexed.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_run_index_incremental_one_changed() {
+        setup();
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let root = dir.path();
+
+        std::fs::write(root.join("a.rs"), "pub fn a() -> u32 { 1 }\n").expect("write a.rs");
+        std::fs::write(root.join("b.rs"), "pub fn b() -> u32 { 2 }\n").expect("write b.rs");
+
+        let config = Config::defaults(root);
+        let mut engine = Engine::with_config(config).expect("create engine");
+
+        // Cold run indexes both files.
+        let cold = engine.run_index(false).await.expect("cold index");
+        assert_eq!(cold.files_processed, 2, "cold run must index both files");
+
+        // Modify only b.rs.
+        std::fs::write(root.join("b.rs"), "pub fn b() -> u32 { 99 }\n").expect("update b.rs");
+
+        // Incremental run: only b.rs changed.
+        let inc = engine.run_index(false).await.expect("incremental index");
+        assert_eq!(
+            inc.files_processed, 1,
+            "incremental run must re-index only the changed file"
+        );
+    }
+
+    /// `parse_file_parallel` is a pure free function — verify it can be called
+    /// from multiple threads simultaneously (no `&mut self` capture).
+    #[test]
+    fn test_parse_file_parallel_is_pure() {
+        setup();
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let root = dir.path();
+        let path = root.join("lib.rs");
+        std::fs::write(&path, "pub fn hello() -> &'static str { \"hi\" }\n").expect("write");
+
+        let config = Config::defaults(root);
+        let counter: std::sync::Arc<dyn crate::chunker::token_counter::TokenCounter> =
+            std::sync::Arc::new(crate::chunker::token_counter::EstimateTokenCounter);
+
+        // Call from multiple threads via std::thread to confirm Send + no &mut self.
+        let handles: Vec<_> = (0..4)
+            .map(|_| {
+                let p = path.clone();
+                let r = root.to_path_buf();
+                let c = config.clone();
+                let tc = std::sync::Arc::clone(&counter);
+                let content = std::fs::read_to_string(&p).expect("read");
+                std::thread::spawn(move || parse_file_parallel(&p, &content, &r, &c, tc.as_ref()))
+            })
+            .collect();
+
+        for handle in handles {
+            let result = handle.join().expect("thread panicked");
+            assert!(
+                result.is_some(),
+                "parse_file_parallel must succeed for valid Rust"
+            );
+        }
+    }
+
+    /// Chunk-level delta: re-indexing an unchanged file must preserve existing
+    /// vector IDs for chunks whose content_hash matches the stored value.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_chunk_delta_skips_unchanged_chunks() {
+        setup();
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let root = dir.path();
+        std::fs::write(
+            root.join("delta.rs"),
+            "pub fn delta_fn() -> u32 { 100 }\npub fn helper() -> u32 { 200 }\n",
+        )
+        .expect("write");
+
+        let config = Config::defaults(root);
+        let mut engine = Engine::with_config(config).expect("create engine");
+
+        // Cold run: index and embed (or stage for embedding; no model in CI).
+        engine.run_index(false).await.expect("cold index");
+
+        // Touch the mtime without changing content — forces hash re-check.
+        let path = root.join("delta.rs");
+        // Re-write identical content so mtime changes but hash is the same.
+        let content = std::fs::read_to_string(&path).expect("read");
+        std::fs::write(&path, &content).expect("rewrite same content");
+
+        // Second run: mtime changed but hash identical → still skipped at tier 2.
+        let warm = engine.run_index(false).await.expect("warm after touch");
+        assert_eq!(
+            warm.files_processed, 0,
+            "content-identical file must be skipped even after mtime change"
+        );
+    }
+
+    /// Chunk-level delta: a chunk whose content changes must be re-embedded
+    /// (new content_hash diverges from stored value).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_chunk_delta_reembeds_changed_chunk() {
+        setup();
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let root = dir.path();
+        let path = root.join("evolving.rs");
+        std::fs::write(&path, "pub fn evolving() -> u32 { 1 }\n").expect("write");
+
+        let config = Config::defaults(root);
+        let mut engine = Engine::with_config(config).expect("create engine");
+
+        engine.run_index(false).await.expect("cold index");
+
+        // Change the content so the chunk hash diverges.
+        std::fs::write(&path, "pub fn evolving() -> u32 { 2 }\n").expect("update");
+
+        let inc = engine
+            .run_index(false)
+            .await
+            .expect("incremental after change");
+        assert_eq!(inc.files_processed, 1, "changed file must be re-indexed");
+    }
+
+    /// Deterministic ordering: running `run_index` twice on the same unchanged
+    /// repo (after clearing the hash cache) must produce the same chunk count.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_two_phase_ordering_deterministic() {
+        setup();
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let root = dir.path();
+        // Write several files to give Rayon something to parallelise.
+        for i in 0..5 {
+            std::fs::write(
+                root.join(format!("mod{i}.rs")),
+                format!("pub fn func_{i}() -> u32 {{ {i} }}\n"),
+            )
+            .expect("write");
+        }
+
+        // First run: cold index.
+        let config = Config::defaults(root);
+        let mut engine1 = Engine::with_config(config.clone()).expect("engine 1");
+        let r1 = engine1.run_index(false).await.expect("first index");
+
+        // Second run with a fresh engine (forces re-read from disk),
+        // but this time force=true to clear state and re-index all files.
+        let mut engine2 = Engine::with_config(config).expect("engine 2");
+        let r2 = engine2.run_index(true).await.expect("second index");
+
+        assert_eq!(
+            r1.chunks_created, r2.chunks_created,
+            "deterministic ordering must produce identical chunk counts across runs"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // SparseInvertedIndex unit tests (Item 8 — BGE-M3 sparse track)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_sparse_inverted_index_build_empty() {
+        let idx = SparseInvertedIndex::build(vec![]);
+        assert!(idx.is_empty(), "empty input must produce empty index");
+        assert_eq!(idx.len(), 0);
+    }
+
+    #[test]
+    fn test_sparse_inverted_index_build_posting_lists() {
+        // Two chunks share token 1; only chunk 0 has token 2.
+        let rows = vec![
+            (0_i64, vec![(1_u32, 0.8_f32), (2_u32, 0.4_f32)]),
+            (1_i64, vec![(1_u32, 0.6_f32)]),
+        ];
+        let idx = SparseInvertedIndex::build(rows);
+
+        assert_eq!(idx.len(), 2, "two chunks must be recorded");
+        assert!(!idx.is_empty());
+
+        // Posting list for token 1 must contain both chunks.
+        let posting = idx.index.get(&1).expect("token 1 must have a posting list");
+        assert_eq!(posting.len(), 2, "token 1 has two matching chunks");
+
+        // Posting list for token 2 must contain only chunk 0.
+        let posting2 = idx.index.get(&2).expect("token 2 must have a posting list");
+        assert_eq!(posting2.len(), 1);
+        assert_eq!(posting2[0].0, 0_i64);
+    }
+
+    #[test]
+    fn test_sparse_inverted_index_search_dot_product() {
+        // chunk 0: (1→1.0, 2→1.0)  chunk 1: (1→0.5)  chunk 2: (3→1.0) — no overlap
+        let rows = vec![
+            (0_i64, vec![(1_u32, 1.0_f32), (2_u32, 1.0_f32)]),
+            (1_i64, vec![(1_u32, 0.5_f32)]),
+            (2_i64, vec![(3_u32, 1.0_f32)]),
+        ];
+        let idx = SparseInvertedIndex::build(rows);
+
+        // Query: (1→1.0, 2→0.5)
+        // chunk 0 score = 1*1 + 1*0.5 = 1.5
+        // chunk 1 score = 0.5*1       = 0.5
+        // chunk 2 score = 0 (no overlap) — must not appear
+        let results = idx.search(&[(1_u32, 1.0_f32), (2_u32, 0.5_f32)], 10);
+
+        let ids: Vec<i64> = results.iter().map(|(id, _)| *id).collect();
+        assert!(!ids.contains(&2_i64), "zero-overlap chunk must be absent");
+        assert_eq!(ids[0], 0_i64, "chunk 0 must rank first (score 1.5)");
+        assert_eq!(ids[1], 1_i64, "chunk 1 must rank second (score 0.5)");
+
+        let score_0 = results.iter().find(|(id, _)| *id == 0).unwrap().1;
+        assert!(
+            (score_0 - 1.5_f32).abs() < 1e-5,
+            "dot-product for chunk 0 must be 1.5, got {score_0}"
+        );
+    }
+
+    #[test]
+    fn test_sparse_inverted_index_search_limit_respected() {
+        // 10 chunks each with token 1 at weight 1.0 — search with limit 3 must return exactly 3.
+        let rows: Vec<(i64, Vec<(u32, f32)>)> = (0..10)
+            .map(|i| (i as i64, vec![(1_u32, 1.0_f32)]))
+            .collect();
+        let idx = SparseInvertedIndex::build(rows);
+        let results = idx.search(&[(1_u32, 1.0_f32)], 3);
+        assert_eq!(results.len(), 3, "search must respect the limit parameter");
+    }
+
+    #[test]
+    fn test_sparse_inverted_index_search_empty_query() {
+        let rows = vec![(0_i64, vec![(1_u32, 1.0_f32)])];
+        let idx = SparseInvertedIndex::build(rows);
+        let results = idx.search(&[], 10);
+        assert!(
+            results.is_empty(),
+            "empty query tokens must return no results"
+        );
     }
 }

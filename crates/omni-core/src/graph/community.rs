@@ -32,7 +32,7 @@ pub fn detect_communities(
         return Ok(Vec::new());
     }
 
-    // Phase 1: Initialize - each node in its own community
+    // Initialization: each node in its own community
     let mut node_to_community: HashMap<NodeIndex, usize> = HashMap::new();
     for (idx, node) in graph.node_indices().enumerate() {
         node_to_community.insert(node, idx);
@@ -42,7 +42,7 @@ pub fn detect_communities(
     let mut iteration = 0;
     const MAX_ITERATIONS: usize = 100;
 
-    // Phase 2: Iteratively move nodes to maximize modularity
+    // Modularity optimization: iteratively move nodes to maximize modularity
     while improved && iteration < MAX_ITERATIONS {
         improved = false;
         iteration += 1;
@@ -58,7 +58,7 @@ pub fn detect_communities(
         }
     }
 
-    // Phase 3: Aggregate into communities
+    // Community aggregation: collect nodes by community assignment
     let communities = aggregate_communities(&node_to_community, graph);
 
     Ok(communities)
@@ -219,7 +219,7 @@ mod tests {
         let communities = detect_communities(&graph).unwrap();
 
         // Should detect 2 communities
-        assert!(communities.len() >= 1);
+        assert!(!communities.is_empty());
         assert!(communities.len() <= 3); // May merge if modularity is better
 
         // Total members should be 6

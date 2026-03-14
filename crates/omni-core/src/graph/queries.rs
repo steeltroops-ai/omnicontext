@@ -135,14 +135,14 @@ impl GraphQueryEngine {
     /// - Identify core/central files in the architecture
     /// - Prioritize files for documentation
     /// - Focus code review on high-impact files
-    pub fn get_most_important_files(&self, _limit: usize) -> OmniResult<Vec<(PathBuf, f32)>> {
-        // Compute importance scores
+    pub fn get_most_important_files(&self, limit: usize) -> OmniResult<Vec<(PathBuf, f32)>> {
+        // Compute importance scores (PageRank-style, 10 iterations)
         self.graph.compute_importance()?;
 
-        // Get all neighbors of a dummy file to access all nodes
-        // (This is a workaround; ideally we'd have a method to iterate all nodes)
-        // For now, return empty vec - this will be improved when we add node iteration
-        Ok(Vec::new())
+        let mut nodes = self.graph.all_nodes_with_importance();
+        nodes.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        nodes.truncate(limit);
+        Ok(nodes)
     }
 
     /// Compute the blast radius for a file.
@@ -484,5 +484,54 @@ mod tests {
         assert_eq!(stats.total_edges, 0);
         assert_eq!(stats.average_degree, 0.0);
         assert_eq!(stats.density, 0.0);
+    }
+
+    #[test]
+    fn test_get_most_important_files_ranks_high_indegree_first() {
+        // graph: A → B, C → B  (B has 2 incoming edges → highest importance)
+        let mut engine = GraphQueryEngine::new();
+        let graph = engine.graph_mut();
+
+        let file_a = PathBuf::from("src/a.rs");
+        let file_b = PathBuf::from("src/b.rs");
+        let file_c = PathBuf::from("src/c.rs");
+
+        graph
+            .add_edge(&DependencyEdge {
+                source: file_a.clone(),
+                target: file_b.clone(),
+                edge_type: EdgeType::Imports,
+                weight: 1.0,
+            })
+            .expect("add edge a->b");
+        graph
+            .add_edge(&DependencyEdge {
+                source: file_c.clone(),
+                target: file_b.clone(),
+                edge_type: EdgeType::Imports,
+                weight: 1.0,
+            })
+            .expect("add edge c->b");
+
+        let results = engine
+            .get_most_important_files(10)
+            .expect("get most important files");
+
+        // Must be non-empty
+        assert!(!results.is_empty(), "result should not be empty");
+
+        // B should rank first (highest in-degree)
+        assert_eq!(
+            results[0].0, file_b,
+            "file_b should be most important (2 incoming edges)"
+        );
+
+        // Scores should be in descending order
+        for pair in results.windows(2) {
+            assert!(
+                pair[0].1 >= pair[1].1,
+                "results should be sorted descending by importance"
+            );
+        }
     }
 }

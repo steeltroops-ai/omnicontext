@@ -74,6 +74,8 @@ impl Fixture {
             dimensions: 384,
             batch_size: 32,
             max_seq_length: 256,
+            enable_sparse_retrieval: false,
+            cloud_api_key: None,
         };
         let embedder = Embedder::degraded(&embed_cfg);
 
@@ -122,6 +124,7 @@ fn insert_symbol_with_chunk(index: &MetadataIndex, fqn: &str, content: &str) -> 
         weight: 1.0,
         vector_id: None,
         is_summary: false,
+        content_hash: 0,
     };
     let chunk_id = index.insert_chunk(&chunk).expect("insert chunk");
 
@@ -431,9 +434,10 @@ fn gar_depth_limit_excludes_deep_results() {
     let found_ids: Vec<i64> = hits.iter().map(|h| h.symbol_id).collect();
 
     // Nodes at depth 1, 2, 3 must be found
-    for expected_depth in 1..=3 {
+    for (i, &sym_id) in sym_ids[1..=3].iter().enumerate() {
+        let expected_depth = i + 1;
         assert!(
-            found_ids.contains(&sym_ids[expected_depth]),
+            found_ids.contains(&sym_id),
             "s{expected_depth} (depth {expected_depth}) should be within 3-hop limit"
         );
     }
@@ -448,11 +452,9 @@ fn gar_depth_limit_excludes_deep_results() {
     }
 
     // Also check depth annotation is correct for each found node
-    for expected_depth in 1..=3 {
-        let hit = hits
-            .iter()
-            .find(|h| h.symbol_id == sym_ids[expected_depth])
-            .unwrap();
+    for (i, &sym_id) in sym_ids[1..=3].iter().enumerate() {
+        let expected_depth = i + 1;
+        let hit = hits.iter().find(|h| h.symbol_id == sym_id).unwrap();
         assert_eq!(
             hit.depth, expected_depth,
             "s{expected_depth} should report depth={expected_depth}"

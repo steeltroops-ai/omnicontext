@@ -28,7 +28,7 @@ impl Registry {
     fn new() -> Self {
         let mut analyzers: HashMap<Language, Box<dyn LanguageAnalyzer>> = HashMap::new();
 
-        // Phase 1 languages (code -- full tree-sitter AST)
+        // Primary scripting and systems languages (full tree-sitter AST)
         analyzers.insert(
             Language::Python,
             Box::new(super::languages::python::PythonAnalyzer),
@@ -47,7 +47,7 @@ impl Registry {
         );
         analyzers.insert(Language::Go, Box::new(super::languages::go::GoAnalyzer));
 
-        // Phase 2 languages (code -- full tree-sitter AST)
+        // Enterprise and systems languages (full tree-sitter AST)
         analyzers.insert(
             Language::Java,
             Box::new(super::languages::java::JavaAnalyzer),
@@ -60,7 +60,7 @@ impl Registry {
         );
         analyzers.insert(Language::Css, Box::new(super::languages::css::CssAnalyzer));
 
-        // Phase 4 languages (code -- full tree-sitter AST)
+        // Mobile and scripting languages (full tree-sitter AST)
         analyzers.insert(
             Language::Ruby,
             Box::new(super::languages::ruby::RubyAnalyzer),
@@ -134,19 +134,19 @@ mod tests {
     #[test]
     fn test_registry_has_all_code_languages() {
         let reg = global_registry();
-        // Phase 1
+        // Primary scripting and systems languages
         assert!(reg.get(Language::Python).is_some());
         assert!(reg.get(Language::Rust).is_some());
         assert!(reg.get(Language::TypeScript).is_some());
         assert!(reg.get(Language::JavaScript).is_some());
         assert!(reg.get(Language::Go).is_some());
-        // Phase 2
+        // Enterprise and systems languages
         assert!(reg.get(Language::Java).is_some());
         assert!(reg.get(Language::C).is_some());
         assert!(reg.get(Language::Cpp).is_some());
         assert!(reg.get(Language::CSharp).is_some());
         assert!(reg.get(Language::Css).is_some());
-        // Phase 4 - Additional Languages
+        // Mobile and scripting languages
         assert!(reg.get(Language::Ruby).is_some());
         assert!(reg.get(Language::Php).is_some());
         assert!(reg.get(Language::Swift).is_some());

@@ -394,6 +394,78 @@ impl FileDependencyGraph {
         }
     }
 
+    /// Return a snapshot of all (path, importance) pairs after `compute_importance()` has run.
+    ///
+    /// Acquires a single read lock and clones only the fields needed by the caller.
+    /// Returns an empty vec if the lock is poisoned.
+    pub fn all_nodes_with_importance(&self) -> Vec<(PathBuf, f32)> {
+        self.inner
+            .read()
+            .map(|g| {
+                g.nodes
+                    .values()
+                    .map(|n| (n.path.clone(), n.importance))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Return all outgoing edges whose source matches `path`.
+    ///
+    /// Used by the pipeline to snapshot per-file edges for SQLite persistence
+    /// immediately after a file is re-indexed.  Acquires a single read lock.
+    pub fn outgoing_edges_for(&self, path: &std::path::Path) -> Vec<DependencyEdge> {
+        let path_buf = path.to_path_buf();
+        self.inner
+            .read()
+            .map(|g| {
+                g.outgoing
+                    .get(&path_buf)
+                    .map(|edges| {
+                        edges
+                            .iter()
+                            .map(|(target, edge_type, weight)| DependencyEdge {
+                                source: path_buf.clone(),
+                                target: target.clone(),
+                                edge_type: *edge_type,
+                                weight: *weight,
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Count edges grouped by edge type.
+    ///
+    /// Returns a map of `EdgeType -> count` covering all five edge categories.
+    /// This is the authoritative source for `graph/get_metrics` IPC data.
+    pub fn count_by_edge_type(&self) -> std::collections::HashMap<EdgeType, usize> {
+        let mut counts: std::collections::HashMap<EdgeType, usize> =
+            std::collections::HashMap::new();
+        // Pre-seed all variants so callers always get a complete map
+        for et in [
+            EdgeType::Imports,
+            EdgeType::Inherits,
+            EdgeType::Calls,
+            EdgeType::Instantiates,
+            EdgeType::HistoricalCoChange,
+        ] {
+            counts.insert(et, 0);
+        }
+
+        if let Ok(inner) = self.inner.read() {
+            for edges in inner.outgoing.values() {
+                for (_, edge_type, _) in edges {
+                    *counts.entry(*edge_type).or_insert(0) += 1;
+                }
+            }
+        }
+
+        counts
+    }
+
     /// Snapshot the adjacency list for offline graph algorithms.
     ///
     /// Returns a map of `source → Vec<target>` using only the `Imports`,
@@ -423,6 +495,34 @@ impl FileDependencyGraph {
         }
 
         adj
+    }
+
+    /// Return all edges across the entire graph that match `filter`.
+    ///
+    /// Acquires a single read lock and collects every `(source, target, weight)`
+    /// triple where the edge type equals `filter`.  Used by the pipeline to
+    /// snapshot `HistoricalCoChange` edges for SQLite persistence after
+    /// `HistoricalGraphEnhancer::enhance_graph()` runs.
+    pub fn all_edges_of_type(&self, filter: EdgeType) -> Vec<DependencyEdge> {
+        self.inner
+            .read()
+            .map(|g| {
+                let mut result = Vec::new();
+                for (src, edges) in &g.outgoing {
+                    for (tgt, et, w) in edges {
+                        if *et == filter {
+                            result.push(DependencyEdge {
+                                source: src.clone(),
+                                target: tgt.clone(),
+                                edge_type: *et,
+                                weight: *w,
+                            });
+                        }
+                    }
+                }
+                result
+            })
+            .unwrap_or_default()
     }
 }
 
@@ -609,5 +709,45 @@ mod tests {
         assert_eq!(EdgeType::Imports.as_str(), "imports");
         assert_eq!(EdgeType::parse("imports"), Some(EdgeType::Imports));
         assert_eq!(EdgeType::parse("invalid"), None);
+    }
+
+    #[test]
+    fn test_count_by_edge_type() {
+        let graph = FileDependencyGraph::new();
+        let file_a = PathBuf::from("src/a.rs");
+        let file_b = PathBuf::from("src/b.rs");
+        let file_c = PathBuf::from("src/c.rs");
+
+        graph
+            .add_edge(&DependencyEdge {
+                source: file_a.clone(),
+                target: file_b.clone(),
+                edge_type: EdgeType::Imports,
+                weight: 1.0,
+            })
+            .unwrap();
+        graph
+            .add_edge(&DependencyEdge {
+                source: file_a.clone(),
+                target: file_c.clone(),
+                edge_type: EdgeType::Calls,
+                weight: 1.0,
+            })
+            .unwrap();
+        graph
+            .add_edge(&DependencyEdge {
+                source: file_b.clone(),
+                target: file_c.clone(),
+                edge_type: EdgeType::Inherits,
+                weight: 1.0,
+            })
+            .unwrap();
+
+        let counts = graph.count_by_edge_type();
+        assert_eq!(*counts.get(&EdgeType::Imports).unwrap(), 1);
+        assert_eq!(*counts.get(&EdgeType::Calls).unwrap(), 1);
+        assert_eq!(*counts.get(&EdgeType::Inherits).unwrap(), 1);
+        assert_eq!(*counts.get(&EdgeType::Instantiates).unwrap(), 0);
+        assert_eq!(*counts.get(&EdgeType::HistoricalCoChange).unwrap(), 0);
     }
 }

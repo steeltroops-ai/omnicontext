@@ -427,18 +427,18 @@ mod tests {
 
     #[test]
     fn test_detect_method_chains_simple() {
-        let source = r#"
+        let source = r"
             let result = data.parse().validate().transform();
-        "#;
+        ";
         let chains = DataFlowExtractor::detect_method_chains(source);
         assert_eq!(chains, vec!["parse", "validate", "transform"]);
     }
 
     #[test]
     fn test_detect_method_chains_with_trivial() {
-        let source = r#"
+        let source = r"
             let x = foo.bar().clone().baz();
-        "#;
+        ";
         let chains = DataFlowExtractor::detect_method_chains(source);
         // "clone" is trivial and filtered out, so chain is bar, baz
         assert_eq!(chains, vec!["bar", "baz"]);
@@ -446,9 +446,9 @@ mod tests {
 
     #[test]
     fn test_detect_method_chains_single_call() {
-        let source = r#"
+        let source = r"
             let x = foo.bar();
-        "#;
+        ";
         let chains = DataFlowExtractor::detect_method_chains(source);
         // Single method call — not a chain, filtered out
         assert!(chains.is_empty());
@@ -456,18 +456,18 @@ mod tests {
 
     #[test]
     fn test_detect_method_chains_pipeline() {
-        let source = r#"
+        let source = r"
             results.iter().map(transform).filter(validate).collect();
-        "#;
+        ";
         let chains = DataFlowExtractor::detect_method_chains(source);
         assert_eq!(chains, vec!["iter", "map", "filter", "collect"]);
     }
 
     #[test]
     fn test_detect_method_chains_no_parens() {
-        let source = r#"
+        let source = r"
             let x = foo.bar.baz;
-        "#;
+        ";
         let chains = DataFlowExtractor::detect_method_chains(source);
         // No parentheses — field access, not method calls
         assert!(chains.is_empty());

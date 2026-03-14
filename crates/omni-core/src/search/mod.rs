@@ -38,6 +38,7 @@ pub mod context_formatter;
 pub mod feedback;
 pub mod hyde;
 pub mod intent;
+pub mod pack;
 pub mod synonyms;
 
 use crate::embedder::Embedder;
@@ -287,6 +288,7 @@ impl SearchEngine {
         reranker: Option<&Reranker>,
         reranker_config: Option<&crate::config::RerankerConfig>,
         open_files: &[std::path::PathBuf],
+        sparse_results: &[(i64, f32)],
     ) -> OmniResult<Vec<SearchResult>> {
         // ---- Check tiered result cache ----
         let reranker_active = reranker.is_some_and(|r| r.is_available());
@@ -434,7 +436,7 @@ impl SearchEngine {
 
         // ---- RRF Fusion with query-type-adaptive weights ----
         let mut fused = self.fuse_results(
-            query, &keyword_results, &semantic_results, &symbol_results, query_type,
+            query, &keyword_results, &semantic_results, &symbol_results, sparse_results, query_type,
         );
 
         if let Some(reranker) = reranker {
@@ -797,8 +799,17 @@ impl SearchEngine {
         open_files: &[std::path::PathBuf],
     ) -> OmniResult<(Vec<SearchResult>, std::collections::HashMap<i64, f64>)> {
         let results = self.search(
-            query, limit, index, vector_index, embedder, dep_graph, reasoning, reranker,
-            reranker_config, open_files,
+            query,
+            limit,
+            index,
+            vector_index,
+            embedder,
+            dep_graph,
+            reasoning,
+            reranker,
+            reranker_config,
+            open_files,
+            &[],
         )?;
 
         // Compute GAR neighbor map for context assembly
@@ -855,6 +866,7 @@ impl SearchEngine {
         keyword_results: &[(i64, f64)],  // (chunk_id, bm25_score)
         semantic_results: &[(u64, f32)], // (vector_id, similarity)
         symbol_results: &[i64],          // chunk_ids from symbol match
+        sparse_results: &[(i64, f32)],   // (chunk_id, dot-product score) from BGE-M3
         query_type: QueryType,
     ) -> Vec<ScoredChunk> {
         use std::collections::HashMap;
@@ -866,6 +878,18 @@ impl SearchEngine {
             QueryType::Keyword => (1.0, 1.0, 1.0),
             QueryType::NaturalLanguage => (0.6, 1.3, 0.8),
             QueryType::Mixed => (0.9, 1.1, 1.2),
+        };
+
+        // Sparse weight by query type (0.0 when sparse_results is empty → no effect).
+        let sparse_weight: f64 = if sparse_results.is_empty() {
+            0.0
+        } else {
+            match query_type {
+                QueryType::Symbol => 0.6,
+                QueryType::Keyword => 1.0, // replaces BM25 as primary sparse signal
+                QueryType::NaturalLanguage => 0.8,
+                QueryType::Mixed => 0.9,
+            }
         };
 
         // Intent-level refinement: adjust weights based on the deeper semantic
@@ -933,7 +957,17 @@ impl SearchEngine {
             entry.breakdown.rrf_score += rank_score;
         }
 
-        // Compute final scores with structural weight boost
+        // Sparse signal (BGE-M3 opt-in, zero-cost when disabled)
+        for (rank, &(chunk_id, _dot)) in sparse_results.iter().enumerate() {
+            let entry = scores.entry(chunk_id).or_insert_with(|| ScoredChunk {
+                chunk_id,
+                breakdown: ScoreBreakdown::default(),
+                final_score: 0.0,
+            });
+            let rank_score = sparse_weight / (f64::from(self.rrf_k) + (rank as f64) + 1.0);
+            entry.breakdown.sparse_rank = Some((rank + 1) as u32);
+            entry.breakdown.rrf_score += rank_score;
+        }
         let mut results: Vec<ScoredChunk> = scores.into_values().collect();
         for item in &mut results {
             item.breakdown.structural_weight = 1.0;
@@ -1005,6 +1039,7 @@ impl SearchEngine {
                     weight: row.get(10)?,
                     vector_id: row.get::<_, Option<i64>>(11)?.map(|v| v as u64),
                     is_summary: false,
+                    content_hash: 0, // not needed for search results
                 })
             },
         )
@@ -1039,7 +1074,7 @@ impl SearchEngine {
 
     /// Assemble a token-budget-aware context window from search results.
     ///
-    /// This is the Phase 3 context assembly engine. Instead of blindly
+    /// Intelligent context assembly engine. Instead of blindly
     /// concatenating search results, it:
     /// 1. Groups results by file
     /// 2. For files with 3+ matching chunks, includes ALL chunks from that file
@@ -1541,7 +1576,14 @@ mod tests {
         let keyword = vec![(1, -0.5), (2, -0.3), (3, -0.1)]; // chunk_id, bm25
         let semantic = vec![(2, 0.9), (1, 0.8), (4, 0.7)]; // vector_id, similarity
 
-        let fused = engine.fuse_results("test query", &keyword, &semantic, &[], QueryType::Keyword);
+        let fused = engine.fuse_results(
+            "test query",
+            &keyword,
+            &semantic,
+            &[],
+            &[],
+            QueryType::Keyword,
+        );
 
         assert!(!fused.is_empty());
 
@@ -1561,7 +1603,7 @@ mod tests {
     #[test]
     fn test_fuse_results_empty() {
         let engine = SearchEngine::new(60, 4000);
-        let fused = engine.fuse_results("", &[], &[], &[], QueryType::Keyword);
+        let fused = engine.fuse_results("", &[], &[], &[], &[], QueryType::Keyword);
         assert!(fused.is_empty());
     }
 
@@ -1572,7 +1614,7 @@ mod tests {
         let keyword = vec![(1, -0.5), (2, -0.3)];
         let symbol = vec![2_i64]; // chunk_id 2 is an exact symbol match
 
-        let fused = engine.fuse_results("Config", &keyword, &[], &symbol, QueryType::Symbol);
+        let fused = engine.fuse_results("Config", &keyword, &[], &symbol, &[], QueryType::Symbol);
 
         let chunk2 = fused.iter().find(|s| s.chunk_id == 2);
         let chunk1 = fused.iter().find(|s| s.chunk_id == 1);
@@ -1743,7 +1785,7 @@ mod tests {
         let scores = SearchEngine::compute_freshness_from_timestamps(&timestamps, 168.0);
         // All scores should be in [0, 1]
         for &s in scores.values() {
-            assert!(s >= 0.0 && s <= 1.0, "score {s} out of [0,1] range");
+            assert!((0.0..=1.0).contains(&s), "score {s} out of [0,1] range");
         }
         // Very old file should be close to 0
         assert!(scores[&1] < 0.01, "5-year-old file should be ~0.0");

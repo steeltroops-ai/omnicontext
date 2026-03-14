@@ -231,7 +231,137 @@ pub unsafe extern "C" fn omni_audit_plan(
     }
 }
 
+/// Compute blast radius for a symbol. Returns JSON array, or null on error.
+///
+/// Handles all of the following gracefully (returns null, no panic):
+/// - null `engine` pointer
+/// - null `symbol` pointer
+/// - `symbol` containing invalid UTF-8 bytes
+/// - symbol not found in index
+/// - any internal engine error
+///
+/// # Safety
+/// - `engine` must be a valid engine pointer returned by `omni_engine_new`, or null.
+/// - `symbol` must be a valid null-terminated C string, or null.
+#[no_mangle]
+pub unsafe extern "C" fn omni_blast_radius(
+    engine: *const c_void,
+    symbol: *const c_char,
+    max_depth: u32,
+) -> *mut c_char {
+    // Guard: null engine
+    let Some(wrapper) = engine.cast::<EngineWrapper>().as_ref() else {
+        return std::ptr::null_mut();
+    };
+
+    // Guard: null symbol pointer
+    if symbol.is_null() {
+        return std::ptr::null_mut();
+    }
+
+    // Guard: invalid UTF-8 in symbol string
+    let Ok(sym_str) = CStr::from_ptr(symbol).to_str() else {
+        return std::ptr::null_mut();
+    };
+
+    // Guard: empty symbol
+    if sym_str.trim().is_empty() {
+        return std::ptr::null_mut();
+    }
+
+    let index = wrapper.engine.metadata_index();
+    let graph = wrapper.engine.dep_graph();
+
+    // Look up symbol — try FQN first, fall back to name search
+    let sym = match index.get_symbol_by_fqn(sym_str) {
+        Ok(Some(s)) => s,
+        _ => match index.search_symbols_by_name(sym_str, 1) {
+            Ok(syms) => match syms.into_iter().next() {
+                Some(s) => s,
+                None => return std::ptr::null_mut(),
+            },
+            Err(_) => return std::ptr::null_mut(),
+        },
+    };
+
+    match graph.blast_radius(sym.id, max_depth as usize) {
+        Ok(radius) => {
+            let results: Vec<serde_json::Value> = radius
+                .iter()
+                .filter_map(|(id, dist)| {
+                    index.get_symbol_by_id(*id).ok().flatten().map(|s| {
+                        serde_json::json!({
+                            "symbol": s.fqn,
+                            "distance": dist,
+                            "kind": s.kind.as_str(),
+                        })
+                    })
+                })
+                .collect();
+            let json = serde_json::to_string(&results).unwrap_or_default();
+            string_to_cstring(json)
+        }
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Verify that the `OmniContext` engine is healthy for the given repo path.
+///
+/// Specifically, this function:
+/// 1. Attempts to open (and immediately release) the `SQLite` database to
+///    confirm no other process holds an exclusive lock.
+/// 2. Returns `1` (healthy) or `0` (unhealthy / locked).
+///
+/// Call this before `omni_engine_new` when you need to guarantee the database
+/// is available — for example, from an installer or process-guard logic that
+/// wants to detect zombie `omnicontext-mcp` processes holding the DB lock.
+///
+/// # Safety
+/// `repo_path` must be a valid null-terminated UTF-8 C string, or null.
+/// Returns `0` (unhealthy) on null input.
+#[no_mangle]
+pub unsafe extern "C" fn omni_ensure_health(repo_path: *const c_char) -> i32 {
+    // Guard: null path
+    if repo_path.is_null() {
+        return 0;
+    }
+
+    // Guard: invalid UTF-8
+    let path_str = match CStr::from_ptr(repo_path).to_str() {
+        Ok(s) if !s.trim().is_empty() => s,
+        _ => return 0,
+    };
+
+    let path = std::path::Path::new(path_str);
+
+    // Derive the data directory the same way omni-core does:
+    // Uses Config::defaults to get the same hash-derived path.
+    let data_dir = omni_core::Config::defaults(path).data_dir();
+    let db_path = data_dir.join("omnicontext.db");
+
+    // If DB doesn't exist yet there's nothing to lock — healthy.
+    if !db_path.exists() {
+        return 1;
+    }
+
+    // Attempt to open with WAL and an immediate EXCLUSIVE lock probe.
+    // rusqlite is bundled — always available.
+    match rusqlite::Connection::open_with_flags(
+        &db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) {
+        Ok(conn) => {
+            // Try a BEGIN IMMEDIATE to test for exclusive lock contention.
+            let locked = conn.execute_batch("BEGIN IMMEDIATE; ROLLBACK;").is_err();
+            i32::from(!locked)
+        }
+        // Can't open → locked or permissions issue
+        Err(_) => 0,
+    }
+}
+
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     //! Unit tests for the omni-ffi C ABI layer.
     //!
@@ -244,7 +374,7 @@ mod tests {
 
     // ------------------------------------------------------------------ helpers
 
-    /// Build a CString from a literal; panics on interior nul (never in tests).
+    /// Build a `CString` from a literal; panics on interior nul (never in tests).
     fn cs(s: &str) -> CString {
         CString::new(s).expect("test string must not contain interior nul bytes")
     }
@@ -463,134 +593,5 @@ mod tests {
         unsafe { omni_free(result_ptr) };
         // SAFETY: engine was returned by omni_engine_new and has not been freed.
         unsafe { omni_engine_free(engine) };
-    }
-}
-
-/// Compute blast radius for a symbol. Returns JSON array, or null on error.
-///
-/// Handles all of the following gracefully (returns null, no panic):
-/// - null `engine` pointer
-/// - null `symbol` pointer
-/// - `symbol` containing invalid UTF-8 bytes
-/// - symbol not found in index
-/// - any internal engine error
-///
-/// # Safety
-/// - `engine` must be a valid engine pointer returned by `omni_engine_new`, or null.
-/// - `symbol` must be a valid null-terminated C string, or null.
-#[no_mangle]
-pub unsafe extern "C" fn omni_blast_radius(
-    engine: *const c_void,
-    symbol: *const c_char,
-    max_depth: u32,
-) -> *mut c_char {
-    // Guard: null engine
-    let Some(wrapper) = engine.cast::<EngineWrapper>().as_ref() else {
-        return std::ptr::null_mut();
-    };
-
-    // Guard: null symbol pointer
-    if symbol.is_null() {
-        return std::ptr::null_mut();
-    }
-
-    // Guard: invalid UTF-8 in symbol string
-    let Ok(sym_str) = CStr::from_ptr(symbol).to_str() else {
-        return std::ptr::null_mut();
-    };
-
-    // Guard: empty symbol
-    if sym_str.trim().is_empty() {
-        return std::ptr::null_mut();
-    }
-
-    let index = wrapper.engine.metadata_index();
-    let graph = wrapper.engine.dep_graph();
-
-    // Look up symbol — try FQN first, fall back to name search
-    let sym = match index.get_symbol_by_fqn(sym_str) {
-        Ok(Some(s)) => s,
-        _ => match index.search_symbols_by_name(sym_str, 1) {
-            Ok(syms) => match syms.into_iter().next() {
-                Some(s) => s,
-                None => return std::ptr::null_mut(),
-            },
-            Err(_) => return std::ptr::null_mut(),
-        },
-    };
-
-    match graph.blast_radius(sym.id, max_depth as usize) {
-        Ok(radius) => {
-            let results: Vec<serde_json::Value> = radius
-                .iter()
-                .filter_map(|(id, dist)| {
-                    index.get_symbol_by_id(*id).ok().flatten().map(|s| {
-                        serde_json::json!({
-                            "symbol": s.fqn,
-                            "distance": dist,
-                            "kind": s.kind.as_str(),
-                        })
-                    })
-                })
-                .collect();
-            let json = serde_json::to_string(&results).unwrap_or_default();
-            string_to_cstring(json)
-        }
-        Err(_) => std::ptr::null_mut(),
-    }
-}
-
-/// Verify that the `OmniContext` engine is healthy for the given repo path.
-///
-/// Specifically, this function:
-/// 1. Attempts to open (and immediately release) the `SQLite` database to
-///    confirm no other process holds an exclusive lock.
-/// 2. Returns `1` (healthy) or `0` (unhealthy / locked).
-///
-/// Call this before `omni_engine_new` when you need to guarantee the database
-/// is available — for example, from an installer or process-guard logic that
-/// wants to detect zombie `omnicontext-mcp` processes holding the DB lock.
-///
-/// # Safety
-/// `repo_path` must be a valid null-terminated UTF-8 C string, or null.
-/// Returns `0` (unhealthy) on null input.
-#[no_mangle]
-pub unsafe extern "C" fn omni_ensure_health(repo_path: *const c_char) -> i32 {
-    // Guard: null path
-    if repo_path.is_null() {
-        return 0;
-    }
-
-    // Guard: invalid UTF-8
-    let path_str = match CStr::from_ptr(repo_path).to_str() {
-        Ok(s) if !s.trim().is_empty() => s,
-        _ => return 0,
-    };
-
-    let path = std::path::Path::new(path_str);
-
-    // Derive the data directory the same way omni-core does:
-    // Uses Config::defaults to get the same hash-derived path.
-    let data_dir = omni_core::Config::defaults(path).data_dir();
-    let db_path = data_dir.join("omnicontext.db");
-
-    // If DB doesn't exist yet there's nothing to lock — healthy.
-    if !db_path.exists() {
-        return 1;
-    }
-
-    // Attempt to open with WAL and an immediate EXCLUSIVE lock probe.
-    // rusqlite is bundled — always available.
-    match rusqlite::Connection::open_with_flags(
-        &db_path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    ) {
-        Ok(conn) => {
-            // Try a BEGIN IMMEDIATE to test for exclusive lock contention.
-            let locked = conn.execute_batch("BEGIN IMMEDIATE; ROLLBACK;").is_err();
-            i32::from(!locked)
-        }
-        // Can't open → locked or permissions issue
-        Err(_) => 0,
     }
 }

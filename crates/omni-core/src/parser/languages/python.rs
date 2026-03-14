@@ -281,13 +281,17 @@ impl PythonAnalyzer {
         let visibility = python_visibility(&name);
         let doc_comment = self.extract_docstring(node, source);
 
-        // Extract base classes as references
+        // Extract base classes as references AND populate the `extends` field
+        // for the EdgeExtractor to emit INHERITS edges.
         let mut references = Vec::new();
+        let mut extends = Vec::new();
         if let Some(args) = node.child_by_field_name("superclasses") {
             let mut cursor = args.walk();
             for child in args.children(&mut cursor) {
                 if child.kind() == "identifier" || child.kind() == "attribute" {
-                    references.push(node_text(child, source).to_string());
+                    let base = node_text(child, source).to_string();
+                    references.push(base.clone());
+                    extends.push(base);
                 }
             }
         }
@@ -302,7 +306,7 @@ impl PythonAnalyzer {
             content: node_text(node, source).to_string(),
             doc_comment,
             references,
-            extends: Vec::new(),
+            extends,
             implements: Vec::new(),
         })
     }

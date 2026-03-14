@@ -440,6 +440,7 @@ mod tests {
             weight: 1.0,
             vector_id: None,
             is_summary: false,
+            content_hash: 0,
         }
     }
 

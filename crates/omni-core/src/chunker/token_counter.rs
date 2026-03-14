@@ -120,21 +120,21 @@ fn estimate_tokens_heuristic(text: &str) -> u32 {
 ///
 /// Tries to load the tokenizer from the model directory. Falls back to
 /// the heuristic estimator if the tokenizer isn't available.
-pub fn create_token_counter(tokenizer_path: Option<&std::path::Path>) -> Box<dyn TokenCounter> {
+pub fn create_token_counter(tokenizer_path: Option<&std::path::Path>) -> Arc<dyn TokenCounter> {
     if let Some(path) = tokenizer_path {
         if let Some(counter) = ActualTokenCounter::from_path(path) {
             tracing::info!(
                 path = %path.display(),
                 "loaded tokenizer for accurate token counting"
             );
-            return Box::new(counter);
+            return Arc::new(counter);
         }
         tracing::warn!(
             path = %path.display(),
             "tokenizer file not found or invalid, falling back to heuristic estimator"
         );
     }
-    Box::new(EstimateTokenCounter)
+    Arc::new(EstimateTokenCounter)
 }
 
 #[cfg(test)]

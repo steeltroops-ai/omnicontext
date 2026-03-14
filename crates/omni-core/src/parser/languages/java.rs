@@ -98,6 +98,35 @@ impl JavaAnalyzer {
                         let visibility = extract_java_visibility(child, source);
                         let doc_comment = extract_javadoc(child, source);
 
+                        // Extract extends/implements for INHERITS edge emission
+                        // Java grammar fields: `superclass` (extends) and `interfaces` (implements)
+                        let mut extends = Vec::new();
+                        let mut implements = Vec::new();
+
+                        if let Some(superclass) = child.child_by_field_name("superclass") {
+                            // `extends Foo` — the superclass node itself is the type name
+                            let text = node_text(superclass, source).to_string();
+                            let clean = text.trim_start_matches("extends").trim().to_string();
+                            if !clean.is_empty() {
+                                extends.push(clean);
+                            }
+                        }
+
+                        if let Some(interfaces_node) = child.child_by_field_name("interfaces") {
+                            // `implements Bar, Baz` — parse type list
+                            let text = node_text(interfaces_node, source);
+                            let text = text.trim_start_matches("implements").trim();
+                            for iface in text.split(',') {
+                                let clean = iface.trim().to_string();
+                                if !clean.is_empty() {
+                                    implements.push(clean);
+                                }
+                            }
+                        }
+
+                        let references: Vec<String> =
+                            extends.iter().chain(implements.iter()).cloned().collect();
+
                         elements.push(StructuralElement {
                             symbol_path: symbol_path.clone(),
                             name: name.clone(),
@@ -107,9 +136,9 @@ impl JavaAnalyzer {
                             line_end: child.end_position().row as u32 + 1,
                             content: node_text(child, source).to_string(),
                             doc_comment,
-                            references: Vec::new(),
-                            extends: Vec::new(),
-                            implements: Vec::new(),
+                            references,
+                            extends,
+                            implements,
                         });
 
                         // Recurse into class body
