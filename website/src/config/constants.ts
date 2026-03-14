@@ -7,8 +7,8 @@
 
 // Version Information
 export const VERSION = {
-    current: "1.1.1",
-    displayFormat: "v1.1.1",
+    current: "1.3.0",
+    displayFormat: "v1.3.0",
 } as const;
 
 // Performance Metrics
@@ -43,7 +43,7 @@ export const SUPPORTED_AI_CLIENTS = [
 ] as const;
 
 // MCP Tools Count
-export const MCP_TOOLS_COUNT = 16;
+export const MCP_TOOLS_COUNT = 29;
 
 // Supported Languages
 export const SUPPORTED_LANGUAGES = [
@@ -73,7 +73,7 @@ export const FEATURES = {
         "Tree-sitter AST parsing for 16+ languages",
         "Semantic chunking with contextual boundaries",
         "Token counting for budget-aware assembly",
-        "ONNX embedding (jina-embeddings-v2-base-code)",
+        "ONNX embedding (nomic-ai/CodeRankEmbed, Apache-2.0)",
         "Batch embedding with intelligent backpressure",
         "SQLite FTS5 + HNSW vector index",
         "Connection pooling for concurrent access",
@@ -82,7 +82,7 @@ export const FEATURES = {
     hybridSearch: [
         "BM25 keyword search with FTS5",
         "Semantic vector search with HNSW",
-        "Cross-encoder reranking (ms-marco-MiniLM)",
+        "Cross-encoder reranking (bge-reranker-v2-m3, Apache-2.0)",
         "Graph-boosted scoring with dependency awareness",
         "Query result caching for instant responses",
         "HyDE (Hypothetical Document Embeddings)",

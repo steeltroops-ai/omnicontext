@@ -182,8 +182,9 @@ if "$BIN_PATH" --help 2>&1 | grep -q "setup"; then
         warn "Could not verify model status via binary"
     fi
 else
-    # Legacy check
-    if [ -f "$HOME/.omnicontext/models/jina-embeddings-v2-base-code/model.onnx" ]; then
+    # Legacy check — accept both CodeRankEmbed and the old jina path
+    if [ -f "$HOME/.omnicontext/models/CodeRankEmbed/model.onnx" ] || \
+       [ -f "$HOME/.omnicontext/models/jina-embeddings-v2-base-code/model.onnx" ]; then
         ok "Model already cached"
     else
         warn "Model not found - will be re-downloaded during installation"

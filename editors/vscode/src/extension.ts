@@ -485,22 +485,16 @@ interface ModelOption {
 
 const EMBEDDING_MODEL_OPTIONS: ModelOption[] = [
   {
-    label: "$(star-full) jina-embeddings-v2-base-code",
-    description: "Default · ~550 MB",
-    detail: "Best code quality — recommended for most projects",
-    modelId: "jina-embeddings-v2-base-code",
+    label: "$(star-full) CodeRankEmbed (nomic-ai)",
+    description: "Default · ~521 MB",
+    detail: "Best code quality — Apache-2.0, 768-dim, 2048 token context. Recommended for most projects.",
+    modelId: "CodeRankEmbed",
   },
   {
-    label: "$(zap) jina-embeddings-v2-small-en",
-    description: "Smaller · ~130 MB",
-    detail: "Faster startup and indexing, good general-purpose quality",
-    modelId: "jina-embeddings-v2-small-en",
-  },
-  {
-    label: "$(package) all-minilm-l6-v2",
-    description: "Tiny · ~22 MB",
-    detail: "Minimal resource usage — basic keyword-like search only",
-    modelId: "all-minilm-l6-v2",
+    label: "$(symbol-misc) bge-m3 (sparse track)",
+    description: "Sparse + dense · ~560 MB",
+    detail: "BGE-M3 sparse SPLADE vectors — Apache-2.0. Enables sparse retrieval via config.embedding.enable_sparse_retrieval.",
+    modelId: "bge-m3",
   },
 ];
 
@@ -508,7 +502,7 @@ async function runSelectModel(): Promise<void> {
   const config = vscode.workspace.getConfiguration("omnicontext");
   const currentModel = config.get<string>(
     "embeddingModel",
-    "jina-embeddings-v2-base-code",
+    "CodeRankEmbed",
   );
 
   // Annotate the currently active model
@@ -573,7 +567,7 @@ async function handleEmbeddingModelChange(): Promise<void> {
   const config = vscode.workspace.getConfiguration("omnicontext");
   const newModel = config.get<string>(
     "embeddingModel",
-    "jina-embeddings-v2-base-code",
+    "CodeRankEmbed",
   );
 
   outputChannel.appendLine(

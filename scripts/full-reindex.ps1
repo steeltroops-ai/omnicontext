@@ -29,8 +29,12 @@ Write-Host ""
 
 # Step 3: Verify model is downloaded
 Write-Host "[3/5] Verifying embedding model..." -ForegroundColor Yellow
-$modelPath = "$env:LOCALAPPDATA\omnicontext\models\jina-embeddings-v2-base-code\model.onnx"
-if (Test-Path $modelPath) {
+$modelPathNew    = "$env:LOCALAPPDATA\omnicontext\models\CodeRankEmbed\model.onnx"
+$modelPathLegacy = "$env:LOCALAPPDATA\omnicontext\models\jina-embeddings-v2-base-code\model.onnx"
+$modelPath = if (Test-Path $modelPathNew) { $modelPathNew } `
+             elseif (Test-Path $modelPathLegacy) { $modelPathLegacy } `
+             else { $null }
+if ($modelPath) {
     $modelSize = (Get-Item $modelPath).Length / 1MB
     Write-Host "  ✓ Model found: $([math]::Round($modelSize, 2)) MB" -ForegroundColor Green
 } else {

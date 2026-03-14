@@ -221,16 +221,14 @@
         },
         "omnicontext.embeddingModel": {
           "type": "string",
-          "default": "jina-embeddings-v2-base-code",
+          "default": "CodeRankEmbed",
           "enum": [
-            "jina-embeddings-v2-base-code",
-            "jina-embeddings-v2-small-en",
-            "all-minilm-l6-v2"
+            "CodeRankEmbed",
+            "bge-m3"
           ],
           "enumDescriptions": [
-            "Best code quality (~550 MB) — recommended for most projects",
-            "Smaller and faster (~130 MB) — good general-purpose quality",
-            "Tiny model (~22 MB) — minimal resource usage, basic search only"
+            "Primary model — nomic-ai/CodeRankEmbed, Apache-2.0, ~521 MB. 768-dim, 2048 token context. Recommended for all users.",
+            "Sparse track — BAAI/bge-m3, Apache-2.0, ~560 MB. Enables sparse SPLADE retrieval via config.embedding.enable_sparse_retrieval."
           ],
           "description": "Embedding model used for semantic code search. Changing this setting will prompt you to restart the daemon. Use the 'OmniContext: Select Embedding Model' command for a guided picker."
         }

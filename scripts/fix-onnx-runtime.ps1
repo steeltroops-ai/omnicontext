@@ -17,7 +17,7 @@ $arch = if ([Environment]::Is64BitOperatingSystem) { "x64" } else { "x86" }
 $targetDirs = @(
     (Join-Path (Join-Path $PSScriptRoot "..") "target\debug"),
     (Join-Path (Join-Path $PSScriptRoot "..") "target\release"),
-    "C:\Users\mayan\.omnicontext\bin"
+    (Join-Path $env:USERPROFILE ".omnicontext\bin")
 )
 
 $needsDownload = $true

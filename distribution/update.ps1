@@ -174,8 +174,12 @@ if ($Force) {
 # ---------------------------------------------------------------------------
 blank
 step "2.5/4" "Verifying embedding model"
-$DataDir   = Join-Path $HOME ".omnicontext"
-$ModelPath = Join-Path $DataDir "models\jina-embeddings-v2-base-code\model.onnx"
+$DataDir       = Join-Path $HOME ".omnicontext"
+$ModelPathNew  = Join-Path $DataDir "models\CodeRankEmbed\model.onnx"
+$ModelPathLegacy = Join-Path $DataDir "models\jina-embeddings-v2-base-code\model.onnx"
+$ModelPath     = if (Test-Path $ModelPathNew) { $ModelPathNew } `
+                 elseif (Test-Path $ModelPathLegacy) { $ModelPathLegacy } `
+                 else { $null }
 
 # Check if binary supports setup command
 $helpText = & $BinPath --help 2>&1 | Out-String
@@ -192,8 +196,8 @@ if ($helpText -like "*setup*") {
         warn "Could not verify model status via binary"
     }
 } else {
-    # Legacy check
-    if (Test-Path $ModelPath) {
+    # Legacy check — accept both CodeRankEmbed and the old jina path
+    if ($ModelPath) {
         $sizeMb = [math]::Round((Get-Item $ModelPath).Length / 1MB, 0)
         ok "Model already cached  $DIM($sizeMb MB)$RESET"
     } else {

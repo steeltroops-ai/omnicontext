@@ -531,7 +531,7 @@ export default function Home() {
                           embedder
                         </span>
                         <span className="text-zinc-400 flex-1">
-                          ONNX batch inference (jina-v2)
+                          ONNX batch inference (CodeRankEmbed)
                         </span>
                         <span className="text-emerald-500 font-medium text-right w-[50px]">
                           1.24s
@@ -608,7 +608,7 @@ export default function Home() {
                         Repository: /workspace/omnicontext
                       </div>
                       <div className="text-zinc-600 text-[11px] mt-2">
-                        Ready to serve 16 MCP tools to AI agents
+                        Ready to serve 29 MCP tools to AI agents
                       </div>
                     </div>
 
@@ -1202,7 +1202,7 @@ export default function Home() {
                 <ul className="flex flex-col gap-3">
                   <li className="flex items-center gap-3 text-[14px] text-zinc-300 tracking-tight">
                     <div className="w-1 h-1 rounded-full bg-emerald-500" />{" "}
-                    Provides 8 powerful MCP tools
+                    Provides 29 powerful MCP tools
                   </li>
                   <li className="flex items-center gap-3 text-[14px] text-zinc-300 tracking-tight">
                     <div className="w-1 h-1 rounded-full bg-emerald-500" />{" "}

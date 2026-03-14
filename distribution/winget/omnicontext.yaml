@@ -1,5 +1,5 @@
 PackageIdentifier: omnicontext
-PackageVersion: 1.1.1
+PackageVersion: 1.3.0
 PackageName: OmniContext
 Publisher: steeltroops
 PublisherUrl: https://github.com/steeltroops-ai
@@ -23,7 +23,7 @@ PackageUrl: https://github.com/steeltroops-ai/omnicontext
 Installers:
   - Architecture: x64
     InstallerType: zip
-    InstallerUrl: https://github.com/steeltroops-ai/omnicontext/releases/download/v1.1.1/omnicontext-1.1.1-x86_64-pc-windows-msvc.zip
-    InstallerSha256: c793381b6251cf153b71f1909ecf633e9e76f0a4f514216433d83880d1ae3ec0
+    InstallerUrl: https://github.com/steeltroops-ai/omnicontext/releases/download/v1.3.0/omnicontext-1.3.0-x86_64-pc-windows-msvc.zip
+    InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
 ManifestType: singleton
 ManifestVersion: 1.6.0
