@@ -168,6 +168,12 @@ pub struct Engine {
     /// instead of the local ONNX session.  Falls back to local ONNX on any HTTP
     /// error or timeout — cloud failure is never fatal.
     cloud_embedder: Option<CloudEmbedder>,
+    /// Telemetry collector for user interaction feedback.
+    ///
+    /// Accumulates click/insert/copy events from the VS Code sidebar to power
+    /// adaptive RRF weight tuning.  Lives for the daemon session lifetime;
+    /// data is never persisted to disk — it is purely in-process signal.
+    feedback_collector: crate::search::feedback::FeedbackCollector,
 }
 
 /// In-memory inverted index for sparse (SPLADE-style) retrieval.
@@ -481,6 +487,7 @@ impl Engine {
             current_symbol_index: None,
             sparse_index: SparseInvertedIndex::default(),
             cloud_embedder,
+            feedback_collector: crate::search::feedback::FeedbackCollector::new(),
         };
 
         // Load dependency graph from SQLite index
@@ -2435,6 +2442,11 @@ impl Engine {
     /// Get a reference to the semantic reasoning engine.
     pub fn reasoning_engine(&self) -> &ReasoningEngine {
         &self.reasoning_engine
+    }
+
+    /// Get a reference to the user feedback collector.
+    pub fn feedback_collector(&self) -> &crate::search::feedback::FeedbackCollector {
+        &self.feedback_collector
     }
 
     /// Return the timestamp of the most recently completed index run, if any.
