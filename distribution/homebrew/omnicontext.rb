@@ -1,22 +1,22 @@
 class Omnicontext < Formula
   desc "Universal code context engine for AI coding agents"
   homepage "https://github.com/steeltroops-ai/omnicontext"
-  version "1.3.4"
+  version "1.3.7"
   license "Apache-2.0"
 
   on_macos do
     if Hardware::CPU.arm?
       url "https://github.com/steeltroops-ai/omnicontext/releases/download/v#{version}/omnicontext-#{version}-aarch64-apple-darwin.tar.gz"
-      sha256 "f7e73a6e44fe65d2b68fedd94e17d93fd328003e63bb9dfd95637383fe3b3ee9"
+      sha256 "9c63d85f537d47701bb1a45fe319449f123f7c4317430f183f1f98c7dbd74ec3"
     else
       url "https://github.com/steeltroops-ai/omnicontext/releases/download/v#{version}/omnicontext-#{version}-x86_64-apple-darwin.tar.gz"
-      sha256 "4e524a31a005b9d8b56a266cc33d1cc25efc77a220876a8a8185763df0f30f56"
+      sha256 "0f75cf81f4ca888c7d6eb977726cac16958bc10b14d53462de3dcd3b3693be8b"
     end
   end
 
   on_linux do
     url "https://github.com/steeltroops-ai/omnicontext/releases/download/v#{version}/omnicontext-#{version}-x86_64-unknown-linux-gnu.tar.gz"
-    sha256 "d0d1e63d27651ddc70f9ca8acb058e1fdd8c71b7a92973a72384fae0859ac686"
+    sha256 "112f35ee82e3b1961f9c990f6a4c480b9ea4fb0e4b67ec5792a801a365fe65da"
   end
 
   # Pre-built binary — no compilation needed
