@@ -1860,9 +1860,7 @@ impl Engine {
             // ephemeral chunk never overwhelms the token budget.
             const MAX_BYTES: usize = 50 * 1024;
             let truncated: &str = if content.len() > MAX_BYTES {
-                let boundary = content[..MAX_BYTES]
-                    .rfind('\n')
-                    .unwrap_or(MAX_BYTES);
+                let boundary = content[..MAX_BYTES].rfind('\n').unwrap_or(MAX_BYTES);
                 &content[..boundary]
             } else {
                 content
@@ -4365,7 +4363,10 @@ mod tests {
         let line = "x".repeat(100) + "\n"; // 101 bytes per line
         let repeat_count = (50 * 1024 / line.len()) + 10; // enough to exceed 50 KB
         let big_content: String = line.repeat(repeat_count);
-        assert!(big_content.len() > 50 * 1024, "test fixture must exceed 50 KB");
+        assert!(
+            big_content.len() > 50 * 1024,
+            "test fixture must exceed 50 KB"
+        );
 
         let results = engine
             .search_with_active_content("query", 10, Some(&big_content))
