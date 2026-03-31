@@ -43,6 +43,8 @@ pub mod synonyms;
 
 use crate::embedder::Embedder;
 use crate::error::OmniResult;
+use crate::graph::attention::GraphAttentionAnalyzer;
+use crate::graph::dependencies::FileDependencyGraph;
 use crate::graph::reasoning::ReasoningEngine;
 use crate::index::MetadataIndex;
 use crate::reranker::Reranker;
@@ -287,8 +289,9 @@ impl SearchEngine {
     /// 3. Keyword search (FTS5 BM25)
     /// 4. Symbol lookup (exact/prefix match)
     /// 5. RRF fusion
-    /// 6. Structural weight boost
-    /// 7. Token-budget-aware result assembly
+    /// 6. GNN structural attention boost (when `file_dep_graph` is provided)
+    /// 7. Structural weight boost
+    /// 8. Token-budget-aware result assembly
     pub fn search(
         &self,
         query: &str,
@@ -302,6 +305,7 @@ impl SearchEngine {
         reranker_config: Option<&crate::config::RerankerConfig>,
         open_files: &[std::path::PathBuf],
         sparse_results: &[(i64, f32)],
+        file_dep_graph: Option<&FileDependencyGraph>,
     ) -> OmniResult<Vec<SearchResult>> {
         // ---- Check tiered result cache ----
         let reranker_active = reranker.is_some_and(|r| r.is_available());
@@ -309,13 +313,15 @@ impl SearchEngine {
         let reasoning_available = reasoning.is_some();
         // Include the unranked_demotion threshold in the cache key because different
         // threshold values produce different result orderings after reranking.
+        // Also include whether GNN attention is active so cached results are not
+        // served to callers that did not provide a file dependency graph.
         let min_rerank = reranker_config.map(|cfg| cfg.unranked_demotion as f32);
         let cache_key = CacheKey::with_context(
             query.to_string(),
             limit,
             min_rerank,
             reranker_active,
-            graph_available,
+            graph_available || file_dep_graph.is_some(),
             reasoning_available,
         );
         if let Some(cached) = self.result_cache.get(&cache_key) {
@@ -506,6 +512,32 @@ impl SearchEngine {
         let mut fused = self.fuse_results(
             query, &keyword_results, &semantic_results, &symbol_results, sparse_results, query_type,
         );
+
+        // ---- GNN Structural Attention Boost ----
+        // Apply file-level architectural importance scores from the two-layer GCN.
+        // Each chunk's score is multiplied by (1.0 + 0.25 * attention_score)
+        // where attention_score ∈ [0, 1] reflects the file's structural centrality.
+        if let Some(fdg) = file_dep_graph {
+            let analyzer = GraphAttentionAnalyzer::new();
+            if let Ok(attention) = analyzer.compute_attention_scores(fdg) {
+                if !attention.is_empty() {
+                    for item in &mut fused {
+                        let file_path = self.get_file_path_for_chunk_id(index, item.chunk_id);
+                        if let Some(fp) = file_path {
+                            if let Some(&attn) = attention.get(&fp) {
+                                item.final_score *= 1.0 + (0.25 * attn as f64);
+                            }
+                        }
+                    }
+                    // Re-sort after attention boost — scores may have changed order.
+                    fused.sort_by(|a, b| {
+                        b.final_score
+                            .partial_cmp(&a.final_score)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                }
+            }
+        }
 
         if let Some(reranker) = reranker {
             if reranker.is_available() && !fused.is_empty() {
@@ -866,10 +898,11 @@ impl SearchEngine {
         reranker_config: Option<&crate::config::RerankerConfig>,
         open_files: &[std::path::PathBuf],
         sparse_results: &[(i64, f32)],
+        file_dep_graph: Option<&FileDependencyGraph>,
     ) -> OmniResult<(Vec<SearchResult>, std::collections::HashMap<i64, f64>)> {
         let results = self.search(
             query, limit, index, vector_index, embedder, dep_graph, reasoning, reranker,
-            reranker_config, open_files, sparse_results,
+            reranker_config, open_files, sparse_results, file_dep_graph,
         )?;
 
         // Compute GAR neighbor map for context assembly
@@ -1116,6 +1149,27 @@ impl SearchEngine {
         conn.query_row(
             "SELECT path FROM files WHERE id = ?1",
             rusqlite::params![chunk.file_id],
+            |row| {
+                let path: String = row.get(0)?;
+                Ok(std::path::PathBuf::from(path))
+            },
+        )
+        .ok()
+    }
+
+    /// Resolve a chunk ID directly to its parent file path.
+    ///
+    /// Used by the GNN attention boost to look up the file path from a raw
+    /// chunk ID without first fetching the full chunk record.
+    fn get_file_path_for_chunk_id(
+        &self,
+        index: &MetadataIndex,
+        chunk_id: i64,
+    ) -> Option<std::path::PathBuf> {
+        let conn = index.connection();
+        conn.query_row(
+            "SELECT f.path FROM chunks c JOIN files f ON c.file_id = f.id WHERE c.id = ?1",
+            rusqlite::params![chunk_id],
             |row| {
                 let path: String = row.get(0)?;
                 Ok(std::path::PathBuf::from(path))

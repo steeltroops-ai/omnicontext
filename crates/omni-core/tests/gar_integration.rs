@@ -195,8 +195,9 @@ fn gar_neighbours_included_when_edge_connects_anchor_to_chunk() {
             Some(&fx.engine),
             None,
             None,
-            &[], // open_files
-            &[], // sparse_results (no BGE-M3 in test fixture)
+            &[],  // open_files
+            &[],  // sparse_results (no BGE-M3 in test fixture)
+            None, // file_dep_graph
         )
         .expect("search_with_gar");
 
@@ -615,8 +616,9 @@ fn gar_no_graph_returns_empty_neighbor_map() {
             None, // no reasoning engine
             None,
             None,
-            &[], // open_files
-            &[], // sparse_results (no BGE-M3 in test fixture)
+            &[],  // open_files
+            &[],  // sparse_results (no BGE-M3 in test fixture)
+            None, // file_dep_graph
         )
         .expect("search_with_gar without graph");
 
