@@ -648,6 +648,28 @@ pub struct IndexPoolMetrics {
     pub avg_query_time_ms: f64,
 }
 
+/// Parameters for recording user interaction feedback on a search result.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SearchFeedbackParams {
+    /// Opaque ID linking feedback to the originating search call.
+    pub query_id: String,
+    /// SQLite rowid of the chunk the user interacted with.
+    pub chunk_id: i64,
+    /// Zero-based rank of the chunk in the result list.
+    pub rank: usize,
+    /// Type of user interaction.
+    pub action: FeedbackAction,
+}
+
+/// Type of user interaction with a search result.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum FeedbackAction {
+    View,
+    Insert,
+    Copy,
+}
+
 /// Compression statistics.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompressionStats {

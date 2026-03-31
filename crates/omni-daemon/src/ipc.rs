@@ -598,6 +598,14 @@ async fn dispatch(
 
         "compression/get_stats" => handle_compression_stats(engine.clone()).await,
 
+        "search/feedback" => {
+            let params: protocol::SearchFeedbackParams = match parse_params(&req) {
+                Ok(p) => p,
+                Err(r) => return r,
+            };
+            handle_search_feedback(engine.clone(), params).await
+        }
+
         _ => Err((
             error_codes::METHOD_NOT_FOUND,
             format!("unknown method: {}", req.method),
@@ -2263,6 +2271,41 @@ async fn handle_audit_plan(
     })
 }
 
+/// Record a user interaction event for a specific search result chunk.
+///
+/// Design: translate the wire-level `FeedbackAction` into the core
+/// `FeedbackEvent` type, then forward to the engine's in-process
+/// `FeedbackCollector`.  Intent is set to `Unknown` because the
+/// query_id→intent mapping table is not yet wired; a follow-up can
+/// look up the originating search call and pass the real intent.
+async fn handle_search_feedback(
+    engine: Arc<Mutex<Engine>>,
+    params: protocol::SearchFeedbackParams,
+) -> Result<serde_json::Value, (i32, String)> {
+    use omni_core::search::feedback::FeedbackEvent;
+    use omni_core::search::intent::QueryIntent;
+
+    tracing::debug!(
+        query_id = %params.query_id,
+        chunk_id = params.chunk_id,
+        rank = params.rank,
+        action = ?params.action,
+        "search feedback received"
+    );
+
+    let eng = engine.lock().await;
+    eng.feedback_collector().record_feedback(&FeedbackEvent {
+        intent: QueryIntent::Unknown,
+        result_position: params.rank,
+        total_results: 0,  // not known at feedback time
+        result_score: 0.0, // not known at feedback time
+        was_gar_neighbor: false,
+        had_reranker_score: false,
+    });
+
+    Ok(serde_json::Value::Object(serde_json::Map::default()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2636,5 +2679,44 @@ mod tests {
         // Verify only 3 entries remain (most recent ones)
         let stats_after = cache.stats();
         assert_eq!(stats_after.size, 3);
+    }
+
+    #[test]
+    fn test_feedback_action_deserializes_view() {
+        let action: protocol::FeedbackAction =
+            serde_json::from_str("\"view\"").expect("should deserialize");
+        assert!(matches!(action, protocol::FeedbackAction::View));
+    }
+
+    #[test]
+    fn test_feedback_action_deserializes_all_variants() {
+        let insert: protocol::FeedbackAction =
+            serde_json::from_str("\"insert\"").expect("should deserialize insert");
+        assert!(matches!(insert, protocol::FeedbackAction::Insert));
+
+        let copy: protocol::FeedbackAction =
+            serde_json::from_str("\"copy\"").expect("should deserialize copy");
+        assert!(matches!(copy, protocol::FeedbackAction::Copy));
+    }
+
+    #[tokio::test]
+    async fn test_feedback_handler_returns_empty_object() {
+        let engine = Arc::new(Mutex::new(create_test_engine()));
+
+        let params = protocol::SearchFeedbackParams {
+            query_id: "test-query-001".to_string(),
+            chunk_id: 42,
+            rank: 0,
+            action: protocol::FeedbackAction::View,
+        };
+
+        let result = handle_search_feedback(engine, params).await;
+        assert!(result.is_ok(), "handler must succeed");
+
+        let value = result.unwrap();
+        assert!(
+            value.as_object().is_some_and(serde_json::Map::is_empty),
+            "response must be an empty JSON object"
+        );
     }
 }
