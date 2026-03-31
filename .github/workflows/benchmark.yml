@@ -64,15 +64,16 @@ jobs:
           # --baseline compares against the main branch baseline saved above.
           cargo bench -p omni-core --bench core_benchmarks -- --baseline main | tee /tmp/bench_output.txt
 
-          # Parse for regressions. Criterion outputs "[regressed]" when it detects a drop.
-          # We allow for a 15% budget for noise/jitter on shared runners.
-          if grep -q "regressed" /tmp/bench_output.txt; then
+          # Parse for regressions. Criterion outputs "Performance has regressed."
+          # Only fail if the integer part of a positive change is >= 20 (i.e. >=20%).
+          # The regex \+([2-9][0-9]|[1-9][0-9]+)\. anchors to the INTEGER part before
+          # the decimal point, avoiding false positives from decimal digits like +4.66%.
+          if grep -q "Performance has regressed" /tmp/bench_output.txt; then
             echo "::warning::Criterion detected a performance regression."
-            
-            # Simple heuristic: if we find "regressed" and a large change, we fail.
-            # Real-world runners have jitter, so we provide an out for small fluctuations.
-            if grep -E "[0-9]{2,}\.[0-9]+%" /tmp/bench_output.txt | grep -qE "([2-9][0-9]|[1-9][0-9][0-9])"; then
-               echo "::error::Critical performance regression detected (>20%). PR rejected."
+
+            # Match lines with a positive change whose integer part is >= 20.
+            if grep -qE "\+([2-9][0-9]|[1-9][0-9]+)\.[0-9]+%" /tmp/bench_output.txt; then
+               echo "::error::Critical performance regression detected (>=20%). PR rejected."
                exit 1
             fi
           fi
