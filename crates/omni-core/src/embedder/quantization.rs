@@ -24,28 +24,33 @@
 //!
 //! ## Usage
 //!
-//! ```rust
-//! use omni_core::embedder::quantization::ModelQuantizer;
+//! ```rust,no_run
+//! use std::path::PathBuf;
+//! use omni_core::embedder::quantization::{ModelQuantizer, QuantizationMode};
 //!
+//! let model_path = PathBuf::from("/path/to/model.onnx");
 //! let quantizer = ModelQuantizer::new();
 //! let quantized_path = quantizer.quantize_model(
 //!     &model_path,
 //!     QuantizationMode::INT8,
-//! )?;
+//! ).unwrap();
 //! ```
 
 use std::path::{Path, PathBuf};
 
-use crate::error::OmniResult;
+use serde::{Deserialize, Serialize};
+
+use crate::error::{OmniError, OmniResult};
 
 /// Quantization mode for model compression.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum QuantizationMode {
     /// 8-bit integer quantization (4x memory reduction, 1.5-2x speedup).
     INT8,
     /// 16-bit floating point (2x memory reduction, minimal accuracy loss).
     FP16,
     /// No quantization (original FP32 model).
+    #[default]
     None,
 }
 
@@ -101,13 +106,11 @@ impl ModelQuantizer {
 
     /// Quantize a model to INT8 or FP16.
     ///
-    /// This is a placeholder implementation. Full quantization requires:
-    /// 1. ONNX Runtime quantization tools (Python-based)
-    /// 2. Calibration dataset for dynamic quantization
-    /// 3. Validation to ensure <2% accuracy loss
+    /// For INT8: invokes `onnxruntime.quantization` as a Python subprocess.
+    /// The quantized model is cached alongside the FP32 original.  If Python
+    /// is unavailable or the subprocess fails, falls back to the FP32 model.
     ///
-    /// For now, we return the original model path and log a warning.
-    /// Future implementation will use `onnxruntime-tools` or similar.
+    /// For FP16: not yet implemented via subprocess; returns FP32 path.
     pub fn quantize_model(&self, model_path: &Path, mode: QuantizationMode) -> OmniResult<PathBuf> {
         if mode == QuantizationMode::None {
             return Ok(model_path.to_path_buf());
@@ -126,26 +129,16 @@ impl ModelQuantizer {
             return Ok(quantized_path);
         }
 
-        // Create cache directory
-        std::fs::create_dir_all(&self.cache_dir)?;
+        // Only INT8 is supported via subprocess; fall back for FP16.
+        if mode != QuantizationMode::INT8 {
+            tracing::warn!(
+                mode = ?mode,
+                "quantization mode not implemented via subprocess; using FP32 model"
+            );
+            return Ok(model_path.to_path_buf());
+        }
 
-        // INT8/FP16 quantization requires an external ONNX quantization tool (e.g.,
-        // onnxruntime.quantization or onnxconverter-common). This runtime cannot
-        // perform in-process weight reduction without re-linking against a quantization
-        // library. Deferred to a future integration — return the FP32 model and warn.
-        tracing::warn!(
-            model = %model_path.display(),
-            mode = ?mode,
-            "INT8/FP16 quantization not yet implemented, using FP32 model. \
-             To enable quantization, run: \
-             python -m onnxruntime.quantization.quantize_dynamic \
-             --model_input {} --model_output {} --per_channel",
-            model_path.display(),
-            quantized_path.display()
-        );
-
-        // Return original model path for now
-        Ok(model_path.to_path_buf())
+        quantize_model(model_path, mode)
     }
 
     /// Estimate memory savings from quantization.
@@ -171,6 +164,77 @@ impl Default for ModelQuantizer {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Quantize an ONNX model via a Python subprocess.
+///
+/// Derives the output path by inserting `.int8` before `.onnx`:
+/// `model.onnx` → `model.int8.onnx`.
+///
+/// Returns the FP32 path unchanged when:
+/// - `mode` is `QuantizationMode::None`
+/// - the cached INT8 model already exists (fast path)
+/// - Python is not found on `PATH`
+/// - the subprocess exits non-zero
+///
+/// All fallback paths log at `info` or `warn` level — never `error`.
+/// The caller (embedder) must never fail to start due to quantization.
+pub fn quantize_model(fp32_path: &Path, mode: QuantizationMode) -> OmniResult<PathBuf> {
+    if mode == QuantizationMode::None {
+        return Ok(fp32_path.to_path_buf());
+    }
+
+    // Derive output path: model.onnx → model.int8.onnx
+    let stem = fp32_path.file_stem().unwrap_or_default().to_string_lossy();
+    let output_path = fp32_path.with_file_name(format!("{stem}.int8.onnx"));
+
+    if output_path.exists() {
+        tracing::info!(path = %output_path.display(), "using cached quantized model");
+        return Ok(output_path);
+    }
+
+    // Check Python availability — try "python" then "python3".
+    let python_cmd = ["python", "python3"].iter().find(|cmd| {
+        std::process::Command::new(cmd)
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    });
+
+    let Some(python) = python_cmd.copied() else {
+        tracing::info!("Python unavailable; using FP32 model");
+        return Ok(fp32_path.to_path_buf());
+    };
+
+    let out = std::process::Command::new(python)
+        .args([
+            "-m",
+            "onnxruntime.quantization.quantize",
+            "--model_input",
+            &fp32_path.to_string_lossy(),
+            "--model_output",
+            &output_path.to_string_lossy(),
+            "--quant_type",
+            "QInt8",
+            "--per_channel",
+        ])
+        .output()
+        .map_err(|e| OmniError::Config {
+            details: format!("quantization subprocess spawn failed: {e}"),
+        })?;
+
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        tracing::warn!(
+            error = %stderr.trim(),
+            "quantization subprocess failed; using FP32 model"
+        );
+        return Ok(fp32_path.to_path_buf());
+    }
+
+    tracing::info!(output = %output_path.display(), "model quantized to INT8");
+    Ok(output_path)
 }
 
 /// Quantization configuration for embedder.
@@ -267,10 +331,10 @@ mod tests {
         let quantizer = ModelQuantizer::new();
 
         let int8_speedup = quantizer.estimate_speedup(QuantizationMode::INT8);
-        assert!(int8_speedup >= 1.5 && int8_speedup <= 2.0);
+        assert!((1.5..=2.0).contains(&int8_speedup));
 
         let fp16_speedup = quantizer.estimate_speedup(QuantizationMode::FP16);
-        assert!(fp16_speedup >= 1.0 && fp16_speedup <= 1.5);
+        assert!((1.0..=1.5).contains(&fp16_speedup));
 
         let none_speedup = quantizer.estimate_speedup(QuantizationMode::None);
         assert_eq!(none_speedup, 1.0);
@@ -302,5 +366,32 @@ mod tests {
         let quantizer = ModelQuantizer::new();
         let model_path = PathBuf::from("/nonexistent/model.onnx");
         assert!(quantizer.is_quantized(&model_path, QuantizationMode::None));
+    }
+
+    #[test]
+    fn test_quantize_none_mode_returns_input_path() {
+        // Design: None mode is a no-op — the free function must return the
+        // exact input path unchanged without touching the filesystem.
+        let dir = std::env::temp_dir();
+        let model_path = dir.join("model.onnx");
+        let result =
+            quantize_model(&model_path, QuantizationMode::None).expect("None mode must never fail");
+        assert_eq!(
+            result, model_path,
+            "None mode must return the input path unchanged"
+        );
+    }
+
+    #[test]
+    fn test_quantization_mode_default_is_none() {
+        // Design: EmbeddingConfig must default to no quantization so that
+        // existing deployments see no behavioral change on upgrade.
+        use crate::config::EmbeddingConfig;
+        let config = EmbeddingConfig::default();
+        assert_eq!(
+            config.quantization_mode,
+            QuantizationMode::None,
+            "EmbeddingConfig default quantization_mode must be None"
+        );
     }
 }

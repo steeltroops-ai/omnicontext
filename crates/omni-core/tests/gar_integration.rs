@@ -76,6 +76,7 @@ impl Fixture {
             max_seq_length: 256,
             enable_sparse_retrieval: false,
             cloud_api_key: None,
+            quantization_mode: omni_core::embedder::quantization::QuantizationMode::None,
         };
         let embedder = Embedder::degraded(&embed_cfg);
 
