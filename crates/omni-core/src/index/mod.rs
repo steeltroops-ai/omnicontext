@@ -697,6 +697,22 @@ impl MetadataIndex {
         Ok(result)
     }
 
+    /// Get the chunk ID associated with a symbol, if any.
+    ///
+    /// Narrow projection — fetches only `chunk_id` rather than the full symbol row.
+    pub fn get_chunk_for_symbol(&self, symbol_id: i64) -> OmniResult<Option<i64>> {
+        let result = self
+            .conn
+            .query_row(
+                "SELECT chunk_id FROM symbols WHERE id = ?1",
+                params![symbol_id],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .optional()?
+            .flatten();
+        Ok(result)
+    }
+
     /// Search symbols by name prefix (for autocomplete).
     pub fn search_symbols_by_name(&self, prefix: &str, limit: usize) -> OmniResult<Vec<Symbol>> {
         let mut stmt = self.conn.prepare(
