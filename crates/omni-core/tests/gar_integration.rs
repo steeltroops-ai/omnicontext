@@ -195,6 +195,7 @@ fn gar_neighbours_included_when_edge_connects_anchor_to_chunk() {
             None,
             None,
             &[],
+            None,
         )
         .expect("search_with_gar");
 
@@ -614,6 +615,7 @@ fn gar_no_graph_returns_empty_neighbor_map() {
             None,
             None,
             &[],
+            None,
         )
         .expect("search_with_gar without graph");
 

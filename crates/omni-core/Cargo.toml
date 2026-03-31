@@ -82,6 +82,9 @@ xxhash-rust = { workspace = true }
 # CPU-bound parallel file parsing (P3.2)
 rayon = { workspace = true }
 
+# Dense matrix algebra for GCN structural attention scoring
+ndarray = { workspace = true }
+
 # HTTP downloads (model auto-download)
 reqwest = { workspace = true }
 indicatif = { workspace = true }

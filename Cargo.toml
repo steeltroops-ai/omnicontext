@@ -112,6 +112,9 @@ xxhash-rust = { version = "0.8", features = ["xxh3"] }
 # CPU-bound parallelism (P3.2 — parallel file parsing)
 rayon = "1.10"
 
+# Dense matrix algebra for GCN structural attention scoring
+ndarray = "0.15"
+
 # Async utilities
 tokio-util = "0.7"
 tokio-stream = "0.1"

@@ -1824,6 +1824,7 @@ impl Engine {
                     reranker_config.as_ref(),
                     &[], // no open files in pipeline search
                     &sparse_hits,
+                    Some(&self.file_dep_graph),
                 )
             })
             .map_err(|e| match e {
@@ -1942,6 +1943,7 @@ impl Engine {
                     Some(&self.reranker),
                     reranker_config.as_ref(),
                     &[], // open_files passed via dedicated API when available
+                    Some(&self.file_dep_graph),
                 )
             })
             .map_err(|e| match e {
