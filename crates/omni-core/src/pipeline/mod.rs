@@ -1933,18 +1933,17 @@ impl Engine {
             .call_sync(|| {
                 // Compute sparse signal inside the circuit-breaker closure so the
                 // same failure domain covers both the embed call and the search.
-                let sparse_hits: Vec<(i64, f32)> =
-                    if self.config.embedding.enable_sparse_retrieval
-                        && !self.sparse_index.is_empty()
-                        && self.embedder.has_sparse_session()
-                    {
-                        self.embedder
-                            .embed_sparse(query)
-                            .map(|tokens| self.sparse_index.search(&tokens, limit * 2))
-                            .unwrap_or_default()
-                    } else {
-                        Vec::new()
-                    };
+                let sparse_hits: Vec<(i64, f32)> = if self.config.embedding.enable_sparse_retrieval
+                    && !self.sparse_index.is_empty()
+                    && self.embedder.has_sparse_session()
+                {
+                    self.embedder
+                        .embed_sparse(query)
+                        .map(|tokens| self.sparse_index.search(&tokens, limit * 2))
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
 
                 self.search_engine.search_with_gar(
                     query,

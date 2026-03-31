@@ -800,17 +800,8 @@ impl SearchEngine {
         sparse_results: &[(i64, f32)],
     ) -> OmniResult<(Vec<SearchResult>, std::collections::HashMap<i64, f64>)> {
         let results = self.search(
-            query,
-            limit,
-            index,
-            vector_index,
-            embedder,
-            dep_graph,
-            reasoning,
-            reranker,
-            reranker_config,
-            open_files,
-            sparse_results,
+            query, limit, index, vector_index, embedder, dep_graph, reasoning, reranker,
+            reranker_config, open_files, sparse_results,
         )?;
 
         // Compute GAR neighbor map for context assembly
