@@ -94,6 +94,10 @@ pub struct SearchEngine {
     /// Populated from BranchTracker during pipeline init.
     /// Files changed on the active branch get a relevance boost.
     branch_changed_file_ids: std::sync::Arc<parking_lot::Mutex<std::collections::HashSet<i64>>>,
+
+    /// HyDE configuration — controls whether and how hypothetical documents
+    /// are generated before embedding NL queries.
+    hyde_config: Option<crate::config::HydeConfig>,
 }
 
 impl SearchEngine {
@@ -121,7 +125,16 @@ impl SearchEngine {
             branch_changed_file_ids: std::sync::Arc::new(parking_lot::Mutex::new(
                 std::collections::HashSet::new(),
             )),
+            hyde_config: None,
         }
+    }
+
+    /// Configure the HyDE backend for natural-language query expansion.
+    ///
+    /// Call this after construction to enable the `"local_llm"` backend or
+    /// to override defaults.  The pipeline calls this once during `with_config`.
+    pub fn set_hyde_config(&mut self, config: crate::config::HydeConfig) {
+        self.hyde_config = Some(config);
     }
 
     /// Get a reference to the tiered result cache for external invalidation.
@@ -369,7 +382,7 @@ impl SearchEngine {
             // For NL queries, HyDE generates a hypothetical code snippet whose
             // embedding is closer in vector space to relevant code.
             let embed_text = if query_type == QueryType::NaturalLanguage {
-                hyde::generate_hypothetical_document(query, query_intent)
+                hyde::generate_hypothetical_document(query, query_intent, self.hyde_config.as_ref())
                     .unwrap_or_else(|| query.to_string())
             } else {
                 query.to_string()
