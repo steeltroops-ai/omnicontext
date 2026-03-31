@@ -4,6 +4,11 @@ All notable changes to OmniContext are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.6] - 2026-03-31
+
+### Fixed
+- Add pull-requests write permission to benchmark regression job ([20dbea5](https://github.com/steeltroops-ai/omnicontext/commit/20dbea5a15cd01a1ea462d9cf2c8bf80180435f1))
+
 ## [1.3.5] - 2026-03-31
 
 ### Fixed
