@@ -120,6 +120,9 @@ jobs:
     name: Dependency Review
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # Non-blocking: requires GitHub Dependency Graph enabled in repo settings.
+    # Supply-chain (cargo-deny) is the authoritative dependency gate.
+    continue-on-error: true
     if: github.event_name == 'pull_request'
     permissions:
       contents: read
