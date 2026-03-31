@@ -4,6 +4,17 @@ All notable changes to OmniContext are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-03-31
+
+### Added
+- Implement 2-layer GCN structural attention for search ranking ([85616c2](https://github.com/steeltroops-ai/omnicontext/commit/85616c2c6132e80cfa04536bb045ed6639fb1822))
+
+### Changed
+- Apply cargo fmt --all ([544b9f1](https://github.com/steeltroops-ai/omnicontext/commit/544b9f1e32d73c18bf603c3a594e8da5c7e7ec07))
+
+### Fixed
+- Use transposed adjacency for GCN in-neighbor aggregation ([e80762d](https://github.com/steeltroops-ai/omnicontext/commit/e80762d02c5c6ae3e3aa165f03318458ec97ac4d))
+
 ## [1.4.0] - 2026-03-31
 
 ### Added
