@@ -1,0 +1,304 @@
+{
+  "version": "1.0",
+  "description": "Golden evaluation queries against OmniContext codebase",
+  "queries": [
+    {
+      "id": "q001",
+      "intent": "Explain",
+      "query": "how does semantic search work",
+      "expected_results": [
+        {"symbol_path": "omni_core::search::SearchEngine::search", "relevance": 3, "reason": "core search entry point"},
+        {"symbol_path": "omni_core::search::SearchEngine::fuse_results", "relevance": 3, "reason": "RRF fusion of keyword and semantic signals"},
+        {"symbol_path": "omni_core::embedder::Embedder::embed_query", "relevance": 2, "reason": "query embedding for semantic retrieval"},
+        {"symbol_path": "omni_core::vector::VectorIndex::search", "relevance": 2, "reason": "nearest-neighbour vector lookup"},
+        {"symbol_path": "omni_core::search::SearchEngine", "relevance": 1, "reason": "search engine struct definition"}
+      ]
+    },
+    {
+      "id": "q002",
+      "intent": "Explain",
+      "query": "how does the HNSW index work",
+      "expected_results": [
+        {"symbol_path": "omni_core::vector::hnsw::HnswIndex", "relevance": 3, "reason": "HNSW index implementation"},
+        {"symbol_path": "omni_core::vector::hnsw::HnswIndex::search", "relevance": 3, "reason": "ANN search on HNSW graph"},
+        {"symbol_path": "omni_core::vector::hnsw::HnswIndex::add", "relevance": 2, "reason": "vector insertion into HNSW"},
+        {"symbol_path": "omni_core::vector::VectorIndex::build_hnsw", "relevance": 2, "reason": "builds HNSW from flat index"},
+        {"symbol_path": "omni_core::vector::VectorIndex", "relevance": 1, "reason": "vector index wrapper"}
+      ]
+    },
+    {
+      "id": "q003",
+      "intent": "Explain",
+      "query": "explain the RRF score fusion algorithm",
+      "expected_results": [
+        {"symbol_path": "omni_core::search::SearchEngine::fuse_results", "relevance": 3, "reason": "implements RRF fusion"},
+        {"symbol_path": "omni_core::search::SearchEngine::rrf_score", "relevance": 3, "reason": "computes individual RRF scores"},
+        {"symbol_path": "omni_core::search::SearchEngine::search", "relevance": 2, "reason": "calls fuse_results internally"},
+        {"symbol_path": "omni_core::search::SearchEngine", "relevance": 1, "reason": "search engine that owns fusion"}
+      ]
+    },
+    {
+      "id": "q004",
+      "intent": "Explain",
+      "query": "what is the dependency graph and how are edges stored",
+      "expected_results": [
+        {"symbol_path": "omni_core::graph::dependencies::FileDependencyGraph", "relevance": 3, "reason": "dependency graph struct"},
+        {"symbol_path": "omni_core::graph::dependencies::FileDependencyGraph::add_edge", "relevance": 3, "reason": "adds a directed edge to the graph"},
+        {"symbol_path": "omni_core::graph::dependencies::FileDependencyGraph::get_neighbors", "relevance": 2, "reason": "queries adjacent nodes"},
+        {"symbol_path": "omni_core::types::DependencyEdge", "relevance": 2, "reason": "edge data type in graph"},
+        {"symbol_path": "omni_core::types::DependencyKind", "relevance": 1, "reason": "edge kind enum"}
+      ]
+    },
+    {
+      "id": "q005",
+      "intent": "Explain",
+      "query": "how is configuration loaded and what are the defaults",
+      "expected_results": [
+        {"symbol_path": "omni_core::config::Config::load", "relevance": 3, "reason": "loads config from TOML with env overrides"},
+        {"symbol_path": "omni_core::config::Config::defaults", "relevance": 3, "reason": "returns hardcoded defaults"},
+        {"symbol_path": "omni_core::config::Config", "relevance": 2, "reason": "top-level config struct"},
+        {"symbol_path": "omni_core::config::EmbeddingConfig", "relevance": 1, "reason": "embedding subsystem config"},
+        {"symbol_path": "omni_core::config::SearchConfig", "relevance": 1, "reason": "search subsystem config"}
+      ]
+    },
+    {
+      "id": "q006",
+      "intent": "Debug",
+      "query": "why is the circuit breaker tripping during indexing",
+      "expected_results": [
+        {"symbol_path": "omni_core::resilience::circuit_breaker::CircuitBreaker", "relevance": 3, "reason": "circuit breaker implementation"},
+        {"symbol_path": "omni_core::resilience::circuit_breaker::CircuitBreaker::call", "relevance": 3, "reason": "executes operation through breaker"},
+        {"symbol_path": "omni_core::resilience::circuit_breaker::CircuitState", "relevance": 2, "reason": "open/closed/half-open states"},
+        {"symbol_path": "omni_core::pipeline::Engine::run_index", "relevance": 2, "reason": "indexing pipeline that uses circuit breaker"},
+        {"symbol_path": "omni_core::error::OmniError", "relevance": 1, "reason": "error type propagated by breaker"}
+      ]
+    },
+    {
+      "id": "q007",
+      "intent": "Debug",
+      "query": "error handling in SQLite metadata index",
+      "expected_results": [
+        {"symbol_path": "omni_core::index::MetadataIndex", "relevance": 3, "reason": "SQLite index wrapper"},
+        {"symbol_path": "omni_core::error::OmniError", "relevance": 3, "reason": "main error type returned"},
+        {"symbol_path": "omni_core::index::MetadataIndex::upsert_file", "relevance": 2, "reason": "file upsert with error propagation"},
+        {"symbol_path": "omni_core::index::MetadataIndex::insert_chunk", "relevance": 2, "reason": "chunk insertion with error propagation"},
+        {"symbol_path": "omni_core::pipeline::Engine::run_index", "relevance": 1, "reason": "top-level caller of index operations"}
+      ]
+    },
+    {
+      "id": "q008",
+      "intent": "Debug",
+      "query": "what happens when the embedder model download fails",
+      "expected_results": [
+        {"symbol_path": "omni_core::embedder::model_manager::ModelManager", "relevance": 3, "reason": "manages model download and caching"},
+        {"symbol_path": "omni_core::embedder::Embedder::new", "relevance": 2, "reason": "initializes embedder, calls model download"},
+        {"symbol_path": "omni_core::embedder::model_manager::ModelManager::ensure_model", "relevance": 3, "reason": "downloads model with retry logic"},
+        {"symbol_path": "omni_core::error::OmniError", "relevance": 1, "reason": "error propagated on download failure"}
+      ]
+    },
+    {
+      "id": "q009",
+      "intent": "Edit",
+      "query": "add a new field to Config struct",
+      "expected_results": [
+        {"symbol_path": "omni_core::config::Config", "relevance": 3, "reason": "Config struct to edit"},
+        {"symbol_path": "omni_core::config::Config::defaults", "relevance": 3, "reason": "must supply default for new field"},
+        {"symbol_path": "omni_core::config::Config::load", "relevance": 2, "reason": "deserialization of TOML config"},
+        {"symbol_path": "omni_core::config::EmbeddingConfig", "relevance": 1, "reason": "example nested config struct"}
+      ]
+    },
+    {
+      "id": "q010",
+      "intent": "Edit",
+      "query": "change how chunks are split by line count",
+      "expected_results": [
+        {"symbol_path": "omni_core::chunker::contextual::ContextualChunker", "relevance": 3, "reason": "contextual chunker implementation"},
+        {"symbol_path": "omni_core::chunker::contextual::ContextualChunker::chunk", "relevance": 3, "reason": "chunking entry point"},
+        {"symbol_path": "omni_core::config::ChunkerConfig", "relevance": 2, "reason": "config for chunk size limits"},
+        {"symbol_path": "omni_core::types::Chunk", "relevance": 1, "reason": "output type of chunker"}
+      ]
+    },
+    {
+      "id": "q011",
+      "intent": "Refactor",
+      "query": "extract the reranker into its own module",
+      "expected_results": [
+        {"symbol_path": "omni_core::reranker::Reranker", "relevance": 3, "reason": "reranker struct to extract"},
+        {"symbol_path": "omni_core::reranker::Reranker::rerank", "relevance": 3, "reason": "core reranking method"},
+        {"symbol_path": "omni_core::reranker::Reranker::new", "relevance": 2, "reason": "constructor to move"},
+        {"symbol_path": "omni_core::config::RerankerConfig", "relevance": 2, "reason": "config depended on by reranker"},
+        {"symbol_path": "omni_core::search::SearchEngine::search", "relevance": 1, "reason": "caller that needs updating after extract"}
+      ]
+    },
+    {
+      "id": "q012",
+      "intent": "Refactor",
+      "query": "reduce lock contention in the metadata index",
+      "expected_results": [
+        {"symbol_path": "omni_core::index::MetadataIndex", "relevance": 3, "reason": "index with internal locking"},
+        {"symbol_path": "omni_core::index::MetadataIndex::upsert_file", "relevance": 2, "reason": "write-heavy operation on index"},
+        {"symbol_path": "omni_core::index::MetadataIndex::keyword_search", "relevance": 2, "reason": "read-heavy operation on index"},
+        {"symbol_path": "omni_core::pipeline::Engine", "relevance": 1, "reason": "owner of MetadataIndex"}
+      ]
+    },
+    {
+      "id": "q013",
+      "intent": "Generate",
+      "query": "generate a new language parser for Ruby",
+      "expected_results": [
+        {"symbol_path": "omni_core::parser::languages::ruby::RubyParser", "relevance": 3, "reason": "Ruby parser implementation"},
+        {"symbol_path": "omni_core::parser::LanguageParser", "relevance": 3, "reason": "trait to implement for new languages"},
+        {"symbol_path": "omni_core::parser::languages::rust::RustParser", "relevance": 2, "reason": "reference implementation of LanguageParser"},
+        {"symbol_path": "omni_core::types::Language", "relevance": 2, "reason": "Language enum needs new variant"},
+        {"symbol_path": "omni_core::parser::registry::LanguageRegistry", "relevance": 1, "reason": "registry to add new parser to"}
+      ]
+    },
+    {
+      "id": "q014",
+      "intent": "Generate",
+      "query": "add cloud embedder HTTP client",
+      "expected_results": [
+        {"symbol_path": "omni_core::embedder::cloud::CloudEmbedder", "relevance": 3, "reason": "cloud embedder HTTP client"},
+        {"symbol_path": "omni_core::embedder::cloud::CloudEmbedder::embed", "relevance": 3, "reason": "HTTP embed request method"},
+        {"symbol_path": "omni_core::embedder::cloud::CloudEmbedder::new", "relevance": 2, "reason": "constructs cloud embedder from API key"},
+        {"symbol_path": "omni_core::embedder::Embedder", "relevance": 1, "reason": "local embedder for fallback pattern"},
+        {"symbol_path": "omni_core::config::EmbeddingConfig", "relevance": 1, "reason": "config that holds cloud_api_key"}
+      ]
+    },
+    {
+      "id": "q015",
+      "intent": "Generate",
+      "query": "implement SCIP export for the dependency graph",
+      "expected_results": [
+        {"symbol_path": "omni_core::scip::ScipExporter", "relevance": 3, "reason": "SCIP export implementation"},
+        {"symbol_path": "omni_core::scip::ScipExporter::write_to_file", "relevance": 3, "reason": "writes SCIP JSON to disk"},
+        {"symbol_path": "omni_core::scip::ScipImporter", "relevance": 2, "reason": "import counterpart for SCIP"},
+        {"symbol_path": "omni_core::graph::dependencies::FileDependencyGraph", "relevance": 2, "reason": "source graph for SCIP export"},
+        {"symbol_path": "omni_core::index::MetadataIndex", "relevance": 1, "reason": "provides symbols iterated during export"}
+      ]
+    },
+    {
+      "id": "q016",
+      "intent": "DataFlow",
+      "query": "trace data flow from file change to indexed chunk",
+      "expected_results": [
+        {"symbol_path": "omni_core::watcher::FileWatcher", "relevance": 3, "reason": "detects file changes via notify"},
+        {"symbol_path": "omni_core::pipeline::Engine::run_index", "relevance": 3, "reason": "orchestrates indexing pipeline"},
+        {"symbol_path": "omni_core::parser::LanguageParser", "relevance": 2, "reason": "parses changed file into AST elements"},
+        {"symbol_path": "omni_core::chunker::contextual::ContextualChunker::chunk", "relevance": 2, "reason": "produces chunks from parsed elements"},
+        {"symbol_path": "omni_core::index::MetadataIndex::insert_chunk", "relevance": 2, "reason": "persists chunk to SQLite"},
+        {"symbol_path": "omni_core::embedder::Embedder::embed_batch", "relevance": 1, "reason": "embeds chunks for vector index"}
+      ]
+    },
+    {
+      "id": "q017",
+      "intent": "DataFlow",
+      "query": "how does a search query flow through the engine to results",
+      "expected_results": [
+        {"symbol_path": "omni_core::pipeline::Engine::search", "relevance": 3, "reason": "public search entry point"},
+        {"symbol_path": "omni_core::search::SearchEngine::search", "relevance": 3, "reason": "runs keyword and semantic retrieval"},
+        {"symbol_path": "omni_core::embedder::Embedder::embed_query", "relevance": 2, "reason": "embeds the query string"},
+        {"symbol_path": "omni_core::vector::VectorIndex::search", "relevance": 2, "reason": "ANN lookup for semantic results"},
+        {"symbol_path": "omni_core::index::MetadataIndex::keyword_search", "relevance": 2, "reason": "FTS5 keyword lookup"},
+        {"symbol_path": "omni_core::search::SearchEngine::fuse_results", "relevance": 1, "reason": "merges the two result sets via RRF"}
+      ]
+    },
+    {
+      "id": "q018",
+      "intent": "Dependency",
+      "query": "what depends on the MetadataIndex",
+      "expected_results": [
+        {"symbol_path": "omni_core::index::MetadataIndex", "relevance": 3, "reason": "the depended-upon component"},
+        {"symbol_path": "omni_core::pipeline::Engine", "relevance": 3, "reason": "primary owner and consumer of MetadataIndex"},
+        {"symbol_path": "omni_core::search::SearchEngine::search", "relevance": 2, "reason": "calls MetadataIndex for keyword search"},
+        {"symbol_path": "omni_core::scip::ScipExporter", "relevance": 1, "reason": "reads symbols from MetadataIndex for export"}
+      ]
+    },
+    {
+      "id": "q019",
+      "intent": "Dependency",
+      "query": "what crates does omni-mcp depend on",
+      "expected_results": [
+        {"symbol_path": "omni_core::pipeline::Engine", "relevance": 3, "reason": "omni-mcp wraps the Engine for MCP tools"},
+        {"symbol_path": "omni_core::config::Config", "relevance": 2, "reason": "omni-mcp loads Config to init engine"},
+        {"symbol_path": "omni_core::types::SearchResult", "relevance": 2, "reason": "omni-mcp serialises SearchResult for MCP"},
+        {"symbol_path": "omni_core::error::OmniError", "relevance": 1, "reason": "error type bridged to MCP error codes"}
+      ]
+    },
+    {
+      "id": "q020",
+      "intent": "TestCoverage",
+      "query": "which parser functions lack unit tests",
+      "expected_results": [
+        {"symbol_path": "omni_core::parser::LanguageParser", "relevance": 3, "reason": "parser trait whose impls need testing"},
+        {"symbol_path": "omni_core::parser::languages::rust::RustParser::parse", "relevance": 3, "reason": "parser method requiring test coverage"},
+        {"symbol_path": "omni_core::parser::languages::python::PythonParser::parse", "relevance": 2, "reason": "Python parser needing test fixtures"},
+        {"symbol_path": "omni_core::parser::registry::LanguageRegistry", "relevance": 2, "reason": "registry dispatch tested via integration"},
+        {"symbol_path": "omni_core::chunker::contextual::ContextualChunker::chunk", "relevance": 1, "reason": "downstream of parser, needs paired tests"}
+      ]
+    },
+    {
+      "id": "q021",
+      "intent": "TestCoverage",
+      "query": "test coverage for the watcher and incremental reindex path",
+      "expected_results": [
+        {"symbol_path": "omni_core::watcher::FileWatcher", "relevance": 3, "reason": "file watcher component to test"},
+        {"symbol_path": "omni_core::watcher::FileWatcher::full_scan", "relevance": 3, "reason": "full scan path needing tests"},
+        {"symbol_path": "omni_core::watcher::FileWatcher::is_excluded", "relevance": 2, "reason": "exclusion logic tested by path patterns"},
+        {"symbol_path": "omni_core::pipeline::Engine::run_index", "relevance": 2, "reason": "integration test target for incremental reindex"},
+        {"symbol_path": "omni_core::index::MetadataIndex::upsert_file", "relevance": 1, "reason": "write path exercised by reindex tests"}
+      ]
+    },
+    {
+      "id": "q022",
+      "intent": "Explain",
+      "query": "how does the rules injection system work",
+      "expected_results": [
+        {"symbol_path": "omni_core::rules::RulesLoader", "relevance": 3, "reason": "loads and caches rules.md"},
+        {"symbol_path": "omni_core::rules::RulesLoader::load", "relevance": 3, "reason": "reads rules file with mtime caching"},
+        {"symbol_path": "omni_core::pipeline::Engine::search_context_window", "relevance": 2, "reason": "prepends rules block to context response"},
+        {"symbol_path": "omni_core::config::Config", "relevance": 1, "reason": "holds rules enabled/max_bytes config"}
+      ]
+    },
+    {
+      "id": "q023",
+      "intent": "Explain",
+      "query": "how does persistent memory storage work",
+      "expected_results": [
+        {"symbol_path": "omni_core::memory::MemoryStore", "relevance": 3, "reason": "persistent memory implementation"},
+        {"symbol_path": "omni_core::memory::MemoryStore::save", "relevance": 3, "reason": "atomic write of memory entry"},
+        {"symbol_path": "omni_core::memory::MemoryStore::get", "relevance": 2, "reason": "retrieves stored memory entry"},
+        {"symbol_path": "omni_core::memory::MemoryStore::list", "relevance": 2, "reason": "lists all stored memory keys"},
+        {"symbol_path": "omni_core::pipeline::Engine::search_context_window", "relevance": 1, "reason": "injects memory block into context window"}
+      ]
+    },
+    {
+      "id": "q024",
+      "intent": "DataFlow",
+      "query": "embedding batch processing pipeline",
+      "expected_results": [
+        {"symbol_path": "omni_core::embedder::Embedder::embed_batch", "relevance": 3, "reason": "batches chunks for ONNX inference"},
+        {"symbol_path": "omni_core::embedder::session_pool::SessionPool", "relevance": 3, "reason": "manages ONNX session pool for concurrency"},
+        {"symbol_path": "omni_core::embedder::Embedder::run_inference", "relevance": 2, "reason": "runs ONNX model on a batch"},
+        {"symbol_path": "omni_core::vector::VectorIndex::add", "relevance": 2, "reason": "stores resulting vectors"},
+        {"symbol_path": "omni_core::embedder::Embedder::new", "relevance": 1, "reason": "sets up ONNX runtime session"}
+      ]
+    },
+    {
+      "id": "q025",
+      "intent": "Dependency",
+      "query": "find all callers of keyword_search",
+      "expected_results": [
+        {"symbol_path": "omni_core::index::MetadataIndex::keyword_search", "relevance": 3, "reason": "FTS5 search method being traced"},
+        {"symbol_path": "omni_core::search::SearchEngine::search", "relevance": 3, "reason": "calls keyword_search for FTS5 leg"},
+        {"symbol_path": "omni_core::pipeline::Engine::search", "relevance": 2, "reason": "delegates to SearchEngine which calls keyword_search"},
+        {"symbol_path": "omni_core::index::MetadataIndex", "relevance": 1, "reason": "struct that owns keyword_search"}
+      ]
+    }
+  ],
+  "metadata": {
+    "created_at": "2026-04-01",
+    "target_repo": "omnicontext",
+    "min_ndcg_target": 0.7
+  }
+}

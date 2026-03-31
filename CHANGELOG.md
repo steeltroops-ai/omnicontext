@@ -4,6 +4,11 @@ All notable changes to OmniContext are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.7] - 2026-03-31
+
+### Fixed
+- Fix benchmark regression regex false positive ([27e1118](https://github.com/steeltroops-ai/omnicontext/commit/27e11188f23db653614fec653f3cea621e116639))
+
 ## [1.3.6] - 2026-03-31
 
 ### Fixed

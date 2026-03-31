@@ -88,6 +88,13 @@ pub struct SearchParams {
     /// Maximum results.
     #[serde(default = "default_limit")]
     pub limit: usize,
+    /// Content of the currently active (open, unsaved) editor buffer.
+    ///
+    /// When present, the daemon prepends an ephemeral Critical-priority chunk
+    /// representing the developer's current view before returning results.
+    /// The content is never persisted to SQLite.
+    #[serde(default)]
+    pub active_file_content: Option<String>,
 }
 
 /// Parameters for the `context_window` method.
@@ -646,6 +653,28 @@ pub struct IndexPoolMetrics {
     pub total_queries: u64,
     /// Average query time in milliseconds.
     pub avg_query_time_ms: f64,
+}
+
+/// Parameters for recording user interaction feedback on a search result.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SearchFeedbackParams {
+    /// Opaque ID linking feedback to the originating search call.
+    pub query_id: String,
+    /// SQLite rowid of the chunk the user interacted with.
+    pub chunk_id: i64,
+    /// Zero-based rank of the chunk in the result list.
+    pub rank: usize,
+    /// Type of user interaction.
+    pub action: FeedbackAction,
+}
+
+/// Type of user interaction with a search result.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum FeedbackAction {
+    View,
+    Insert,
+    Copy,
 }
 
 /// Compression statistics.

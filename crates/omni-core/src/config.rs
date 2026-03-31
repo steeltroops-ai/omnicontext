@@ -11,6 +11,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+use crate::embedder::quantization::QuantizationMode;
 use crate::error::{OmniError, OmniResult};
 
 /// Top-level configuration for OmniContext.
@@ -38,6 +39,10 @@ pub struct Config {
     /// Logging configuration.
     #[serde(default)]
     pub logging: LoggingConfig,
+
+    /// HyDE (Hypothetical Document Embedding) configuration.
+    #[serde(default)]
+    pub hyde: HydeConfig,
 }
 
 /// Indexing-specific settings.
@@ -287,12 +292,14 @@ pub struct EmbeddingConfig {
     ///
     /// When `true`, the engine downloads BAAI/bge-m3 (~560MB) on first use,
     /// generates SPLADE-style sparse vectors for every chunk, and blends them
-    /// as a fourth signal in RRF fusion.  Disabled by default — no behavioral
-    /// change for existing users until they opt in.
+    /// as a fourth signal in RRF fusion.  Enabled by default — the sparse
+    /// signal is silently skipped when the BGE-M3 model is not yet loaded
+    /// (`has_sparse_session() == false`), so there is no behavioral regression
+    /// for users running in degraded / keyword-only mode.
     ///
-    /// Set via `config.embedding.enable_sparse_retrieval = true` or
-    /// `OMNI_ENABLE_SPARSE_RETRIEVAL=true` environment variable.
-    #[serde(default)]
+    /// Set `config.embedding.enable_sparse_retrieval = false` or
+    /// `OMNI_ENABLE_SPARSE_RETRIEVAL=false` to opt out.
+    #[serde(default = "EmbeddingConfig::default_enable_sparse_retrieval")]
     pub enable_sparse_retrieval: bool,
 
     /// API key for the OmniContext cloud GPU embedding service.
@@ -305,6 +312,23 @@ pub struct EmbeddingConfig {
     /// Omitted from the default configuration; explicitly set by enterprise users.
     #[serde(default)]
     pub cloud_api_key: Option<String>,
+
+    /// INT8 quantization mode for the embedding model.
+    ///
+    /// When set to `QuantizationMode::INT8`, the engine invokes the
+    /// `onnxruntime.quantization` Python package as a subprocess on first use,
+    /// caching the quantized model alongside the FP32 original.  Subsequent runs
+    /// load the cached INT8 model directly.
+    ///
+    /// If Python is unavailable or the subprocess fails, the engine falls back to
+    /// the FP32 model silently — no indexing interruption.
+    ///
+    /// Set via `OMNI_INT8_EMBED=1` environment variable, or
+    /// `config.embedding.quantization_mode = "INT8"` in the TOML config.
+    ///
+    /// Default: `QuantizationMode::None` (FP32 model, no quantization).
+    #[serde(default)]
+    pub quantization_mode: QuantizationMode,
 }
 
 impl Default for EmbeddingConfig {
@@ -314,13 +338,18 @@ impl Default for EmbeddingConfig {
             dimensions: Self::default_dimensions(),
             batch_size: Self::default_batch_size(),
             max_seq_length: Self::default_max_seq_length(),
-            enable_sparse_retrieval: false,
+            enable_sparse_retrieval: Self::default_enable_sparse_retrieval(),
             cloud_api_key: None,
+            quantization_mode: QuantizationMode::None,
         }
     }
 }
 
 impl EmbeddingConfig {
+    fn default_enable_sparse_retrieval() -> bool {
+        true
+    }
+
     fn default_model_path() -> PathBuf {
         // Default: auto-download cache location for CodeRankEmbed (nomic-ai/CodeRankEmbed).
         // If the model isn't here yet, the embedder will auto-download it.
@@ -372,6 +401,82 @@ impl WatcherConfig {
     }
     fn default_poll_interval_secs() -> u64 {
         300
+    }
+}
+
+/// HyDE (Hypothetical Document Embedding) configuration.
+///
+/// Controls whether semantic search generates a hypothetical code snippet
+/// before embedding (HyDE strategy), and which backend produces that snippet.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HydeConfig {
+    /// Enable HyDE for natural-language queries (default: true).
+    ///
+    /// When enabled, a hypothetical code snippet is generated from the query
+    /// and embedded instead of the raw query text. The snippet embedding is
+    /// typically closer in vector space to relevant code than the NL query.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Generation backend: `"template"` (default) or `"local_llm"`.
+    ///
+    /// - `"template"` — zero-cost, zero-latency regex templates; covers ~80% of intents.
+    /// - `"local_llm"` — POST to a llama.cpp-compatible `/completion` endpoint;
+    ///   falls back to templates on any connection or HTTP error.
+    #[serde(default = "default_hyde_backend")]
+    pub backend: String,
+
+    /// HTTP endpoint for the local LLM server (llama.cpp format).
+    ///
+    /// Default: `http://localhost:8080/completion`.
+    /// Only consulted when `backend = "local_llm"`.
+    #[serde(default = "default_hyde_endpoint")]
+    pub endpoint: String,
+
+    /// Request timeout for LLM calls in milliseconds (default: 2000).
+    ///
+    /// If the LLM does not respond within this window, HyDE falls back to
+    /// the template path without blocking the search.
+    #[serde(default = "default_hyde_timeout_ms")]
+    pub timeout_ms: u64,
+
+    /// Maximum tokens the LLM should generate (default: 150).
+    ///
+    /// Passed as `n_predict` in the llama.cpp request body.
+    /// Smaller values reduce latency; larger values allow richer snippets.
+    #[serde(default = "default_hyde_max_tokens")]
+    pub max_tokens: u32,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_hyde_backend() -> String {
+    "template".to_string()
+}
+
+fn default_hyde_endpoint() -> String {
+    "http://localhost:8080/completion".to_string()
+}
+
+fn default_hyde_timeout_ms() -> u64 {
+    2000
+}
+
+fn default_hyde_max_tokens() -> u32 {
+    150
+}
+
+impl Default for HydeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            backend: default_hyde_backend(),
+            endpoint: default_hyde_endpoint(),
+            timeout_ms: default_hyde_timeout_ms(),
+            max_tokens: default_hyde_max_tokens(),
+        }
     }
 }
 
@@ -436,6 +541,7 @@ impl Config {
             embedding: EmbeddingConfig::default(),
             watcher: WatcherConfig::default(),
             logging: LoggingConfig::default(),
+            hyde: HydeConfig::default(),
         }
     }
 
@@ -483,6 +589,11 @@ impl Config {
                 self.logging = parsed;
             }
         }
+        if let Some(hyde) = overlay.get("hyde") {
+            if let Ok(parsed) = hyde.clone().try_into::<HydeConfig>() {
+                self.hyde = parsed;
+            }
+        }
 
         Ok(())
     }
@@ -494,6 +605,9 @@ impl Config {
         }
         if let Ok(model) = std::env::var("OMNI_MODEL_PATH") {
             self.embedding.model_path = PathBuf::from(model);
+        }
+        if std::env::var("OMNI_INT8_EMBED").as_deref() == Ok("1") {
+            self.embedding.quantization_mode = QuantizationMode::INT8;
         }
     }
 
@@ -699,6 +813,55 @@ mod tests {
         assert!(
             config.batch_size > 0,
             "reranker batch_size must be positive"
+        );
+    }
+
+    // ── Sparse retrieval defaults ─────────────────────────────────────────────
+
+    #[test]
+    fn test_enable_sparse_retrieval_default_is_true() {
+        // Design: sparse retrieval is on by default.  The runtime guard
+        // (`has_sparse_session()`) ensures there is no behavioral regression when
+        // the BGE-M3 model is not loaded — the sparse signal is silently skipped.
+        let config = EmbeddingConfig::default();
+        assert!(
+            config.enable_sparse_retrieval,
+            "sparse retrieval must default to true so every new installation \
+             participates in 4-signal RRF fusion once the BGE-M3 model is cached"
+        );
+    }
+
+    #[test]
+    fn test_sparse_retrieval_flag_controls_embed_call() {
+        // When enable_sparse_retrieval = false the flag must read back false
+        // (logic-level check; the runtime guard in pipeline/mod.rs uses this flag
+        // before calling embed_sparse so no ONNX call is made).
+        let config = EmbeddingConfig {
+            enable_sparse_retrieval: false,
+            ..EmbeddingConfig::default()
+        };
+        assert!(
+            !config.enable_sparse_retrieval,
+            "explicit false must be respected"
+        );
+    }
+
+    #[test]
+    fn test_enable_sparse_retrieval_serde_roundtrip() {
+        // Verify the custom serde default survives a TOML round-trip.
+        // When the field is absent from the TOML, serde must restore the
+        // default (true) via `default_enable_sparse_retrieval`.
+        let toml_without_field = r#"
+model_path = "/tmp/model.onnx"
+dimensions = 768
+batch_size = 32
+max_seq_length = 256
+"#;
+        let deserialized: EmbeddingConfig =
+            toml::from_str(toml_without_field).expect("deserialize");
+        assert!(
+            deserialized.enable_sparse_retrieval,
+            "absent field must restore to true via serde default"
         );
     }
 }

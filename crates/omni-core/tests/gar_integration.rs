@@ -76,6 +76,7 @@ impl Fixture {
             max_seq_length: 256,
             enable_sparse_retrieval: false,
             cloud_api_key: None,
+            quantization_mode: omni_core::embedder::quantization::QuantizationMode::None,
         };
         let embedder = Embedder::degraded(&embed_cfg);
 
@@ -194,8 +195,9 @@ fn gar_neighbours_included_when_edge_connects_anchor_to_chunk() {
             Some(&fx.engine),
             None,
             None,
-            &[],
-            None,
+            &[],  // open_files
+            &[],  // sparse_results (no BGE-M3 in test fixture)
+            None, // file_dep_graph
         )
         .expect("search_with_gar");
 
@@ -614,8 +616,9 @@ fn gar_no_graph_returns_empty_neighbor_map() {
             None, // no reasoning engine
             None,
             None,
-            &[],
-            None,
+            &[],  // open_files
+            &[],  // sparse_results (no BGE-M3 in test fixture)
+            None, // file_dep_graph
         )
         .expect("search_with_gar without graph");
 

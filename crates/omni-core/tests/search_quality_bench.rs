@@ -2,7 +2,10 @@
 //!
 //! Measures MRR, NDCG, Recall@K, and Precision@K against expected results.
 //!
-//! Run with: cargo test --test search_quality_bench -- --nocapture --ignored
+//! Run:
+//!   cargo test --test search_quality_bench -- --nocapture --ignored
+//! Or:
+//!   cargo run --bin eval -- --repo . --queries crates/omni-core/tests/fixtures/eval_queries.json
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -32,9 +35,9 @@ struct GoldenDataset {
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)] // fields populated by serde; used for dataset validation
 struct DatasetMetadata {
-    total_queries: usize,
-    intents: HashMap<String, usize>,
-    coverage: HashMap<String, usize>,
+    created_at: String,
+    target_repo: String,
+    min_ndcg_target: f64,
 }
 
 /// A single golden query with expected results.
@@ -150,7 +153,7 @@ fn benchmark_search_quality() {
     print_target_status("NDCG@10", results.ndcg_at_10, ndcg_target);
     print_target_status("Recall@10", results.recall_at_10, recall_target);
 
-    // Assert minimum thresholds (50% of target)
+    // Assert minimum thresholds.
     assert!(
         results.mrr >= mrr_target * 0.5,
         "MRR too low: {:.4} < {:.4}",
@@ -158,16 +161,15 @@ fn benchmark_search_quality() {
         mrr_target * 0.5
     );
     assert!(
-        results.ndcg_at_10 >= ndcg_target * 0.5,
-        "NDCG@10 too low: {:.4} < {:.4}",
-        results.ndcg_at_10,
-        ndcg_target * 0.5
+        results.ndcg_at_10 > 0.5,
+        "NDCG@10 too low: {:.4} < 0.5",
+        results.ndcg_at_10
     );
 }
 
 fn run_benchmarks(repo_path: &PathBuf) -> Result<BenchmarkResults, Box<dyn std::error::Error>> {
     // Load golden dataset
-    let dataset_path = PathBuf::from("tests/bench/golden_queries.json");
+    let dataset_path = PathBuf::from("tests/fixtures/eval_queries.json");
     let dataset_json = std::fs::read_to_string(&dataset_path)?;
     let dataset: GoldenDataset = serde_json::from_str(&dataset_json)?;
 

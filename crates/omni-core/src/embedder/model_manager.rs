@@ -21,6 +21,7 @@
 //! auto-detects missing models and downloads them with progress reporting.
 //! After download, the model path is stable and cached forever.
 
+use sha2::Digest as _;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -43,6 +44,15 @@ pub struct ModelSpec {
     pub max_seq_length: usize,
     /// Approximate download size in bytes (for progress display).
     pub approx_size_bytes: u64,
+    /// Expected SHA-256 hex digest of the ONNX model file.
+    ///
+    /// When `Some`, the downloaded file is verified against this digest after
+    /// the atomic rename.  A mismatch causes the file to be deleted and an
+    /// error to be returned, preventing a corrupted or tampered model from
+    /// being loaded into the ONNX runtime.
+    ///
+    /// `None` skips the verification step entirely (safe — no false positives).
+    pub sha256: Option<&'static str>,
 }
 
 /// Primary embedding model: `nomic-ai/CodeRankEmbed` (Apache-2.0).
@@ -71,6 +81,7 @@ pub const DEFAULT_MODEL: ModelSpec = ModelSpec {
     dimensions: 768,
     max_seq_length: 2048,
     approx_size_bytes: 521_000_000, // ~521MB ONNX export
+    sha256: None,                   // TODO: pin once canonical HF ONNX digest is published
 };
 
 /// Enterprise GPU-tier embedding model: `Qwen/Qwen3-Embedding-8B` (Apache-2.0).
@@ -87,6 +98,7 @@ pub const QWEN3_EMBEDDING_MODEL: ModelSpec = ModelSpec {
     dimensions: 4096,
     max_seq_length: 32768,
     approx_size_bytes: 16_000_000_000, // ~16GB (GPU tier)
+    sha256: None,                      // TODO: pin once canonical HF ONNX digest is published
 };
 
 /// BGE-M3 multi-function embedding model: `BAAI/bge-m3` (Apache-2.0).
@@ -110,6 +122,7 @@ pub const BGE_M3_MODEL: ModelSpec = ModelSpec {
     dimensions: 1024,
     max_seq_length: 8192,
     approx_size_bytes: 560_000_000, // ~560MB ONNX export
+    sha256: None,                   // TODO: pin once canonical HF ONNX digest is published
 };
 
 /// Cross-encoder reranker: `BAAI/bge-reranker-v2-m3` (Apache-2.0).
@@ -134,6 +147,7 @@ pub const RERANKER_MODEL: ModelSpec = ModelSpec {
     dimensions: 1, // single relevance score output, not an embedding vector
     max_seq_length: 1024,
     approx_size_bytes: 568_000_000, // ~568MB ONNX export
+    sha256: None,                   // TODO: pin once canonical HF ONNX digest is published
 };
 
 /// Get the models directory: `~/.omnicontext/models/`
@@ -253,6 +267,7 @@ pub fn ensure_model(spec: &ModelSpec) -> OmniResult<(PathBuf, PathBuf)> {
             &model,
             &format!("Downloading {} model", spec.name),
             Some(spec.approx_size_bytes),
+            spec.sha256,
         )?;
     }
 
@@ -263,6 +278,7 @@ pub fn ensure_model(spec: &ModelSpec) -> OmniResult<(PathBuf, PathBuf)> {
             &tokenizer,
             &format!("Downloading {} tokenizer", spec.name),
             None,
+            None, // tokenizer is small JSON; no integrity pin needed
         )?;
     }
 
@@ -297,16 +313,17 @@ fn download_file(
     dest: &Path,
     message: &str,
     expected_size: Option<u64>,
+    expected_sha256: Option<&str>,
 ) -> OmniResult<()> {
     // If we're inside a tokio runtime, use block_in_place to allow blocking I/O.
     // reqwest::blocking creates its own internal runtime, which panics if a
     // tokio runtime is already running on this thread.
     if tokio::runtime::Handle::try_current().is_ok() {
         return tokio::task::block_in_place(|| {
-            download_file_inner(url, dest, message, expected_size)
+            download_file_inner(url, dest, message, expected_size, expected_sha256)
         });
     }
-    download_file_inner(url, dest, message, expected_size)
+    download_file_inner(url, dest, message, expected_size, expected_sha256)
 }
 
 fn download_file_inner(
@@ -314,6 +331,7 @@ fn download_file_inner(
     dest: &Path,
     message: &str,
     expected_size: Option<u64>,
+    expected_sha256: Option<&str>,
 ) -> OmniResult<()> {
     // Use a temp file to avoid partial downloads
     let temp_path = dest.with_extension("downloading");
@@ -382,6 +400,10 @@ fn download_file_inner(
     // Atomic rename: temp -> final (prevents corrupt partial files)
     std::fs::rename(&temp_path, dest)?;
 
+    // SHA-256 integrity check — guards against download corruption and supply-chain tampering.
+    // Performed after the rename so any deletion targets the final path, not a temp artefact.
+    verify_sha256_after_download(dest, expected_sha256)?;
+
     Ok(())
 }
 
@@ -421,6 +443,47 @@ pub fn resolve_model_spec() -> &'static ModelSpec {
     }
 
     &DEFAULT_MODEL
+}
+
+/// Verify the SHA-256 digest of a file on disk.
+///
+/// Called after an atomic rename so that any deletion targets the final path,
+/// not a temporary artefact.  When `expected` is `None` the function is a
+/// guaranteed no-op and returns `Ok(())` immediately.
+///
+/// On mismatch the file is deleted so the next startup triggers a clean
+/// re-download rather than loading a corrupt or tampered model.
+fn verify_sha256_after_download(path: &Path, expected: Option<&str>) -> OmniResult<()> {
+    let Some(expected_hex) = expected else {
+        return Ok(());
+    };
+
+    let data = std::fs::read(path).map_err(|e| {
+        OmniError::Internal(format!("failed to read downloaded file for checksum: {e}"))
+    })?;
+    let digest = sha2::Sha256::digest(&data);
+    let actual = hex::encode(digest);
+
+    if actual != expected_hex {
+        tracing::warn!(
+            path = %path.display(),
+            expected = expected_hex,
+            actual = %actual,
+            "SHA-256 mismatch — deleting file to force re-download on next startup"
+        );
+        let _ = std::fs::remove_file(path);
+        return Err(OmniError::ModelUnavailable {
+            reason: "SHA-256 checksum mismatch — possible corruption or supply-chain tampering"
+                .into(),
+        });
+    }
+
+    tracing::debug!(
+        path = %path.display(),
+        sha256 = %actual,
+        "SHA-256 integrity check passed"
+    );
+    Ok(())
 }
 
 /// Simple ISO 8601 timestamp without pulling in chrono.
@@ -495,6 +558,7 @@ mod tests {
             dimensions: 10,
             max_seq_length: 10,
             approx_size_bytes: 10,
+            sha256: None,
         };
         assert!(!is_model_ready(&dummy));
     }
@@ -522,5 +586,57 @@ mod tests {
         assert_eq!(QWEN3_EMBEDDING_MODEL.dimensions, 4096);
         assert_eq!(QWEN3_EMBEDDING_MODEL.max_seq_length, 32768);
         assert!(QWEN3_EMBEDDING_MODEL.hf_repo.starts_with("Qwen/"));
+    }
+
+    /// `sha256: None` must be a no-op — the file must remain on disk and the
+    /// function must return `Ok(())`.
+    #[test]
+    fn test_sha256_verification_skipped_when_none() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("model.onnx");
+        std::fs::write(&dest, b"dummy model content").expect("write");
+
+        // download_file_inner normally does the HTTP fetch, so we test only the
+        // post-rename verification path via the public helper.
+        let result = verify_sha256_after_download(&dest, None);
+        assert!(result.is_ok(), "None sha256 must skip check: {result:?}");
+        assert!(
+            dest.exists(),
+            "file must not be deleted when sha256 is None"
+        );
+    }
+
+    /// When the file's actual digest matches `expected`, the function succeeds.
+    #[test]
+    fn test_sha256_verification_passes_on_correct_hash() {
+        use sha2::Digest as _;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("model.onnx");
+        let content = b"known content for hash test";
+        std::fs::write(&dest, content).expect("write");
+
+        let expected = hex::encode(sha2::Sha256::digest(content));
+        let result = verify_sha256_after_download(&dest, Some(expected.as_str()));
+        assert!(result.is_ok(), "correct hash must pass: {result:?}");
+        assert!(dest.exists(), "file must stay after a passing check");
+    }
+
+    /// When the digest does not match, the function must return `Err` AND
+    /// delete the file so the next startup triggers a fresh download.
+    #[test]
+    fn test_sha256_verification_fails_on_wrong_hash() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("model.onnx");
+        std::fs::write(&dest, b"real content").expect("write");
+
+        let wrong_hash = "0000000000000000000000000000000000000000000000000000000000000000";
+        let result = verify_sha256_after_download(&dest, Some(wrong_hash));
+        assert!(result.is_err(), "wrong hash must return Err");
+        assert!(
+            matches!(result.unwrap_err(), OmniError::ModelUnavailable { .. }),
+            "error variant must be ModelUnavailable"
+        );
+        assert!(!dest.exists(), "corrupt file must be deleted on mismatch");
     }
 }

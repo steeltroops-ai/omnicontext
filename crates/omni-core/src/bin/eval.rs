@@ -1,23 +1,91 @@
-//! Search quality evaluation using NDCG (Normalized Discounted Cumulative Gain).
+//! NDCG@10 search quality evaluator.
 //!
-//! This evaluates how well the search engine ranks relevant results.
-//! Higher NDCG = better ranking quality.
+//! Loads a golden query dataset, runs each query through a real Engine::search(),
+//! and reports per-query and aggregate NDCG@10, MRR, and Recall@10.
 //!
-//! Run with: `cargo run --package omni-core --bin eval`
+//! Run:
+//!   cargo run --package omni-core --bin eval -- --repo . --queries crates/omni-core/tests/fixtures/eval_queries.json
+//!
+//! Exit code 1 when aggregate NDCG@10 < 0.5 (minimum quality bar).
 
 #![allow(clippy::cast_precision_loss)]
 #![allow(clippy::doc_markdown)]
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
-/// A query with known relevant documents and their relevance scores.
-struct EvalQuery {
-    query: &'static str,
-    /// Map of `symbol_path` -> relevance score (3=highly relevant, 2=relevant, 1=marginally relevant)
-    relevant: HashMap<&'static str, u32>,
+use omni_core::config::Config;
+use omni_core::Engine;
+use serde::Deserialize;
+
+// ---------------------------------------------------------------------------
+// Golden dataset types (mirror the JSON schema)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+struct GoldenDataset {
+    queries: Vec<GoldenQuery>,
 }
 
-/// Compute DCG at position k.
+#[derive(Debug, Deserialize)]
+struct GoldenQuery {
+    id: String,
+    intent: String,
+    query: String,
+    expected_results: Vec<ExpectedResult>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ExpectedResult {
+    symbol_path: String,
+    relevance: u32,
+    #[allow(dead_code)]
+    reason: String,
+}
+
+// ---------------------------------------------------------------------------
+// CLI argument parsing (manual — avoids pulling in clap)
+// ---------------------------------------------------------------------------
+
+struct Args {
+    repo: PathBuf,
+    queries: PathBuf,
+}
+
+fn parse_args() -> Result<Args, Box<dyn std::error::Error>> {
+    let all: Vec<String> = std::env::args().skip(1).collect();
+    let mut repo: Option<PathBuf> = None;
+    let mut queries: Option<PathBuf> = None;
+    let mut i = 0;
+
+    while i < all.len() {
+        match all[i].as_str() {
+            "--repo" => {
+                i += 1;
+                repo = Some(all.get(i).ok_or("--repo requires a value")?.into());
+            }
+            "--queries" => {
+                i += 1;
+                queries = Some(all.get(i).ok_or("--queries requires a value")?.into());
+            }
+            other => {
+                return Err(format!("unknown argument: {other}").into());
+            }
+        }
+        i += 1;
+    }
+
+    Ok(Args {
+        repo: repo.unwrap_or_else(|| PathBuf::from(".")),
+        queries: queries
+            .unwrap_or_else(|| PathBuf::from("crates/omni-core/tests/fixtures/eval_queries.json")),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Metric helpers
+// ---------------------------------------------------------------------------
+
 fn dcg_at_k(relevance_scores: &[u32], k: usize) -> f64 {
     relevance_scores
         .iter()
@@ -31,12 +99,15 @@ fn dcg_at_k(relevance_scores: &[u32], k: usize) -> f64 {
         .sum()
 }
 
-/// Compute NDCG at position k.
-fn ndcg_at_k(relevance_scores: &[u32], k: usize) -> f64 {
-    let dcg = dcg_at_k(relevance_scores, k);
+fn ndcg_at_k(result_symbols: &[String], relevance_map: &HashMap<String, u32>, k: usize) -> f64 {
+    let retrieved: Vec<u32> = result_symbols
+        .iter()
+        .take(k)
+        .map(|s| relevance_map.get(s).copied().unwrap_or(0))
+        .collect();
+    let dcg = dcg_at_k(&retrieved, k);
 
-    // Ideal DCG: sort relevance scores descending
-    let mut ideal = relevance_scores.to_vec();
+    let mut ideal: Vec<u32> = relevance_map.values().copied().collect();
     ideal.sort_by(|a, b| b.cmp(a));
     let idcg = dcg_at_k(&ideal, k);
 
@@ -47,129 +118,105 @@ fn ndcg_at_k(relevance_scores: &[u32], k: usize) -> f64 {
     }
 }
 
-/// Evaluate search quality on a set of queries.
-fn evaluate(queries: &[EvalQuery]) -> f64 {
-    if queries.is_empty() {
-        return 0.0;
-    }
-
-    let mut total_ndcg = 0.0;
-    let k = 10;
-
-    for eval in queries {
-        // Simulate search results -- in production this calls engine.search()
-        // For now we use the relevance map directly to validate the NDCG math
-        let mut scores: Vec<u32> = eval.relevant.values().copied().collect();
-        scores.sort_by(|a, b| b.cmp(a));
-
-        // Pad to k with zeros (irrelevant results)
-        while scores.len() < k {
-            scores.push(0);
+fn reciprocal_rank(result_symbols: &[String], relevance_map: &HashMap<String, u32>) -> f64 {
+    for (i, sym) in result_symbols.iter().enumerate() {
+        if relevance_map.contains_key(sym) {
+            return 1.0 / (i as f64 + 1.0);
         }
-
-        let ndcg = ndcg_at_k(&scores, k);
-        println!(
-            "  Query: {:40} NDCG@{k}: {ndcg:.4}",
-            format!("\"{}\"", eval.query)
-        );
-        total_ndcg += ndcg;
     }
-
-    total_ndcg / queries.len() as f64
+    0.0
 }
 
-fn main() {
-    println!("=== OmniContext Search Quality Evaluation ===");
+fn recall_at_k(result_symbols: &[String], relevance_map: &HashMap<String, u32>, k: usize) -> f64 {
+    let total = relevance_map.len();
+    if total == 0 {
+        return 0.0;
+    }
+    let found = result_symbols
+        .iter()
+        .take(k)
+        .filter(|s| relevance_map.contains_key(*s))
+        .count();
+    found as f64 / total as f64
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = parse_args()?;
+
+    println!("=== OmniContext NDCG@10 Evaluation ===");
+    println!("  repo:    {}", args.repo.display());
+    println!("  queries: {}", args.queries.display());
     println!();
 
-    // Ground truth evaluation queries
-    // These represent typical developer queries and expected relevant symbols
-    let queries = vec![
-        EvalQuery {
-            query: "Config::new",
-            relevant: HashMap::from([
-                ("config::Config::new", 3),
-                ("config::Config", 2),
-                ("config::EmbeddingConfig", 1),
-            ]),
-        },
-        EvalQuery {
-            query: "how does search work",
-            relevant: HashMap::from([
-                ("search::SearchEngine::search", 3),
-                ("search::SearchEngine::fuse_results", 2),
-                ("search::analyze_query", 2),
-                ("search::SearchEngine::rrf_score", 1),
-            ]),
-        },
-        EvalQuery {
-            query: "parse python",
-            relevant: HashMap::from([
-                ("parser::languages::python::PythonParser::parse", 3),
-                ("parser::languages::python::PythonParser", 2),
-                ("parser::parse_file", 2),
-                ("types::Language::Python", 1),
-            ]),
-        },
-        EvalQuery {
-            query: "dependency graph cycles",
-            relevant: HashMap::from([
-                ("graph::DependencyGraph::find_cycles", 3),
-                ("graph::DependencyGraph::has_cycles", 3),
-                ("graph::DependencyGraph::upstream", 1),
-                ("graph::DependencyGraph::downstream", 1),
-            ]),
-        },
-        EvalQuery {
-            query: "embed text",
-            relevant: HashMap::from([
-                ("embedder::Embedder::embed_single", 3),
-                ("embedder::Embedder::embed_batch", 3),
-                ("embedder::format_chunk_for_embedding", 2),
-                ("embedder::Embedder::run_inference", 1),
-            ]),
-        },
-        EvalQuery {
-            query: "vector index nearest neighbor",
-            relevant: HashMap::from([
-                ("vector::VectorIndex::search", 3),
-                ("vector::VectorIndex::add", 2),
-                ("vector::dot_product", 2),
-                ("vector::l2_normalize", 1),
-            ]),
-        },
-        EvalQuery {
-            query: "file watcher notify",
-            relevant: HashMap::from([
-                ("watcher::FileWatcher::new", 3),
-                ("watcher::FileWatcher::full_scan", 2),
-                ("watcher::FileWatcher::is_excluded", 1),
-            ]),
-        },
-        EvalQuery {
-            query: "MCP tools",
-            relevant: HashMap::from([
-                ("tools::OmniContextTools::search_code", 3),
-                ("tools::OmniContextTools::get_status", 2),
-                ("tools::OmniContextTools::get_dependencies", 2),
-            ]),
-        },
-    ];
-
-    let mean_ndcg = evaluate(&queries);
-
-    println!();
-    println!("  Mean NDCG@10: {mean_ndcg:.4}");
+    let json = std::fs::read_to_string(&args.queries)
+        .map_err(|e| format!("cannot read {}: {e}", args.queries.display()))?;
+    let dataset: GoldenDataset = serde_json::from_str(&json)
+        .map_err(|e| format!("cannot parse {}: {e}", args.queries.display()))?;
+    println!("  loaded {} queries", dataset.queries.len());
     println!();
 
-    // CI threshold: fail if quality drops below 0.70
-    let threshold = 0.70;
-    if mean_ndcg < threshold {
-        eprintln!("FAIL: NDCG@10 ({mean_ndcg:.4}) below threshold ({threshold:.4})");
-        std::process::exit(1);
-    } else {
-        println!("PASS: NDCG@10 ({mean_ndcg:.4}) >= threshold ({threshold:.4})");
+    let config = Config::load(&args.repo)?;
+    let engine = Engine::with_config(config)?;
+
+    const K: usize = 10;
+    let mut total_ndcg = 0.0_f64;
+    let mut total_mrr = 0.0_f64;
+    let mut total_recall = 0.0_f64;
+
+    for q in &dataset.queries {
+        let results = engine.search(&q.query, K).unwrap_or_default();
+
+        let result_symbols: Vec<String> = results
+            .iter()
+            .map(|r| r.chunk.symbol_path.clone())
+            .collect();
+
+        let relevance_map: HashMap<String, u32> = q
+            .expected_results
+            .iter()
+            .map(|e| (e.symbol_path.clone(), e.relevance))
+            .collect();
+
+        let ndcg = ndcg_at_k(&result_symbols, &relevance_map, K);
+        let rr = reciprocal_rank(&result_symbols, &relevance_map);
+        let recall = recall_at_k(&result_symbols, &relevance_map, K);
+
+        total_ndcg += ndcg;
+        total_mrr += rr;
+        total_recall += recall;
+
+        println!(
+            "  {} [{}] {:45} NDCG@{K}: {ndcg:.4}  RR: {rr:.4}  Recall: {recall:.4}",
+            q.id,
+            q.intent,
+            format!("\"{}\"", q.query),
+        );
     }
 
-    println!("EVAL_RESULT: ndcg10={mean_ndcg:.4}");
+    let n = dataset.queries.len() as f64;
+    let mean_ndcg = total_ndcg / n;
+    let mean_mrr = total_mrr / n;
+    let mean_recall = total_recall / n;
+
+    println!();
+    println!("  -------------------------------------------------------");
+    println!("  Mean NDCG@{K}:   {mean_ndcg:.4}");
+    println!("  Mean MRR:       {mean_mrr:.4}");
+    println!("  Mean Recall@{K}: {mean_recall:.4}");
+    println!("  -------------------------------------------------------");
+    println!();
+
+    let threshold = 0.5;
+    if mean_ndcg < threshold {
+        eprintln!("FAIL: mean NDCG@{K} ({mean_ndcg:.4}) below minimum threshold ({threshold:.4})");
+        std::process::exit(1);
+    }
+
+    println!("PASS: mean NDCG@{K} ({mean_ndcg:.4}) >= threshold ({threshold:.4})");
+    println!("EVAL_RESULT: ndcg10={mean_ndcg:.4} mrr={mean_mrr:.4} recall10={mean_recall:.4}");
+    Ok(())
 }

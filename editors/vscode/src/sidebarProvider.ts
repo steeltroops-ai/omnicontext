@@ -639,8 +639,39 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
         await this.handleFindCircularDependencies();
         break;
 
+      case "feedback":
+        await this.handleSearchFeedback(message);
+        break;
+
       default:
         console.warn("Unknown webview message:", message);
+    }
+  }
+
+  /**
+   * Forward a search result click event to the daemon as a feedback signal.
+   *
+   * Fires-and-forgets: feedback is best-effort telemetry and must never
+   * block the UI or surface errors to the user.
+   */
+  private async handleSearchFeedback(message: {
+    chunkId: number;
+    queryId: string;
+    rank: number;
+    action: "view" | "insert" | "copy";
+  }): Promise<void> {
+    if (!this.isDaemonConnected()) {
+      return;
+    }
+    try {
+      await this.sendIpcRequest("search/feedback", {
+        query_id: message.queryId,
+        chunk_id: message.chunkId,
+        rank: message.rank,
+        action: message.action,
+      });
+    } catch {
+      // Feedback is non-critical telemetry; silently drop on error.
     }
   }
 
@@ -2257,6 +2288,22 @@ export class OmniSidebarProvider implements vscode.WebviewViewProvider {
         function quickSearch() {
             vscode.postMessage({ command: 'quickSearch' });
         }
+
+        // Click-tracking for search result chunks.
+        // Any element with data-chunk-id (and optionally data-query-id, data-rank)
+        // fires a 'feedback' message so the daemon can learn from user interactions.
+        document.addEventListener('click', (e) => {
+            const el = e.target.closest('[data-chunk-id]');
+            if (el) {
+                vscode.postMessage({
+                    command: 'feedback',
+                    chunkId: parseInt(el.dataset.chunkId, 10),
+                    queryId: el.dataset.queryId || '',
+                    rank: parseInt(el.dataset.rank || '0', 10),
+                    action: 'view'
+                });
+            }
+        });
         
         function syncMcpConfig() {
             vscode.postMessage({ command: 'syncMcpConfig' });
