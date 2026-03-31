@@ -4,8 +4,10 @@
 //! prioritizing critical chunks and compressing low-priority ones to
 //! fit maximum relevant context within the budget.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::graph::dependencies::FileDependencyGraph;
 use crate::search::intent::{ContextStrategy, QueryIntent};
 use crate::types::{Chunk, ChunkPriority, ContextEntry, ContextWindow, SearchResult};
 
@@ -24,7 +26,9 @@ impl ContextAssembler {
     /// Assemble a context window from search results.
     ///
     /// Applies intent-based context strategy, assigns priorities,
-    /// and packs chunks within token budget.
+    /// and packs chunks within token budget. After selection, causal
+    /// ordering is applied: within-file by line number, across files
+    /// by dependency topology when `dep_graph` is provided.
     ///
     /// The effective token budget is scaled by the query intent:
     /// - Debug/Edit: 60% (fewer, high-precision results)
@@ -37,6 +41,7 @@ impl ContextAssembler {
         query: &str,
         search_results: Vec<SearchResult>,
         active_file: Option<&PathBuf>,
+        dep_graph: Option<&FileDependencyGraph>,
     ) -> ContextWindow {
         // Classify intent and get strategy
         let intent = QueryIntent::classify(query);
@@ -62,7 +67,10 @@ impl ContextAssembler {
         });
 
         // Pack within the intent-scaled token budget
-        let packed = self.pack_with_budget_limit(entries, &strategy, effective_budget);
+        let mut packed = self.pack_with_budget_limit(entries, &strategy, effective_budget);
+
+        // Apply causal ordering: within-file by line number, across files by dependency depth
+        apply_causal_ordering(&mut packed.entries, dep_graph);
 
         ContextWindow {
             entries: packed.entries,
@@ -148,13 +156,20 @@ impl ContextAssembler {
     ///
     /// Entries should already have priorities assigned. The strategy controls
     /// whether high-level filtering is applied and other packing behavior.
+    ///
+    /// After packing, causal ordering is applied: within each file chunks are
+    /// sorted by line number ascending; across files by dependency topology when
+    /// `dep_graph` is provided.
     pub fn pack_entries_with_strategy(
         &self,
         entries: Vec<ContextEntry>,
         strategy: &ContextStrategy,
         budget: u32,
+        dep_graph: Option<&FileDependencyGraph>,
     ) -> ContextWindow {
-        self.pack_with_budget_limit(entries, strategy, budget)
+        let mut window = self.pack_with_budget_limit(entries, strategy, budget);
+        apply_causal_ordering(&mut window.entries, dep_graph);
+        window
     }
 
     /// Pack entries within an explicit token budget using 0/1 knapsack optimization.
@@ -395,6 +410,139 @@ impl ContextAssembler {
     }
 }
 
+/// Reorder already-selected context entries for natural reading.
+///
+/// Ordering rules (applied after knapsack selection — never affects which
+/// chunks are chosen, only the order they appear in the output):
+///
+/// **Within a file**: chunks are sorted by `line_start` ascending so the
+/// reader encounters them in the same top-to-bottom order as the source file.
+///
+/// **Across files**: files are sorted by dependency distance from the
+/// highest-scored ("anchor") chunk's file, using the `FileDependencyGraph`.
+/// Distance=0 (anchor file) comes first, then direct neighbors, then
+/// transitive neighbors, then disconnected files. Within the same distance
+/// bucket files are ordered by their highest chunk score descending.
+///
+/// When `dep_graph` is `None` only within-file line ordering is applied.
+pub fn apply_causal_ordering(
+    entries: &mut Vec<ContextEntry>,
+    dep_graph: Option<&FileDependencyGraph>,
+) {
+    if entries.is_empty() {
+        return;
+    }
+
+    // --- Step A: Group by file, sort within each group by line_start ---
+    // Collect unique file paths in their current (score-based) order so that
+    // the cross-file ordering below can preserve or override that sequence.
+    let mut file_order: Vec<PathBuf> = Vec::new();
+    let mut by_file: HashMap<PathBuf, Vec<usize>> = HashMap::new();
+
+    for (idx, entry) in entries.iter().enumerate() {
+        let key = entry.file_path.clone();
+        let group = by_file.entry(key.clone()).or_default();
+        if group.is_empty() {
+            file_order.push(key);
+        }
+        group.push(idx);
+    }
+
+    // Sort each file's chunk indices by line_start ascending
+    for indices in by_file.values_mut() {
+        indices.sort_by_key(|&i| entries[i].chunk.line_start);
+    }
+
+    // --- Step B: Determine cross-file ordering ---
+    // Anchor = file of the highest-scored entry.  Entries may arrive in any
+    // order (e.g. heap-popped), so scan all entries for the true maximum.
+    let anchor_file = entries
+        .iter()
+        .max_by(|a, b| {
+            a.score
+                .partial_cmp(&b.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .expect("non-empty vec guaranteed above")
+        .file_path
+        .clone();
+
+    // Build distance map: file_path → hop distance from anchor
+    let distance_map: HashMap<PathBuf, usize> = if let Some(graph) = dep_graph {
+        match graph.get_neighbors(&anchor_file, 3) {
+            Ok(neighbors) => {
+                let mut map: HashMap<PathBuf, usize> = HashMap::new();
+                map.insert(anchor_file.clone(), 0);
+                for n in neighbors {
+                    map.insert(n.path, n.distance);
+                }
+                map
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "causal ordering: dep graph query failed, falling back to line-only order");
+                let mut map = HashMap::new();
+                map.insert(anchor_file.clone(), 0);
+                map
+            }
+        }
+    } else {
+        // No graph — anchor gets 0, everything else is "unreachable"
+        let mut map = HashMap::new();
+        map.insert(anchor_file.clone(), 0);
+        map
+    };
+
+    // For each file, compute (distance, neg_max_score) for sorting.
+    // Unreachable files sort last (distance = usize::MAX).
+    let file_sort_key = |path: &PathBuf| -> (usize, i64) {
+        let dist = distance_map.get(path).copied().unwrap_or(usize::MAX);
+        // Highest chunk score in this file (use negative for ascending sort trick)
+        let max_score_neg = by_file
+            .get(path)
+            .and_then(|idxs| idxs.first())
+            // After inner sort by line_start, we need the max score across the group
+            .map(|_| {
+                by_file[path]
+                    .iter()
+                    .map(|&i| (entries[i].score * -1e9) as i64)
+                    .min()
+                    .unwrap_or(0)
+            })
+            .unwrap_or(0);
+        (dist, max_score_neg)
+    };
+
+    file_order.sort_by_key(|p| file_sort_key(p));
+
+    // --- Reconstruct entries in causal order ---
+    let mut result: Vec<ContextEntry> = Vec::with_capacity(entries.len());
+    for file_path in &file_order {
+        if let Some(indices) = by_file.get(file_path) {
+            for &idx in indices {
+                // We'll drain from entries via swap; use a sentinel approach instead:
+                // collect owned entries after rebuilding the indices vec.
+                let _ = idx; // processed below
+            }
+        }
+    }
+
+    // Build owned result by taking entries out in order
+    // Safety: we consume `entries` fully via indexed access — all indices
+    // in `by_file` cover exactly [0, entries.len()) with no duplicates.
+    let mut taken: Vec<Option<ContextEntry>> = entries.drain(..).map(Some).collect();
+    for file_path in &file_order {
+        if let Some(indices) = by_file.get(file_path) {
+            for &idx in indices {
+                if let Some(entry) = taken[idx].take() {
+                    result.push(entry);
+                }
+            }
+        }
+    }
+
+    *entries = result;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -474,7 +622,7 @@ mod tests {
 
         let results = vec![make_test_result(chunk1, 0.9), make_test_result(chunk2, 0.8)];
 
-        let context = assembler.assemble("fix the bug", results, None);
+        let context = assembler.assemble("fix the bug", results, None, None);
 
         assert_eq!(context.entries.len(), 2);
         assert!(context.total_tokens <= 1000);
@@ -489,7 +637,7 @@ mod tests {
 
         let results = vec![make_test_result(chunk1, 0.9), make_test_result(chunk2, 0.8)];
 
-        let context = assembler.assemble("fix the bug", results, None);
+        let context = assembler.assemble("fix the bug", results, None, None);
 
         // With compression, we might fit both chunks (second one compressed)
         // The important thing is we don't exceed the budget
@@ -556,7 +704,7 @@ mod tests {
             make_test_result(chunk2, 0.9), // High priority
         ];
 
-        let context = assembler.assemble("fix the bug", results, None);
+        let context = assembler.assemble("fix the bug", results, None, None);
 
         // High priority should come first
         assert_eq!(context.entries[0].chunk.symbol_path, "test::function");
@@ -600,9 +748,10 @@ mod tests {
             .collect();
 
         // Debug query -> 60% budget = 600 tokens
-        let debug_ctx = assembler.assemble("why is this function failing?", results.clone(), None);
+        let debug_ctx =
+            assembler.assemble("why is this function failing?", results.clone(), None, None);
         // "Unknown" intent -> 100% budget = 1000 tokens, no high_level filter
-        let full_ctx = assembler.assemble("f_0 f_1 f_2", results, None);
+        let full_ctx = assembler.assemble("f_0 f_1 f_2", results, None, None);
 
         assert!(
             debug_ctx.total_tokens <= full_ctx.total_tokens,
@@ -650,7 +799,7 @@ mod tests {
         ];
 
         // "f_0 f_1" is Unknown intent -> 100% budget = 250
-        let context = assembler.assemble("f_0 f_1", results, None);
+        let context = assembler.assemble("f_0 f_1", results, None, None);
 
         // Knapsack should pick 3 small chunks (240 tokens) over 1 big (200 tokens)
         // because total value is higher (3 * 0.85 * priority_mult > 1 * 0.9 * priority_mult)
@@ -664,5 +813,135 @@ mod tests {
             "should stay within budget, got {}",
             context.total_tokens
         );
+    }
+
+    // Helper: build a ContextEntry with explicit file_path, line_start, and score
+    fn make_entry(file: &str, line_start: u32, score: f64) -> ContextEntry {
+        let chunk = Chunk {
+            id: 0,
+            file_id: 0,
+            symbol_path: format!("{}::fn", file),
+            kind: ChunkKind::Function,
+            visibility: Visibility::Public,
+            line_start,
+            line_end: line_start + 5,
+            content: format!("fn at_line_{line_start}() {{}}"),
+            doc_comment: None,
+            token_count: 20,
+            weight: 1.0,
+            vector_id: None,
+            is_summary: false,
+            content_hash: 0,
+        };
+        ContextEntry {
+            file_path: PathBuf::from(file),
+            chunk,
+            score,
+            is_graph_neighbor: false,
+            priority: Some(ChunkPriority::High),
+            shadow_header: None,
+        }
+    }
+
+    #[test]
+    fn test_within_file_ordering_by_line() {
+        // Two chunks from the same file delivered in reverse line order.
+        // apply_causal_ordering must sort them ascending by line_start.
+        let mut entries = vec![
+            make_entry("src/lib.rs", 50, 0.9), // higher score, later line
+            make_entry("src/lib.rs", 10, 0.7), // lower score, earlier line
+        ];
+
+        apply_causal_ordering(&mut entries, None);
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            entries[0].chunk.line_start, 10,
+            "first chunk should be at line 10"
+        );
+        assert_eq!(
+            entries[1].chunk.line_start, 50,
+            "second chunk should be at line 50"
+        );
+    }
+
+    #[test]
+    fn test_cross_file_import_before_implementation() {
+        // File A imports file B.  Anchor is A (highest score).
+        // After causal ordering: A chunks before B chunks.
+        use crate::graph::dependencies::{
+            DependencyEdge as FileDepEdge, EdgeType, FileDependencyGraph,
+        };
+
+        let graph = FileDependencyGraph::new();
+        let file_a = PathBuf::from("src/a.rs");
+        let file_b = PathBuf::from("src/b.rs");
+
+        graph
+            .add_edge(&FileDepEdge {
+                source: file_a.clone(),
+                target: file_b.clone(),
+                edge_type: EdgeType::Imports,
+                weight: 1.0,
+            })
+            .expect("add edge a->b");
+
+        // entries: b chunk arrives first (e.g. original heap order), then a chunk
+        let mut entries = vec![
+            {
+                let mut e = make_entry("src/b.rs", 1, 0.7);
+                e.file_path = file_b.clone();
+                e
+            },
+            {
+                let mut e = make_entry("src/a.rs", 1, 0.9); // anchor: highest score
+                e.file_path = file_a.clone();
+                e
+            },
+        ];
+
+        apply_causal_ordering(&mut entries, Some(&graph));
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(
+            entries[0].file_path, file_a,
+            "anchor file a should appear first"
+        );
+        assert_eq!(
+            entries[1].file_path, file_b,
+            "dependency file b should appear second"
+        );
+    }
+
+    #[test]
+    fn test_causal_ordering_no_graph() {
+        // With dep_graph=None, within-file line ordering still applies.
+        // Two files: each with two chunks in reverse order.
+        let mut entries = vec![
+            make_entry("src/x.rs", 80, 0.9), // anchor file, higher line
+            make_entry("src/x.rs", 20, 0.8), // anchor file, lower line
+            make_entry("src/y.rs", 60, 0.7),
+            make_entry("src/y.rs", 5, 0.6),
+        ];
+
+        apply_causal_ordering(&mut entries, None);
+
+        assert_eq!(entries.len(), 4);
+
+        // x.rs chunks should be sorted by line within the file group
+        let x_entries: Vec<_> = entries
+            .iter()
+            .filter(|e| e.file_path == PathBuf::from("src/x.rs"))
+            .collect();
+        assert_eq!(x_entries[0].chunk.line_start, 20);
+        assert_eq!(x_entries[1].chunk.line_start, 80);
+
+        // y.rs chunks should be sorted by line within the file group
+        let y_entries: Vec<_> = entries
+            .iter()
+            .filter(|e| e.file_path == PathBuf::from("src/y.rs"))
+            .collect();
+        assert_eq!(y_entries[0].chunk.line_start, 5);
+        assert_eq!(y_entries[1].chunk.line_start, 60);
     }
 }

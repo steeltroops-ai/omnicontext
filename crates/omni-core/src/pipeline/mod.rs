@@ -1974,6 +1974,7 @@ impl Engine {
             Some(&self.dep_graph),
             &gar_neighbors,
             budget,
+            Some(&self.file_dep_graph),
         );
         // Enrich with shadow headers when enabled
         if self.config.search.shadow_headers {
