@@ -11,6 +11,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+use crate::embedder::quantization::QuantizationMode;
 use crate::error::{OmniError, OmniResult};
 
 /// Top-level configuration for OmniContext.
@@ -311,6 +312,23 @@ pub struct EmbeddingConfig {
     /// Omitted from the default configuration; explicitly set by enterprise users.
     #[serde(default)]
     pub cloud_api_key: Option<String>,
+
+    /// INT8 quantization mode for the embedding model.
+    ///
+    /// When set to `QuantizationMode::INT8`, the engine invokes the
+    /// `onnxruntime.quantization` Python package as a subprocess on first use,
+    /// caching the quantized model alongside the FP32 original.  Subsequent runs
+    /// load the cached INT8 model directly.
+    ///
+    /// If Python is unavailable or the subprocess fails, the engine falls back to
+    /// the FP32 model silently — no indexing interruption.
+    ///
+    /// Set via `OMNI_INT8_EMBED=1` environment variable, or
+    /// `config.embedding.quantization_mode = "INT8"` in the TOML config.
+    ///
+    /// Default: `QuantizationMode::None` (FP32 model, no quantization).
+    #[serde(default)]
+    pub quantization_mode: QuantizationMode,
 }
 
 impl Default for EmbeddingConfig {
@@ -322,6 +340,7 @@ impl Default for EmbeddingConfig {
             max_seq_length: Self::default_max_seq_length(),
             enable_sparse_retrieval: Self::default_enable_sparse_retrieval(),
             cloud_api_key: None,
+            quantization_mode: QuantizationMode::None,
         }
     }
 }
@@ -586,6 +605,9 @@ impl Config {
         }
         if let Ok(model) = std::env::var("OMNI_MODEL_PATH") {
             self.embedding.model_path = PathBuf::from(model);
+        }
+        if std::env::var("OMNI_INT8_EMBED").as_deref() == Ok("1") {
+            self.embedding.quantization_mode = QuantizationMode::INT8;
         }
     }
 

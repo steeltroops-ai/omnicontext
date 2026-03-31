@@ -51,6 +51,7 @@
 
 pub mod cloud;
 pub mod model_manager;
+pub mod quantization;
 pub mod session_pool;
 
 pub use cloud::CloudEmbedder;
@@ -58,6 +59,7 @@ pub use cloud::CloudEmbedder;
 use ort::session::Session;
 
 use crate::config::EmbeddingConfig;
+use crate::embedder::quantization::QuantizationMode;
 use crate::error::{OmniError, OmniResult};
 
 pub use model_manager::{
@@ -110,6 +112,16 @@ impl Embedder {
 
         // Resolve model spec and auto-download if needed
         let (model_path, tokenizer_path) = Self::resolve_model_files(config)?;
+
+        // Optionally quantize the model to INT8 via Python subprocess.
+        // Falls back to the FP32 model silently when Python is unavailable or
+        // the subprocess fails — never prevents the embedder from starting.
+        let model_path = if config.quantization_mode != QuantizationMode::None {
+            crate::embedder::quantization::quantize_model(&model_path, config.quantization_mode)
+                .unwrap_or(model_path)
+        } else {
+            model_path
+        };
 
         // Try to load the ONNX model.
         // All errors here are caught and result in `None` (degraded mode),
@@ -1295,6 +1307,7 @@ mod tests {
             max_seq_length: 256,
             enable_sparse_retrieval: false,
             cloud_api_key: None,
+            quantization_mode: crate::embedder::quantization::QuantizationMode::None,
         };
         // Use degraded() directly to avoid triggering download
         let embedder = Embedder::degraded(&config);
@@ -1310,6 +1323,7 @@ mod tests {
             max_seq_length: 256,
             enable_sparse_retrieval: false,
             cloud_api_key: None,
+            quantization_mode: crate::embedder::quantization::QuantizationMode::None,
         };
         let embedder = Embedder::degraded(&config);
         let result = embedder.embed_single("test text");
@@ -1330,6 +1344,7 @@ mod tests {
             max_seq_length: 512,
             enable_sparse_retrieval: false,
             cloud_api_key: None,
+            quantization_mode: crate::embedder::quantization::QuantizationMode::None,
         };
         let embedder = Embedder::degraded(&config);
         assert_eq!(embedder.dimensions(), 768);
@@ -1359,6 +1374,7 @@ mod tests {
             max_seq_length: 8192,
             enable_sparse_retrieval: false,
             cloud_api_key: None,
+            quantization_mode: crate::embedder::quantization::QuantizationMode::None,
         };
         let embedder = Embedder::degraded(&config);
         assert!(
@@ -1378,6 +1394,7 @@ mod tests {
             max_seq_length: 8192,
             enable_sparse_retrieval: false,
             cloud_api_key: None,
+            quantization_mode: crate::embedder::quantization::QuantizationMode::None,
         };
         let embedder = Embedder::degraded(&config);
         let fp = embedder.model_fingerprint().to_string();
@@ -1396,6 +1413,7 @@ mod tests {
             max_seq_length: 8192,
             enable_sparse_retrieval: false,
             cloud_api_key: None,
+            quantization_mode: crate::embedder::quantization::QuantizationMode::None,
         };
         let embedder = Embedder::degraded(&config);
         assert!(
@@ -1413,6 +1431,7 @@ mod tests {
             max_seq_length: 256,
             enable_sparse_retrieval: false,
             cloud_api_key: None,
+            quantization_mode: crate::embedder::quantization::QuantizationMode::None,
         };
         let embedder = Embedder::degraded(&config);
         let result = embedder.embed_query("how does caching work?");
@@ -1431,6 +1450,7 @@ mod tests {
             max_seq_length: 256,
             enable_sparse_retrieval: false,
             cloud_api_key: None,
+            quantization_mode: crate::embedder::quantization::QuantizationMode::None,
         };
         let embedder = Embedder::degraded(&config);
         assert_eq!(
@@ -1449,6 +1469,7 @@ mod tests {
             max_seq_length: 256,
             enable_sparse_retrieval: false,
             cloud_api_key: None,
+            quantization_mode: crate::embedder::quantization::QuantizationMode::None,
         };
         let embedder = Embedder::degraded(&config);
         let results = embedder.embed_batch_parallel(&["test1", "test2"]);
@@ -1468,6 +1489,7 @@ mod tests {
             max_seq_length: 256,
             enable_sparse_retrieval: false,
             cloud_api_key: None,
+            quantization_mode: crate::embedder::quantization::QuantizationMode::None,
         };
         let embedder = Embedder::degraded(&config);
         let chunks: Vec<&str> = (0..100).map(|_| "test chunk content").collect();
@@ -1503,6 +1525,7 @@ mod tests {
             max_seq_length: 256,
             enable_sparse_retrieval: false,
             cloud_api_key: None,
+            quantization_mode: crate::embedder::quantization::QuantizationMode::None,
         };
         let embedder = Embedder::degraded(&config);
         // pool_size on a degraded embedder must be 0 (no primary, no pool).
@@ -1523,6 +1546,7 @@ mod tests {
             max_seq_length: 256,
             enable_sparse_retrieval: false,
             cloud_api_key: None,
+            quantization_mode: crate::embedder::quantization::QuantizationMode::None,
         };
         let embedder = Embedder::degraded(&config);
         let results = embedder.embed_batch_parallel(&[]);
@@ -1541,6 +1565,7 @@ mod tests {
             max_seq_length: 256,
             enable_sparse_retrieval: false,
             cloud_api_key: None,
+            quantization_mode: crate::embedder::quantization::QuantizationMode::None,
         };
         let embedder = Embedder::degraded(&config);
         let results = embedder.embed_batch_parallel(&["fn foo() {}"]);
@@ -1561,6 +1586,7 @@ mod tests {
             max_seq_length: 256,
             enable_sparse_retrieval: false,
             cloud_api_key: None,
+            quantization_mode: crate::embedder::quantization::QuantizationMode::None,
         };
         let mut embedder = Embedder::degraded(&config);
         // Should not panic
@@ -1587,6 +1613,7 @@ mod tests {
             max_seq_length: 256,
             enable_sparse_retrieval: false,
             cloud_api_key: None,
+            quantization_mode: crate::embedder::quantization::QuantizationMode::None,
         };
         // degraded() sets pool=None unconditionally — mirrors what OMNI_POOL_DISABLED does.
         let embedder = Embedder::degraded(&config);
@@ -1615,6 +1642,7 @@ mod tests {
             max_seq_length: 256,
             enable_sparse_retrieval: false,
             cloud_api_key: None,
+            quantization_mode: crate::embedder::quantization::QuantizationMode::None,
         };
         let embedder = Embedder::degraded(&config);
         assert!(
@@ -1634,6 +1662,7 @@ mod tests {
             max_seq_length: 256,
             enable_sparse_retrieval: false,
             cloud_api_key: None,
+            quantization_mode: crate::embedder::quantization::QuantizationMode::None,
         };
         let embedder = Embedder::degraded(&config);
         let result = embedder.embed_sparse("authentication middleware");
@@ -1658,6 +1687,7 @@ mod tests {
             max_seq_length: 256,
             enable_sparse_retrieval: false,
             cloud_api_key: None,
+            quantization_mode: crate::embedder::quantization::QuantizationMode::None,
         };
         let embedder = Embedder::degraded(&config);
         let result = embedder.embed_sparse("");
