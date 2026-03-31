@@ -182,10 +182,14 @@ impl GraphAttentionAnalyzer {
         let w2 = ArrayView2::from_shape((8, 1), &W2_FLAT)
             .map_err(|e| crate::error::OmniError::Internal(format!("GCN W2 view: {e}")))?;
 
-        // Forward pass: H1 = ReLU(A_hat @ X @ W1), out = sigmoid(A_hat @ H1 @ W2)
-        let mut h1 = a_hat.dot(&x).dot(&w1);
+        // Forward pass using in-neighbor aggregation (A_hat^T) so that hub
+        // nodes — those with many in-edges — aggregate from their sources.
+        // A_hat[src][tgt] stores out-edges; transposing gives in-edges.
+        // H1 = ReLU(A_hat^T @ X @ W1), out = sigmoid(A_hat^T @ H1 @ W2)
+        let a_hat_t = a_hat.t();
+        let mut h1 = a_hat_t.dot(&x).dot(&w1);
         h1.mapv_inplace(relu);
-        let mut out = a_hat.dot(&h1).dot(&w2);
+        let mut out = a_hat_t.dot(&h1).dot(&w2);
         out.mapv_inplace(sigmoid);
 
         let mut scores = HashMap::with_capacity(n);
