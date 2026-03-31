@@ -2,6 +2,14 @@
 
 All notable changes to the OmniContext VS Code extension are documented here.
 
+## [1.4.0] - 2026-03-31
+
+- wire search/feedback IPC handler and VS Code click tracking ([ce64cd5](https://github.com/steeltroops-ai/omnicontext/commit/ce64cd5))
+- active open-buffer injection as ephemeral Critical-priority chunk ([1a2c2aa](https://github.com/steeltroops-ai/omnicontext/commit/1a2c2aa))
+
+
+
+
 ## [1.3.7] - 2026-03-31
 
 _No direct changes in this release._

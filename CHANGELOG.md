@@ -4,6 +4,29 @@ All notable changes to OmniContext are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-03-31
+
+### Added
+- Wire INT8 quantization via subprocess with graceful FP32 fallback ([bd27fc7](https://github.com/steeltroops-ai/omnicontext/commit/bd27fc7a8325591b839926797f1e87c28a846827))
+- Wire search/feedback IPC handler and VS Code click tracking ([ce64cd5](https://github.com/steeltroops-ai/omnicontext/commit/ce64cd5e93c0ed0465a02a26c679d9bcbc732be7))
+- Active open-buffer injection as ephemeral Critical-priority chunk ([1a2c2aa](https://github.com/steeltroops-ai/omnicontext/commit/1a2c2aab6bfb9b2f798c79d11a6ab0c43930e23a))
+- Semantic neighborhood expansion for symbol queries ([c1f1bca](https://github.com/steeltroops-ai/omnicontext/commit/c1f1bcafa00d3cf281f97dee3f089d530569cee7))
+- Causal context ordering by line number and dependency topology ([ee39304](https://github.com/steeltroops-ai/omnicontext/commit/ee39304b5dd499f16b679af4f97dbbcfde6a2641))
+- Enable sparse retrieval by default; verify 4-signal RRF wiring ([2b07dbe](https://github.com/steeltroops-ai/omnicontext/commit/2b07dbef7ce2194f219d254fbae97307b7d2a987))
+- Add SHA-256 integrity verification for downloaded models ([fce80fb](https://github.com/steeltroops-ai/omnicontext/commit/fce80fbd8ff605e11e06db51bea8ea3cb8c2067e))
+- Add local LLM backend for HyDE with template fallback ([4e852d3](https://github.com/steeltroops-ai/omnicontext/commit/4e852d37a255bf8aabdbf18e9d0343b3f0a456b0))
+- Add NDCG@10 golden evaluation harness with 20+ queries ([e93ed83](https://github.com/steeltroops-ai/omnicontext/commit/e93ed830255a96b963ada44d116f27b47d03fbdf))
+
+### Changed
+- Apply cargo fmt --all ([28ca825](https://github.com/steeltroops-ai/omnicontext/commit/28ca82558c552d28a7ad0f2c8e9e099bd2859b3b))
+- Apply cargo fmt --all ([0c27b49](https://github.com/steeltroops-ai/omnicontext/commit/0c27b493163826b7abdb280ee2ddd8ea57993bf7))
+- Apply cargo fmt --all ([d0c0433](https://github.com/steeltroops-ai/omnicontext/commit/d0c0433004498f06893b4479c0d2dfe552813fc6))
+- Apply cargo fmt --all ([c3162b6](https://github.com/steeltroops-ai/omnicontext/commit/c3162b61e76f00c306d441cd379789e334146dac))
+
+### Fixed
+- Include newline in active buffer truncation boundary ([b08befe](https://github.com/steeltroops-ai/omnicontext/commit/b08befe8e76e37a85f813557cfcacdd62ee903a9))
+- Find anchor by max score, not position in entries vec ([6c29e17](https://github.com/steeltroops-ai/omnicontext/commit/6c29e1789aeb66297e46b34c02c0e16fa76ba198))
+
 ## [1.3.7] - 2026-03-31
 
 ### Fixed
