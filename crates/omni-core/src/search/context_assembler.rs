@@ -454,8 +454,18 @@ pub fn apply_causal_ordering(
     }
 
     // --- Step B: Determine cross-file ordering ---
-    // Anchor = file of the highest-scored entry (first entry after score sort)
-    let anchor_file = entries[0].file_path.clone();
+    // Anchor = file of the highest-scored entry.  Entries may arrive in any
+    // order (e.g. heap-popped), so scan all entries for the true maximum.
+    let anchor_file = entries
+        .iter()
+        .max_by(|a, b| {
+            a.score
+                .partial_cmp(&b.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .expect("non-empty vec guaranteed above")
+        .file_path
+        .clone();
 
     // Build distance map: file_path → hop distance from anchor
     let distance_map: HashMap<PathBuf, usize> = if let Some(graph) = dep_graph {
