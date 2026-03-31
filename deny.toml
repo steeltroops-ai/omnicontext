@@ -17,6 +17,10 @@ ignore = [
     "RUSTSEC-2025-0119",
     "RUSTSEC-2024-0436",
     "RUSTSEC-2026-0002",
+    # rustls-webpki v0.103.9: CRL Distribution Point faulty matching logic.
+    # Impact is low (attacker needs to compromise a trusted CA first).
+    # Fixed in v0.103.10; also tracked via cargo update in Cargo.lock.
+    "RUSTSEC-2026-0049",
 ]
 
 [licenses]
