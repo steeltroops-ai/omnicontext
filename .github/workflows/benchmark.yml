@@ -50,15 +50,16 @@ jobs:
       - name: Run baseline benchmarks (main)
         run: |
           git checkout main
-          cargo bench --workspace --no-fail-fast -- --save-baseline main
+          # Target only the Criterion benchmark suite; --save-baseline is a
+          # Criterion-specific flag and fails for non-Criterion bench targets.
+          cargo bench -p omni-core --bench core_benchmarks -- --save-baseline main
 
       - name: Run PR benchmarks
         id: run_bench
         run: |
           git checkout ${{ github.event.pull_request.head.sha }}
-          # Pipe output to a file so we can parse it for "regressed" keywords.
-          # We use --baseline to compare against the main branch.
-          cargo bench --workspace --no-fail-fast -- --baseline main | tee /tmp/bench_output.txt
+          # --baseline compares against the main branch baseline saved above.
+          cargo bench -p omni-core --bench core_benchmarks -- --baseline main | tee /tmp/bench_output.txt
 
           # Parse for regressions. Criterion outputs "[regressed]" when it detects a drop.
           # We allow for a 15% budget for noise/jitter on shared runners.
