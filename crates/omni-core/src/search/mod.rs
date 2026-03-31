@@ -1090,6 +1090,7 @@ impl SearchEngine {
         dep_graph: Option<&crate::graph::DependencyGraph>,
         gar_neighbors: &std::collections::HashMap<i64, f64>,
         token_budget: u32,
+        file_dep_graph: Option<&crate::graph::dependencies::FileDependencyGraph>,
     ) -> ContextWindow {
         use std::cmp::Ordering;
         use std::collections::{BinaryHeap, HashMap, HashSet};
@@ -1291,9 +1292,9 @@ impl SearchEngine {
             })
         });
 
-        // Delegate to ContextAssembler's knapsack DP packer
+        // Delegate to ContextAssembler's knapsack DP packer, then apply causal ordering
         let assembler = context_assembler::ContextAssembler::new(token_budget);
-        assembler.pack_entries_with_strategy(candidate_entries, &strategy, token_budget)
+        assembler.pack_entries_with_strategy(candidate_entries, &strategy, token_budget, file_dep_graph)
     }
 }
 
