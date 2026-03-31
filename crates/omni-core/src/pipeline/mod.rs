@@ -319,7 +319,8 @@ impl Engine {
         let vector_index = VectorIndex::open(&vector_path, config.embedding.dimensions)?;
 
         // Initialize search engine
-        let search_engine = SearchEngine::new(config.search.rrf_k, config.search.token_budget);
+        let mut search_engine = SearchEngine::new(config.search.rrf_k, config.search.token_budget);
+        search_engine.set_hyde_config(config.hyde.clone());
 
         let reranker = Reranker::new(&config.search.reranker)?;
 

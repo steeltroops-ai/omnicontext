@@ -38,6 +38,10 @@ pub struct Config {
     /// Logging configuration.
     #[serde(default)]
     pub logging: LoggingConfig,
+
+    /// HyDE (Hypothetical Document Embedding) configuration.
+    #[serde(default)]
+    pub hyde: HydeConfig,
 }
 
 /// Indexing-specific settings.
@@ -375,6 +379,82 @@ impl WatcherConfig {
     }
 }
 
+/// HyDE (Hypothetical Document Embedding) configuration.
+///
+/// Controls whether semantic search generates a hypothetical code snippet
+/// before embedding (HyDE strategy), and which backend produces that snippet.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HydeConfig {
+    /// Enable HyDE for natural-language queries (default: true).
+    ///
+    /// When enabled, a hypothetical code snippet is generated from the query
+    /// and embedded instead of the raw query text. The snippet embedding is
+    /// typically closer in vector space to relevant code than the NL query.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Generation backend: `"template"` (default) or `"local_llm"`.
+    ///
+    /// - `"template"` — zero-cost, zero-latency regex templates; covers ~80% of intents.
+    /// - `"local_llm"` — POST to a llama.cpp-compatible `/completion` endpoint;
+    ///   falls back to templates on any connection or HTTP error.
+    #[serde(default = "default_hyde_backend")]
+    pub backend: String,
+
+    /// HTTP endpoint for the local LLM server (llama.cpp format).
+    ///
+    /// Default: `http://localhost:8080/completion`.
+    /// Only consulted when `backend = "local_llm"`.
+    #[serde(default = "default_hyde_endpoint")]
+    pub endpoint: String,
+
+    /// Request timeout for LLM calls in milliseconds (default: 2000).
+    ///
+    /// If the LLM does not respond within this window, HyDE falls back to
+    /// the template path without blocking the search.
+    #[serde(default = "default_hyde_timeout_ms")]
+    pub timeout_ms: u64,
+
+    /// Maximum tokens the LLM should generate (default: 150).
+    ///
+    /// Passed as `n_predict` in the llama.cpp request body.
+    /// Smaller values reduce latency; larger values allow richer snippets.
+    #[serde(default = "default_hyde_max_tokens")]
+    pub max_tokens: u32,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_hyde_backend() -> String {
+    "template".to_string()
+}
+
+fn default_hyde_endpoint() -> String {
+    "http://localhost:8080/completion".to_string()
+}
+
+fn default_hyde_timeout_ms() -> u64 {
+    2000
+}
+
+fn default_hyde_max_tokens() -> u32 {
+    150
+}
+
+impl Default for HydeConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            backend: default_hyde_backend(),
+            endpoint: default_hyde_endpoint(),
+            timeout_ms: default_hyde_timeout_ms(),
+            max_tokens: default_hyde_max_tokens(),
+        }
+    }
+}
+
 /// Logging configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoggingConfig {
@@ -436,6 +516,7 @@ impl Config {
             embedding: EmbeddingConfig::default(),
             watcher: WatcherConfig::default(),
             logging: LoggingConfig::default(),
+            hyde: HydeConfig::default(),
         }
     }
 
@@ -481,6 +562,11 @@ impl Config {
         if let Some(logging) = overlay.get("logging") {
             if let Ok(parsed) = logging.clone().try_into::<LoggingConfig>() {
                 self.logging = parsed;
+            }
+        }
+        if let Some(hyde) = overlay.get("hyde") {
+            if let Ok(parsed) = hyde.clone().try_into::<HydeConfig>() {
+                self.hyde = parsed;
             }
         }
 
