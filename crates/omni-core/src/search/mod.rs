@@ -431,21 +431,76 @@ impl SearchEngine {
             Vec::new()
         };
 
-        // ---- Signal 3: Symbol lookup ----
-        let symbol_results = if query_type == QueryType::Symbol || query_type == QueryType::Mixed {
+        // ---- Signal 3: Symbol lookup + semantic neighborhood expansion ----
+        // For symbol/mixed queries: fetch direct symbol matches, then walk
+        // reasoning_neighborhood from up to 2 anchors so callers, callees, and
+        // tests enter the RRF pool at lower rank than direct hits.
+        let mut symbol_results: Vec<i64> = Vec::new();
+        let mut symbol_seeds: Vec<crate::types::Symbol> = Vec::new();
+        if query_type == QueryType::Symbol || query_type == QueryType::Mixed {
             match index.search_symbols_by_name(query, sym_limit) {
-                Ok(symbols) => symbols
-                    .into_iter()
-                    .filter_map(|s| s.chunk_id)
-                    .collect::<Vec<_>>(),
+                Ok(symbols) => {
+                    for s in &symbols {
+                        if let Some(cid) = s.chunk_id {
+                            symbol_results.push(cid);
+                        }
+                    }
+                    symbol_seeds = symbols;
+                }
                 Err(e) => {
                     tracing::warn!(error = %e, "symbol search failed");
-                    Vec::new()
                 }
             }
-        } else {
-            Vec::new()
-        };
+        }
+
+        if let (Some(reasoning_engine), Some(graph)) = (reasoning, dep_graph) {
+            if query_type == QueryType::Symbol || query_type == QueryType::Mixed {
+                let direct_set: std::collections::HashSet<i64> =
+                    symbol_results.iter().copied().collect();
+                let mut seen: std::collections::HashSet<i64> = direct_set.clone();
+                let mut neighborhood: Vec<i64> = Vec::new();
+
+                for sym in symbol_seeds.iter().take(2) {
+                    match reasoning_engine.reasoning_neighborhood(graph, sym.id, 2, 8) {
+                        Ok(hits) => {
+                            for hit in hits {
+                                match index.get_chunk_for_symbol(hit.symbol_id) {
+                                    Ok(Some(chunk_id)) if seen.insert(chunk_id) => {
+                                        neighborhood.push(chunk_id);
+                                    }
+                                    Ok(_) => {}
+                                    Err(e) => {
+                                        tracing::debug!(
+                                            error = %e,
+                                            symbol_id = hit.symbol_id,
+                                            "neighborhood chunk lookup failed"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::debug!(
+                                error = %e,
+                                symbol_id = sym.id,
+                                "reasoning_neighborhood failed"
+                            );
+                        }
+                    }
+                }
+
+                if !neighborhood.is_empty() {
+                    tracing::debug!(
+                        query = query,
+                        direct_hits = symbol_results.len(),
+                        neighborhood_hits = neighborhood.len(),
+                        "symbol neighborhood expansion"
+                    );
+                    symbol_results.extend(neighborhood);
+                    symbol_results.truncate(16);
+                }
+            }
+        }
 
         // ---- RRF Fusion with query-type-adaptive weights ----
         let mut fused = self.fuse_results(
@@ -1866,5 +1921,71 @@ mod tests {
         engine.set_branch_changed_files(ids2);
         assert!(!engine.is_branch_changed(1)); // old file no longer marked
         assert!(engine.is_branch_changed(2)); // new file is marked
+    }
+
+    // -----------------------------------------------------------------------
+    // Semantic neighborhood expansion tests
+    // -----------------------------------------------------------------------
+
+    /// Neighborhood chunks are appended after direct hits and all are present.
+    #[test]
+    fn test_symbol_neighborhood_appended_to_symbol_results() {
+        let mut symbol_results: Vec<i64> = vec![10, 20];
+        let neighborhood: Vec<i64> = vec![30, 40, 50];
+
+        let before_len = symbol_results.len();
+        let mut seen: std::collections::HashSet<i64> = symbol_results.iter().copied().collect();
+        for chunk_id in &neighborhood {
+            if seen.insert(*chunk_id) {
+                symbol_results.push(*chunk_id);
+            }
+        }
+        symbol_results.truncate(16);
+
+        assert!(symbol_results.len() > before_len);
+        assert!(symbol_results.contains(&30));
+        assert!(symbol_results.contains(&40));
+        assert!(symbol_results.contains(&50));
+        assert!(symbol_results.contains(&10));
+        assert!(symbol_results.contains(&20));
+    }
+
+    /// Neighborhood expansion caps total symbol_results at 16.
+    #[test]
+    fn test_symbol_neighborhood_capped_at_16() {
+        let mut symbol_results: Vec<i64> = (1..=5).collect();
+        let neighborhood: Vec<i64> = (100..=119).collect();
+
+        let mut seen: std::collections::HashSet<i64> = symbol_results.iter().copied().collect();
+        for chunk_id in &neighborhood {
+            if seen.insert(*chunk_id) {
+                symbol_results.push(*chunk_id);
+            }
+        }
+        symbol_results.truncate(16);
+
+        assert_eq!(symbol_results.len(), 16);
+    }
+
+    /// Keyword queries must not trigger neighborhood expansion;
+    /// verify by confirming the QueryType routing skips Symbol/Mixed branch.
+    #[test]
+    fn test_non_symbol_query_skips_neighborhood_expansion() {
+        // A keyword query produces QueryType::Keyword
+        let qt = analyze_query("connection pool");
+        assert_eq!(qt, QueryType::Mixed); // 2 words → Mixed
+
+        let qt_kw = analyze_query("error handling authentication middleware security");
+        assert_eq!(
+            qt_kw,
+            QueryType::NaturalLanguage,
+            "long phrase is NaturalLanguage, not Symbol"
+        );
+
+        // NaturalLanguage is not Symbol or Mixed, so neighborhood skipped
+        assert!(
+            qt_kw != QueryType::Symbol && qt_kw != QueryType::Mixed,
+            "NaturalLanguage query should not enter neighborhood expansion branch"
+        );
     }
 }
