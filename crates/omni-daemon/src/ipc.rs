@@ -765,7 +765,7 @@ async fn handle_search(
     }
     let limit = params.limit.clamp(1, 200); // Cap at 200, minimum 1
     let eng = engine.lock().await;
-    eng.search(&params.query, limit)
+    eng.search_with_active_content(&params.query, limit, params.active_file_content.as_deref())
         .map(|results| {
             let entries: Vec<serde_json::Value> = results
                 .iter()
