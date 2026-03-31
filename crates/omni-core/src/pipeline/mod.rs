@@ -1834,6 +1834,87 @@ impl Engine {
             })
     }
 
+    /// Execute a search query and prepend an ephemeral Critical-priority chunk
+    /// for the currently open, unsaved editor buffer.
+    ///
+    /// Design: the active buffer represents the developer's current intent with
+    /// certainty — no retrieval can be more relevant. By prepending it at score
+    /// 3.0 with `ChunkPriority::Critical`, context assemblers will always include
+    /// it first. The ephemeral chunk is constructed in memory and never written
+    /// to SQLite; it exists only for the lifetime of this call.
+    ///
+    /// When `active_file_content` is `None`, this method is identical to `search`.
+    pub fn search_with_active_content(
+        &self,
+        query: &str,
+        limit: usize,
+        active_file_content: Option<&str>,
+    ) -> OmniResult<Vec<crate::types::SearchResult>> {
+        use crate::types::{Chunk, ChunkKind, ScoreBreakdown, SearchResult, Visibility};
+        use std::path::PathBuf;
+
+        let mut results = self.search(query, limit)?;
+
+        if let Some(content) = active_file_content {
+            // Truncate at the last newline boundary at or before 50 KB so the
+            // ephemeral chunk never overwhelms the token budget.
+            const MAX_BYTES: usize = 50 * 1024;
+            let truncated: &str = if content.len() > MAX_BYTES {
+                let boundary = content[..MAX_BYTES]
+                    .rfind('\n')
+                    .unwrap_or(MAX_BYTES);
+                &content[..boundary]
+            } else {
+                content
+            };
+
+            if !truncated.trim().is_empty() {
+                let line_count = truncated.lines().count() as u32;
+                // Estimate token count: ~4 characters per token (GPT-4 average).
+                let token_count = (truncated.len() / 4).max(1) as u32;
+
+                let ephemeral_chunk = Chunk {
+                    id: 0, // never persisted
+                    file_id: 0,
+                    symbol_path: "<active buffer>".to_string(),
+                    kind: ChunkKind::TopLevel,
+                    visibility: Visibility::Public,
+                    line_start: 1,
+                    line_end: line_count.max(1),
+                    content: truncated.to_string(),
+                    doc_comment: None,
+                    token_count,
+                    weight: 1.0,
+                    vector_id: None,
+                    is_summary: false,
+                    content_hash: 0,
+                };
+
+                let ephemeral = SearchResult {
+                    chunk: ephemeral_chunk,
+                    file_path: PathBuf::from("<active buffer>"),
+                    score: 3.0,
+                    score_breakdown: ScoreBreakdown {
+                        rrf_score: 3.0,
+                        structural_weight: 1.0,
+                        ..ScoreBreakdown::default()
+                    },
+                };
+
+                // Mark as Critical priority by setting it as the first element.
+                // Consumers that read `priority` from the score should see Critical
+                // because 3.0 > the Critical threshold (0.8).
+                results.insert(0, ephemeral);
+                tracing::debug!(
+                    content_bytes = truncated.len(),
+                    "injected active editor buffer as ephemeral Critical chunk"
+                );
+            }
+        }
+
+        Ok(results)
+    }
+
     /// Execute a search and assemble a token-budget-aware context window.
     ///
     /// Intelligent context assembly pipeline:
@@ -4240,6 +4321,87 @@ mod tests {
         assert!(
             results.is_empty(),
             "empty query tokens must return no results"
+        );
+    }
+
+    // ── active buffer injection ───────────────────────────────────────────────
+
+    #[test]
+    fn test_active_content_injected_as_critical_priority() {
+        // Design: when active_file_content is provided, the first result must be
+        // the ephemeral chunk with score 3.0 and symbol_path "<active buffer>".
+        setup();
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let config = Config::defaults(dir.path());
+        let engine = Engine::with_config(config).expect("create engine");
+
+        let content = "fn main() {\n    println!(\"hello\");\n}\n";
+        let results = engine
+            .search_with_active_content("main function", 10, Some(content))
+            .expect("search");
+
+        // Even on empty index we get exactly one result: the ephemeral chunk.
+        assert_eq!(results.len(), 1, "ephemeral chunk must be the only result");
+        let first = &results[0];
+        assert_eq!(first.chunk.symbol_path, "<active buffer>");
+        assert!(
+            (first.score - 3.0).abs() < f64::EPSILON,
+            "ephemeral chunk score must be 3.0"
+        );
+        assert_eq!(first.chunk.line_start, 1);
+        assert_eq!(first.chunk.content, content);
+    }
+
+    #[test]
+    fn test_active_content_truncated_at_50kb() {
+        // Design: content exceeding 50 KB must be truncated at the last newline
+        // at or before the 50 KB mark so the chunk stays within the token budget.
+        setup();
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let config = Config::defaults(dir.path());
+        let engine = Engine::with_config(config).expect("create engine");
+
+        // Build content just over 50 KB: lots of short lines.
+        let line = "x".repeat(100) + "\n"; // 101 bytes per line
+        let repeat_count = (50 * 1024 / line.len()) + 10; // enough to exceed 50 KB
+        let big_content: String = line.repeat(repeat_count);
+        assert!(big_content.len() > 50 * 1024, "test fixture must exceed 50 KB");
+
+        let results = engine
+            .search_with_active_content("query", 10, Some(&big_content))
+            .expect("search");
+
+        assert_eq!(results.len(), 1, "ephemeral chunk must be present");
+        let stored = &results[0].chunk.content;
+        assert!(
+            stored.len() <= 50 * 1024,
+            "stored content must not exceed 50 KB"
+        );
+        // Must end exactly at a newline boundary (no partial line).
+        assert!(
+            stored.ends_with('\n') || stored.is_empty(),
+            "truncation must align to a newline boundary"
+        );
+    }
+
+    #[test]
+    fn test_no_active_content_unchanged_results() {
+        // Design: passing None for active_file_content must produce results
+        // identical to a plain search() call.
+        setup();
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let config = Config::defaults(dir.path());
+        let engine = Engine::with_config(config).expect("create engine");
+
+        let plain = engine.search("query", 10).expect("plain search");
+        let with_none = engine
+            .search_with_active_content("query", 10, None)
+            .expect("search with None");
+
+        assert_eq!(
+            plain.len(),
+            with_none.len(),
+            "None active content must not change result count"
         );
     }
 }

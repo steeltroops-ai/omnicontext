@@ -88,6 +88,13 @@ pub struct SearchParams {
     /// Maximum results.
     #[serde(default = "default_limit")]
     pub limit: usize,
+    /// Content of the currently active (open, unsaved) editor buffer.
+    ///
+    /// When present, the daemon prepends an ephemeral Critical-priority chunk
+    /// representing the developer's current view before returning results.
+    /// The content is never persisted to SQLite.
+    #[serde(default)]
+    pub active_file_content: Option<String>,
 }
 
 /// Parameters for the `context_window` method.

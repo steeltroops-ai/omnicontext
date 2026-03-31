@@ -1795,8 +1795,25 @@ async function runSearch() {
     let data: any;
 
     if (ipcClient) {
+      // Capture the active editor buffer so the daemon can inject it as the
+      // highest-priority context chunk (never persisted, this call only).
+      const activeEditor = vscode.window.activeTextEditor;
+      let activeFileContent: string | undefined;
+      if (activeEditor) {
+        const content = activeEditor.document.getText();
+        const MAX_BYTES = 50 * 1024;
+        if (content.length > MAX_BYTES) {
+          const truncated = content.substring(0, MAX_BYTES);
+          const lastNewline = truncated.lastIndexOf('\n');
+          activeFileContent = lastNewline >= 0
+            ? truncated.substring(0, lastNewline)
+            : truncated;
+        } else {
+          activeFileContent = content;
+        }
+      }
       // Use daemon IPC
-      data = await sendIpcRequest("search", { query, limit: 20 });
+      data = await sendIpcRequest("search", { query, limit: 20, active_file_content: activeFileContent });
     } else {
       // Fallback to CLI
       const binary = getBinaryPath();
