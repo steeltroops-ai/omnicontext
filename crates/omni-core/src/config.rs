@@ -291,12 +291,14 @@ pub struct EmbeddingConfig {
     ///
     /// When `true`, the engine downloads BAAI/bge-m3 (~560MB) on first use,
     /// generates SPLADE-style sparse vectors for every chunk, and blends them
-    /// as a fourth signal in RRF fusion.  Disabled by default — no behavioral
-    /// change for existing users until they opt in.
+    /// as a fourth signal in RRF fusion.  Enabled by default — the sparse
+    /// signal is silently skipped when the BGE-M3 model is not yet loaded
+    /// (`has_sparse_session() == false`), so there is no behavioral regression
+    /// for users running in degraded / keyword-only mode.
     ///
-    /// Set via `config.embedding.enable_sparse_retrieval = true` or
-    /// `OMNI_ENABLE_SPARSE_RETRIEVAL=true` environment variable.
-    #[serde(default)]
+    /// Set `config.embedding.enable_sparse_retrieval = false` or
+    /// `OMNI_ENABLE_SPARSE_RETRIEVAL=false` to opt out.
+    #[serde(default = "EmbeddingConfig::default_enable_sparse_retrieval")]
     pub enable_sparse_retrieval: bool,
 
     /// API key for the OmniContext cloud GPU embedding service.
@@ -318,13 +320,17 @@ impl Default for EmbeddingConfig {
             dimensions: Self::default_dimensions(),
             batch_size: Self::default_batch_size(),
             max_seq_length: Self::default_max_seq_length(),
-            enable_sparse_retrieval: false,
+            enable_sparse_retrieval: Self::default_enable_sparse_retrieval(),
             cloud_api_key: None,
         }
     }
 }
 
 impl EmbeddingConfig {
+    fn default_enable_sparse_retrieval() -> bool {
+        true
+    }
+
     fn default_model_path() -> PathBuf {
         // Default: auto-download cache location for CodeRankEmbed (nomic-ai/CodeRankEmbed).
         // If the model isn't here yet, the embedder will auto-download it.
@@ -785,6 +791,55 @@ mod tests {
         assert!(
             config.batch_size > 0,
             "reranker batch_size must be positive"
+        );
+    }
+
+    // ── Sparse retrieval defaults ─────────────────────────────────────────────
+
+    #[test]
+    fn test_enable_sparse_retrieval_default_is_true() {
+        // Design: sparse retrieval is on by default.  The runtime guard
+        // (`has_sparse_session()`) ensures there is no behavioral regression when
+        // the BGE-M3 model is not loaded — the sparse signal is silently skipped.
+        let config = EmbeddingConfig::default();
+        assert!(
+            config.enable_sparse_retrieval,
+            "sparse retrieval must default to true so every new installation \
+             participates in 4-signal RRF fusion once the BGE-M3 model is cached"
+        );
+    }
+
+    #[test]
+    fn test_sparse_retrieval_flag_controls_embed_call() {
+        // When enable_sparse_retrieval = false the flag must read back false
+        // (logic-level check; the runtime guard in pipeline/mod.rs uses this flag
+        // before calling embed_sparse so no ONNX call is made).
+        let config = EmbeddingConfig {
+            enable_sparse_retrieval: false,
+            ..EmbeddingConfig::default()
+        };
+        assert!(
+            !config.enable_sparse_retrieval,
+            "explicit false must be respected"
+        );
+    }
+
+    #[test]
+    fn test_enable_sparse_retrieval_serde_roundtrip() {
+        // Verify the custom serde default survives a TOML round-trip.
+        // When the field is absent from the TOML, serde must restore the
+        // default (true) via `default_enable_sparse_retrieval`.
+        let toml_without_field = r#"
+model_path = "/tmp/model.onnx"
+dimensions = 768
+batch_size = 32
+max_seq_length = 256
+"#;
+        let deserialized: EmbeddingConfig =
+            toml::from_str(toml_without_field).expect("deserialize");
+        assert!(
+            deserialized.enable_sparse_retrieval,
+            "absent field must restore to true via serde default"
         );
     }
 }
