@@ -35,7 +35,7 @@
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     clippy::missing_errors_doc,
-    clippy::must_use_candidate,
+    clippy::must_use_candidate
 )]
 
 use crate::error::OmniResult;
@@ -52,9 +52,9 @@ pub const ATTENTION_WEIGHT: f32 = 0.25;
 // Rows: [in_degree, out_degree, pagerank]. Pagerank row has the highest
 // magnitudes to reflect its dominant role in structural importance.
 static W1_FLAT: [f32; 24] = [
-    0.6, 0.4, 0.5, 0.3, -0.1, 0.2, 0.4, 0.1,  // in_degree
-    0.3, 0.6, 0.2, 0.5,  0.1,-0.2, 0.3, 0.4,  // out_degree
-    0.8, 0.7, 0.9, 0.6,  0.5, 0.8, 0.7, 0.9,  // pagerank
+    0.6, 0.4, 0.5, 0.3, -0.1, 0.2, 0.4, 0.1, // in_degree
+    0.3, 0.6, 0.2, 0.5, 0.1, -0.2, 0.3, 0.4, // out_degree
+    0.8, 0.7, 0.9, 0.6, 0.5, 0.8, 0.7, 0.9, // pagerank
 ];
 static W2_FLAT: [f32; 8] = [0.5, 0.6, 0.7, 0.4, 0.3, 0.6, 0.5, 0.7];
 
@@ -114,8 +114,7 @@ impl GraphAttentionAnalyzer {
         let node_idx: HashMap<&PathBuf, usize> =
             nodes.iter().enumerate().map(|(i, p)| (p, i)).collect();
 
-        let importance_map: HashMap<PathBuf, f32> =
-            nodes_with_importance.into_iter().collect();
+        let importance_map: HashMap<PathBuf, f32> = nodes_with_importance.into_iter().collect();
 
         // Degree computation
         let mut out_deg = vec![0usize; n];
@@ -137,9 +136,7 @@ impl GraphAttentionAnalyzer {
             .enumerate()
             .map(|(i, p)| (i, *importance_map.get(p).unwrap_or(&1.0)))
             .collect();
-        importance_vals.sort_by(|a, b| {
-            a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        importance_vals.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         let mut pagerank_pct = vec![0.0f32; n];
         let n_f = n as f32;
         for (rank, (node_i, _)) in importance_vals.iter().enumerate() {
@@ -151,7 +148,7 @@ impl GraphAttentionAnalyzer {
         let max_out = out_deg.iter().copied().max().unwrap_or(1).max(1) as f32;
         let mut x_data = vec![0.0f32; n * 3];
         for i in 0..n {
-            x_data[i * 3]     = in_deg[i] as f32 / max_in;
+            x_data[i * 3] = in_deg[i] as f32 / max_in;
             x_data[i * 3 + 1] = out_deg[i] as f32 / max_out;
             x_data[i * 3 + 2] = pagerank_pct[i];
         }
@@ -171,8 +168,7 @@ impl GraphAttentionAnalyzer {
             if let Some(&si) = node_idx.get(src) {
                 for tgt in targets {
                     if let Some(&ti) = node_idx.get(tgt) {
-                        a_hat_data[si * n + ti] =
-                            1.0 / (total_deg[si] * total_deg[ti]).sqrt();
+                        a_hat_data[si * n + ti] = 1.0 / (total_deg[si] * total_deg[ti]).sqrt();
                     }
                 }
             }
