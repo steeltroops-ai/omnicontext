@@ -1294,7 +1294,8 @@ impl SearchEngine {
 
         // Delegate to ContextAssembler's knapsack DP packer, then apply causal ordering
         let assembler = context_assembler::ContextAssembler::new(token_budget);
-        assembler.pack_entries_with_strategy(candidate_entries, &strategy, token_budget, file_dep_graph)
+        assembler
+            .pack_entries_with_strategy(candidate_entries, &strategy, token_budget, file_dep_graph)
     }
 }
 

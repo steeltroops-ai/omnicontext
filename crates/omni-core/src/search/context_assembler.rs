@@ -738,7 +738,8 @@ mod tests {
             .collect();
 
         // Debug query -> 60% budget = 600 tokens
-        let debug_ctx = assembler.assemble("why is this function failing?", results.clone(), None, None);
+        let debug_ctx =
+            assembler.assemble("why is this function failing?", results.clone(), None, None);
         // "Unknown" intent -> 100% budget = 1000 tokens, no high_level filter
         let full_ctx = assembler.assemble("f_0 f_1 f_2", results, None, None);
 
@@ -858,7 +859,9 @@ mod tests {
     fn test_cross_file_import_before_implementation() {
         // File A imports file B.  Anchor is A (highest score).
         // After causal ordering: A chunks before B chunks.
-        use crate::graph::dependencies::{DependencyEdge as FileDepEdge, EdgeType, FileDependencyGraph};
+        use crate::graph::dependencies::{
+            DependencyEdge as FileDepEdge, EdgeType, FileDependencyGraph,
+        };
 
         let graph = FileDependencyGraph::new();
         let file_a = PathBuf::from("src/a.rs");
@@ -916,12 +919,18 @@ mod tests {
         assert_eq!(entries.len(), 4);
 
         // x.rs chunks should be sorted by line within the file group
-        let x_entries: Vec<_> = entries.iter().filter(|e| e.file_path == PathBuf::from("src/x.rs")).collect();
+        let x_entries: Vec<_> = entries
+            .iter()
+            .filter(|e| e.file_path == PathBuf::from("src/x.rs"))
+            .collect();
         assert_eq!(x_entries[0].chunk.line_start, 20);
         assert_eq!(x_entries[1].chunk.line_start, 80);
 
         // y.rs chunks should be sorted by line within the file group
-        let y_entries: Vec<_> = entries.iter().filter(|e| e.file_path == PathBuf::from("src/y.rs")).collect();
+        let y_entries: Vec<_> = entries
+            .iter()
+            .filter(|e| e.file_path == PathBuf::from("src/y.rs"))
+            .collect();
         assert_eq!(y_entries[0].chunk.line_start, 5);
         assert_eq!(y_entries[1].chunk.line_start, 60);
     }
