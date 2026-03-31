@@ -797,6 +797,7 @@ impl SearchEngine {
         reranker: Option<&Reranker>,
         reranker_config: Option<&crate::config::RerankerConfig>,
         open_files: &[std::path::PathBuf],
+        sparse_results: &[(i64, f32)],
     ) -> OmniResult<(Vec<SearchResult>, std::collections::HashMap<i64, f64>)> {
         let results = self.search(
             query,
@@ -809,7 +810,7 @@ impl SearchEngine {
             reranker,
             reranker_config,
             open_files,
-            &[],
+            sparse_results,
         )?;
 
         // Compute GAR neighbor map for context assembly
