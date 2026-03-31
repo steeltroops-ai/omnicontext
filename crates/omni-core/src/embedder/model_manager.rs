@@ -81,7 +81,7 @@ pub const DEFAULT_MODEL: ModelSpec = ModelSpec {
     dimensions: 768,
     max_seq_length: 2048,
     approx_size_bytes: 521_000_000, // ~521MB ONNX export
-    sha256: None, // TODO: pin once canonical HF ONNX digest is published
+    sha256: None,                   // TODO: pin once canonical HF ONNX digest is published
 };
 
 /// Enterprise GPU-tier embedding model: `Qwen/Qwen3-Embedding-8B` (Apache-2.0).
@@ -98,7 +98,7 @@ pub const QWEN3_EMBEDDING_MODEL: ModelSpec = ModelSpec {
     dimensions: 4096,
     max_seq_length: 32768,
     approx_size_bytes: 16_000_000_000, // ~16GB (GPU tier)
-    sha256: None, // TODO: pin once canonical HF ONNX digest is published
+    sha256: None,                      // TODO: pin once canonical HF ONNX digest is published
 };
 
 /// BGE-M3 multi-function embedding model: `BAAI/bge-m3` (Apache-2.0).
@@ -122,7 +122,7 @@ pub const BGE_M3_MODEL: ModelSpec = ModelSpec {
     dimensions: 1024,
     max_seq_length: 8192,
     approx_size_bytes: 560_000_000, // ~560MB ONNX export
-    sha256: None, // TODO: pin once canonical HF ONNX digest is published
+    sha256: None,                   // TODO: pin once canonical HF ONNX digest is published
 };
 
 /// Cross-encoder reranker: `BAAI/bge-reranker-v2-m3` (Apache-2.0).
@@ -147,7 +147,7 @@ pub const RERANKER_MODEL: ModelSpec = ModelSpec {
     dimensions: 1, // single relevance score output, not an embedding vector
     max_seq_length: 1024,
     approx_size_bytes: 568_000_000, // ~568MB ONNX export
-    sha256: None, // TODO: pin once canonical HF ONNX digest is published
+    sha256: None,                   // TODO: pin once canonical HF ONNX digest is published
 };
 
 /// Get the models directory: `~/.omnicontext/models/`
@@ -458,8 +458,9 @@ fn verify_sha256_after_download(path: &Path, expected: Option<&str>) -> OmniResu
         return Ok(());
     };
 
-    let data = std::fs::read(path)
-        .map_err(|e| OmniError::Internal(format!("failed to read downloaded file for checksum: {e}")))?;
+    let data = std::fs::read(path).map_err(|e| {
+        OmniError::Internal(format!("failed to read downloaded file for checksum: {e}"))
+    })?;
     let digest = sha2::Sha256::digest(&data);
     let actual = hex::encode(digest);
 
@@ -599,7 +600,10 @@ mod tests {
         // post-rename verification path via the public helper.
         let result = verify_sha256_after_download(&dest, None);
         assert!(result.is_ok(), "None sha256 must skip check: {result:?}");
-        assert!(dest.exists(), "file must not be deleted when sha256 is None");
+        assert!(
+            dest.exists(),
+            "file must not be deleted when sha256 is None"
+        );
     }
 
     /// When the file's actual digest matches `expected`, the function succeeds.
