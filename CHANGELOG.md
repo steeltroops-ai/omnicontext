@@ -4,6 +4,11 @@ All notable changes to OmniContext are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.5] - 2026-03-31
+
+### Fixed
+- Resolve all 10 PR workflow failures ([d33b3cc](https://github.com/steeltroops-ai/omnicontext/commit/d33b3cc6c792bc77f16b84383a60da7b86205836))
+
 ## [1.3.4] - 2026-03-14
 
 ### Fixed
