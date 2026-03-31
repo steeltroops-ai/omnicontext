@@ -1860,7 +1860,12 @@ impl Engine {
             // ephemeral chunk never overwhelms the token budget.
             const MAX_BYTES: usize = 50 * 1024;
             let truncated: &str = if content.len() > MAX_BYTES {
-                let boundary = content[..MAX_BYTES].rfind('\n').unwrap_or(MAX_BYTES);
+                // rfind returns the index OF the '\n'; use +1 to include it so
+                // the truncated string ends on a complete newline boundary.
+                let boundary = content[..MAX_BYTES]
+                    .rfind('\n')
+                    .map(|b| b + 1)
+                    .unwrap_or(MAX_BYTES);
                 &content[..boundary]
             } else {
                 content
